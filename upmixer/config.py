@@ -47,6 +47,11 @@ class UpmixConfig:
     decorr_seed: int = 42
     decorr_n_filters: int = 8
 
+    # Spatial analysis parameters
+    surround_bass_cutoff_hz: float = 250.0  # bass below this stays in front, not surround
+    transient_gate_min: float = 0.15        # minimum surround gain during transients
+    transient_flux_threshold: float = 0.25  # normalized flux above this = full transient
+
     # Back channel parameters
     back_delay_ms: float = 15.0
 

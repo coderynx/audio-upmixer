@@ -142,6 +142,7 @@ class StreamingProcessor:
             stft.reset()
         n_freq = self._stft_L.n_freq_bins
         self._coherence_state = self._coherence_est.create_state(n_freq)
+        self._decomposer.reset()
         self._input_buffer_L = np.zeros(0)
         self._input_buffer_R = np.zeros(0)
 

@@ -39,13 +39,11 @@ class HeightFilter:
     ) -> np.ndarray:
         freqs = np.arange(n_freq_bins) * sample_rate / ((n_freq_bins - 1) * 2)
 
-        # Section 1: sub-bass rolloff (low_rolloff_gain → 1.0)
         low_scale = low_rolloff_hz / 4.0
         bass_mask = low_rolloff_gain + (1.0 - low_rolloff_gain) / (
             1.0 + np.exp(-(freqs - low_rolloff_hz) / low_scale)
         )
 
-        # Section 2: high-frequency lift (1.0 → high_shelf_gain)
         high_scale = transition_width_hz / 4.0
         shelf_mask = 1.0 + (high_shelf_gain - 1.0) / (
             1.0 + np.exp(-(freqs - high_shelf_hz) / high_scale)
@@ -65,20 +63,37 @@ class HeightFilter:
 
 
 class ChannelRouter:
-    """Maps soft-matrix decomposed signals to output channel spectrograms.
+    """Perceptual spectral router: maps decomposed signals to output channels.
 
-    No decorrelation, no delays — clean gain-based remixing.
-    Surround = M-S side signal (natural stereo width).
-    Height = raw L/R through high-shelf (captures air frequencies).
-    Height back = ambient side through high-shelf (more diffuse, appropriate for rear).
+    Routing is driven by three per-frame signals from the decomposer:
+
+    width(f) = 1 - coherence(f)
+        High where L/R are diffuse/uncorrelated (room reverb, wide panned instruments).
+        Only diffuse content routes to surrounds — direct/coherent signal stays in front.
+
+    surround_freq_mask(f)
+        Sigmoid above surround_bass_cutoff_hz. Prevents low-frequency energy from
+        leaking into surround channels (no muddy bass in SL/SR).
+
+    transient_gate (scalar, per frame)
+        Derived from decomposition.transient_score (spectral flux).
+        On transients (attack of drums, plucks): gate closes → energy anchored in front.
+        On sustained/decaying content: gate open → energy spreads to surround field.
+        This makes percussion stay upfront while reverb tails wrap around the listener.
     """
 
     def __init__(self, config: UpmixConfig, sample_rate: int, n_freq_bins: int):
         self._config = config
         self._format = FORMAT_MAP[config.output_format]
         self._lfe = LFEExtractor(config, sample_rate, n_freq_bins)
+        self._transient_gate_min = config.transient_gate_min
 
-        self._height_filter = None
+        # Bass-protection mask: surrounds receive content above surround_bass_cutoff_hz
+        freqs = np.arange(n_freq_bins) * sample_rate / ((n_freq_bins - 1) * 2)
+        cutoff = config.surround_bass_cutoff_hz
+        self._surround_freq_mask = 1.0 / (1.0 + np.exp(-(freqs - cutoff) / (cutoff / 4.0)))
+
+        self._height_filter: HeightFilter | None = None
         if self._format.has_height:
             self._height_filter = HeightFilter(config, sample_rate, n_freq_bins)
 
@@ -87,34 +102,53 @@ class ChannelRouter:
         decomposition: SoftMatrixResult,
         mid_frame: np.ndarray,
     ) -> dict[str, np.ndarray]:
-        """Route one frame to output channels."""
+        """Route one frame to output channels using perceptual spatial analysis."""
         cfg = self._config
         d = decomposition
 
+        # Transient gate: open (1.0) on sustained content, closes on attack transients
+        gate = self._transient_gate_min + (1.0 - self._transient_gate_min) * (
+            1.0 - d.transient_score
+        )
+
+        # Combined surround weight per bin: only diffuse, non-bass content
+        surround_w = d.width * self._surround_freq_mask
+
         channels: dict[str, np.ndarray] = {}
 
+        # Front: direct signal, no transient gate (transients should be fully localized here)
         channels["FL"] = d.front_L
         channels["FR"] = d.front_R
         channels["C"] = cfg.center_gain * d.center
         channels["LFE"] = self._lfe.extract_frame(mid_frame)
 
-        # Surround: M-S side signal — natural stereo width, no artifacts
-        channels["SL"] = cfg.surround_gain * d.ambient_L
-        channels["SR"] = cfg.surround_gain * d.ambient_R
+        # Surround: width-weighted ambient, bass-protected, transient-gated
+        # → receives reverb tails, room ambience, wide-panned instruments
+        # → virtually silent during hard transients (snare hits, plucks)
+        channels["SL"] = cfg.surround_gain * d.ambient_L * surround_w * gate
+        channels["SR"] = cfg.surround_gain * d.ambient_R * surround_w * gate
 
         if self._format.has_back:
-            channels["BL"] = cfg.back_gain * d.ambient_L
-            channels["BR"] = cfg.back_gain * d.ambient_R
+            channels["BL"] = cfg.back_gain * d.ambient_L * surround_w * gate
+            channels["BR"] = cfg.back_gain * d.ambient_R * surround_w * gate
 
         if self._height_filter is not None:
-            # Front height: raw L/R air — instrument shimmer and room reflection
+            # Front height: full L/R through elevation EQ
+            # No transient gate — aerial transients (cymbals, plucked strings) should
+            # feel elevated. Bass rolloff in the elevation EQ already prevents
+            # low-freq transients (kick, bass guitar) from reaching height channels.
             channels["TFL"] = self._height_filter.apply_frame(d.signal_L)
             channels["TFR"] = self._height_filter.apply_frame(d.signal_R)
 
             if self._format.n_height_channels == 4:
-                # Back height: side signal air — more diffuse, natural for rear dome
-                channels["TBL"] = self._height_filter.apply_frame(d.ambient_L)
-                channels["TBR"] = self._height_filter.apply_frame(d.ambient_R)
+                # Back height: diffuse ambient through elevation EQ, transient-gated
+                # → overhead reverb dome, room tails
+                channels["TBL"] = self._height_filter.apply_frame(
+                    d.ambient_L * surround_w
+                ) * gate
+                channels["TBR"] = self._height_filter.apply_frame(
+                    d.ambient_R * surround_w
+                ) * gate
 
         return channels
 
@@ -123,29 +157,39 @@ class ChannelRouter:
         mid: np.ndarray,
         decomposition: SoftMatrixBatchResult,
     ) -> dict[str, np.ndarray]:
-        """Batch routing."""
+        """Batch routing. Transient gate derived from per-frame transient_score."""
         cfg = self._config
         d = decomposition
+
+        # Batch gate: shape (n_frames,) → broadcast to (n_freq, n_frames)
+        gate = self._transient_gate_min + (1.0 - self._transient_gate_min) * (
+            1.0 - d.transient_score[np.newaxis, :]
+        )
+        surround_w = d.width * self._surround_freq_mask[:, np.newaxis]
 
         channels: dict[str, np.ndarray] = {
             "FL": d.front_L,
             "FR": d.front_R,
             "C": cfg.center_gain * d.center,
             "LFE": self._lfe.extract(mid),
-            "SL": cfg.surround_gain * d.ambient_L,
-            "SR": cfg.surround_gain * d.ambient_R,
+            "SL": cfg.surround_gain * d.ambient_L * surround_w * gate,
+            "SR": cfg.surround_gain * d.ambient_R * surround_w * gate,
         }
 
         if self._format.has_back:
-            channels["BL"] = cfg.back_gain * d.ambient_L
-            channels["BR"] = cfg.back_gain * d.ambient_R
+            channels["BL"] = cfg.back_gain * d.ambient_L * surround_w * gate
+            channels["BR"] = cfg.back_gain * d.ambient_R * surround_w * gate
 
         if self._height_filter is not None:
             channels["TFL"] = self._height_filter.apply(d.signal_L)
             channels["TFR"] = self._height_filter.apply(d.signal_R)
 
             if self._format.n_height_channels == 4:
-                channels["TBL"] = self._height_filter.apply(d.ambient_L)
-                channels["TBR"] = self._height_filter.apply(d.ambient_R)
+                channels["TBL"] = self._height_filter.apply(
+                    d.ambient_L * surround_w
+                ) * gate
+                channels["TBR"] = self._height_filter.apply(
+                    d.ambient_R * surround_w
+                ) * gate
 
         return channels
