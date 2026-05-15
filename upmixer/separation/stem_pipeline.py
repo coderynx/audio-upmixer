@@ -127,8 +127,10 @@ class StemUpmixPipeline:
         print(f"  Output format:{output_fmt.name} ({output_fmt.n_channels}ch)")
         print(f"  Model:        {self._model}")
 
-        # audio-separator outputs at sep_sr regardless of input sr
-        sep_sr = 44100
+        # Separate at the target output rate (or input rate if none specified).
+        # audio-separator resamples its output internally, so stems always arrive
+        # at sep_sr — no explicit post-resample is needed for the common case.
+        sep_sr = cfg.output_sample_rate or sr
         separator = StemSeparator(
             model=self._model,
             model_dir=self._model_dir,
@@ -269,16 +271,6 @@ class StemUpmixPipeline:
 
         for name in channels:
             channels[name] = soft_limit(channels[name], cfg.peak_limit_threshold)
-
-        # Resample to output sample rate
-        if cfg.output_sample_rate and cfg.output_sample_rate != sep_sr:
-            g = math.gcd(cfg.output_sample_rate, sep_sr)
-            up, down = cfg.output_sample_rate // g, sep_sr // g
-            channels = {
-                name: resample_poly(ch, up, down).astype(np.float64)
-                for name, ch in channels.items()
-            }
-            print(f"  Resampled: {sep_sr} Hz → {cfg.output_sample_rate} Hz")
 
         if cfg.output_type == "adm-bwf":
             writer = AdmBwfWriter(output_path, out_sr, cfg)

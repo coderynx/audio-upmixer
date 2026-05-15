@@ -52,10 +52,16 @@ class StemSeparator:
     Separation is file-based (audio-separator writes to disk); stems are
     loaded back as numpy arrays after processing.
 
+    The underlying Separator (and model weights) are loaded lazily on the
+    first call to separate() and kept alive for all subsequent calls on this
+    instance. When processing multiple zones from a single file, the model is
+    therefore loaded only once — a significant runtime saving.
+
     Args:
         model: Model filename. Demucs 4-stem and RoFormer 2-stem are both supported.
         model_dir: Where models are cached. Defaults to ~/.cache/upmixer-models.
-        sample_rate: Output sample rate for stems (resampled if differs from source).
+        sample_rate: Output sample rate for stems. audio-separator resamples
+            internally so stems are returned at exactly this rate.
     """
 
     def __init__(
@@ -69,6 +75,27 @@ class StemSeparator:
             Path.home() / ".cache" / "upmixer-models"
         )
         self._sample_rate = sample_rate
+        self._loaded_sep = None   # created lazily, reused across separate() calls
+
+    def _get_separator(self, output_dir: str):
+        """Return a ready Separator, loading the model only on first call."""
+        from audio_separator.separator import Separator
+
+        if self._loaded_sep is None:
+            _check_import()
+            self._loaded_sep = Separator(
+                model_file_dir=self._model_dir,
+                output_dir=output_dir,
+                output_format="WAV",
+                sample_rate=self._sample_rate,
+                normalization_threshold=0.9,
+            )
+            self._loaded_sep.load_model(model_filename=self._model)
+        else:
+            # Reuse already-loaded model; redirect outputs to the new directory.
+            self._loaded_sep.output_dir = output_dir
+
+        return self._loaded_sep
 
     def separate(
         self,
@@ -85,21 +112,13 @@ class StemSeparator:
             Dict mapping canonical stem name to numpy array (n_samples, 2) float32.
             Unknown/unrecognised stem names are silently skipped.
         """
-        from audio_separator.separator import Separator
+        import shutil
 
-        _check_import()
         use_tmp = output_dir is None
         tmp_dir = tempfile.mkdtemp(prefix="upmixer_stems_") if use_tmp else output_dir
 
         try:
-            sep = Separator(
-                model_file_dir=self._model_dir,
-                output_dir=tmp_dir,
-                output_format="WAV",
-                sample_rate=self._sample_rate,
-                normalization_threshold=0.9,
-            )
-            sep.load_model(model_filename=self._model)
+            sep = self._get_separator(tmp_dir)
             output_paths = sep.separate(audio_path)
 
             stems: dict[str, np.ndarray] = {}
@@ -117,7 +136,6 @@ class StemSeparator:
 
         finally:
             if use_tmp:
-                import shutil
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
         return stems

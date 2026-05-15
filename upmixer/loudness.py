@@ -12,6 +12,8 @@ Channel weights follow BS.1770-4 §2.2 Table 1:
 from __future__ import annotations
 
 import math
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 from scipy.signal import sosfilt
@@ -74,12 +76,14 @@ def _hpf_sos(Wn: float, Q: float, fs: int) -> list[float]:
     return [b0 / a0, b1 / a0, b2 / a0, 1.0, a1 / a0, a2 / a0]
 
 
+@lru_cache(maxsize=8)
 def _k_weighting_sos(sample_rate: int) -> np.ndarray:
     """BS.1770-4 K-weighting filter as (2, 6) SOS array.
 
     Stage 1: pre-filter  — high shelf +4 dB above ~1.68 kHz
     Stage 2: RLB filter  — 2nd-order HPF at 38.1 Hz
     Parameters match pyloudnorm / ITU-R BS.1770-4 Annex 1.
+    Cached by sample_rate so repeated calls with the same rate are free.
     """
     s1 = _shelf_sos(1681.974450955533, 3.999843853973347, 0.7071752369554196, sample_rate)
     s2 = _hpf_sos(38.13547087602444, 0.5003270373238773, sample_rate)
@@ -88,6 +92,28 @@ def _k_weighting_sos(sample_rate: int) -> np.ndarray:
 
 # ── Measurement ───────────────────────────────────────────────────────────────
 
+def _channel_weighted_blocks(
+    audio: np.ndarray,
+    weight: float,
+    sos: np.ndarray,
+    block_len: int,
+    hop_len: int,
+) -> np.ndarray | None:
+    """K-weight one channel and return weighted mean-square per block.
+
+    Designed to run in a thread (scipy/numpy release the GIL).
+    Returns None if the channel is too short.
+    """
+    if len(audio) < block_len:
+        return None
+    filtered = sosfilt(sos, audio.astype(np.float64))
+    n_blocks = (len(filtered) - block_len) // hop_len + 1
+    return np.array([
+        np.mean(filtered[i * hop_len : i * hop_len + block_len] ** 2)
+        for i in range(n_blocks)
+    ]) * weight
+
+
 def measure_integrated_loudness(
     channels: dict[str, np.ndarray],
     sample_rate: int,
@@ -95,30 +121,39 @@ def measure_integrated_loudness(
 ) -> float:
     """BS.1770-4 integrated loudness with absolute + relative two-pass gating.
 
+    Channel K-weighting is computed in parallel across threads (scipy releases
+    the GIL, so actual concurrency is achieved on multi-core systems).
+
     Returns LKFS. Returns -70.0 for silence or content shorter than one block.
     """
     sos = _k_weighting_sos(sample_rate)
     block_len = int(_BLOCK_S * sample_rate)
     hop_len   = int(_HOP_S * sample_rate)
 
-    power_blocks: np.ndarray | None = None
-
+    # Collect (label, weight, audio) for channels that need processing
+    tasks = []
     for label in fmt.channels:
         weight = _CH_WEIGHT.get(label, 0.0)
         if weight == 0.0:
             continue
         audio = channels.get(label.value)
-        if audio is None or len(audio) < block_len:
+        if audio is not None:
+            tasks.append((weight, audio))
+
+    if not tasks:
+        return -70.0
+
+    def _process(args):
+        weight, audio = args
+        return _channel_weighted_blocks(audio, weight, sos, block_len, hop_len)
+
+    with ThreadPoolExecutor(max_workers=min(len(tasks), 8)) as ex:
+        results = list(ex.map(_process, tasks))
+
+    power_blocks: np.ndarray | None = None
+    for meansq in results:
+        if meansq is None:
             continue
-
-        filtered = sosfilt(sos, audio.astype(np.float64))
-        n_blocks = (len(filtered) - block_len) // hop_len + 1
-
-        meansq = np.array([
-            np.mean(filtered[i * hop_len : i * hop_len + block_len] ** 2)
-            for i in range(n_blocks)
-        ]) * weight
-
         if power_blocks is None:
             power_blocks = meansq
         else:
@@ -145,17 +180,24 @@ def measure_integrated_loudness(
 def measure_true_peak(channels: dict[str, np.ndarray]) -> float:
     """True Peak across all channels at 4× oversample (BS.1770-4 Annex 2).
 
-    Returns dBTP. LFE is included per spec. Processes one channel at a time
-    to keep peak memory bounded.
+    Oversampling is computed in parallel across threads; scipy/numpy release
+    the GIL so multi-core systems benefit proportionally to channel count.
+    Returns dBTP. LFE is included per spec.
     """
     from scipy.signal import resample_poly
 
-    max_tp = 1e-30
-    for audio in channels.values():
-        peak = float(np.max(np.abs(resample_poly(audio.astype(np.float64), 4, 1))))
-        if peak > max_tp:
-            max_tp = peak
-    return 20.0 * math.log10(max_tp)
+    def _channel_tp(audio: np.ndarray) -> float:
+        return float(np.max(np.abs(resample_poly(audio.astype(np.float64), 4, 1))))
+
+    audio_list = list(channels.values())
+    if not audio_list:
+        return -120.0
+
+    with ThreadPoolExecutor(max_workers=min(len(audio_list), 8)) as ex:
+        peaks = list(ex.map(_channel_tp, audio_list))
+
+    max_tp = max(peaks) if peaks else 1e-30
+    return 20.0 * math.log10(max(max_tp, 1e-30))
 
 
 # ── Normalization ─────────────────────────────────────────────────────────────
