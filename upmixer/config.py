@@ -37,7 +37,7 @@ class UpmixConfig:
     center_gain: float = 0.85
     lfe_gain: float = 0.5
     surround_gain: float = 0.6
-    back_gain: float = 0.4
+    back_gain: float = 0.55
     height_gain: float = 0.55
 
     # LFE parameters

@@ -44,7 +44,13 @@ def main():
         "--surround-gain",
         type=float,
         default=None,
-        help="Surround channels gain (0-1)",
+        help="Side surround channels gain (0-1)",
+    )
+    parser.add_argument(
+        "--back-gain",
+        type=float,
+        default=None,
+        help="Rear back channels gain for 7.1 formats (0-1, default: 0.55)",
     )
     parser.add_argument(
         "--center-extraction-gain",
@@ -123,6 +129,8 @@ def main():
         config.center_gain = args.center_gain
     if args.surround_gain is not None:
         config.surround_gain = args.surround_gain
+    if args.back_gain is not None:
+        config.back_gain = args.back_gain
     if args.center_extraction_gain is not None:
         config.center_extraction_gain = args.center_extraction_gain
     if args.center_attenuation is not None:
