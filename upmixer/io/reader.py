@@ -3,9 +3,11 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from upmixer.formats import InputFormat, detect_input_format
+
 
 class AudioReader:
-    """Reads audio files and validates they are stereo."""
+    """Reads audio files of any supported channel count."""
 
     def __init__(self, file_path: str | Path):
         self._path = Path(file_path)
@@ -15,17 +17,15 @@ class AudioReader:
         self._channels = info.channels
 
     def read(self) -> tuple[np.ndarray, int]:
-        """Returns (audio_data [n_samples, 2], sample_rate).
-
-        Raises ValueError if input is not stereo.
-        """
-        if self._channels != 2:
-            raise ValueError(
-                f"Expected stereo input (2 channels), got {self._channels} channels"
-            )
-
+        """Returns (audio_data [n_samples, n_channels], sample_rate)."""
         audio, sr = sf.read(str(self._path), dtype="float64")
+        if audio.ndim == 1:
+            audio = audio[:, np.newaxis]
         return audio, sr
+
+    def detect_format(self) -> InputFormat:
+        """Auto-detect input format from file channel count."""
+        return detect_input_format(self._channels)
 
     @property
     def duration_seconds(self) -> float:

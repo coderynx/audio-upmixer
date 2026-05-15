@@ -61,7 +61,9 @@ class UpmixConfig:
     # Output format
     output_format: str = "5.1"
     output_subtype: str = "PCM_24"
+    output_type: str = "wav"   # "wav" or "adm-bwf"
     sample_rate: int | None = None
+    output_sample_rate: int | None = None  # resample output to this rate if set
 
     # Post-processing
     normalize_output: bool = True

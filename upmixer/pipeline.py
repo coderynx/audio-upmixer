@@ -1,10 +1,20 @@
+import math
+
 import numpy as np
+from scipy.signal import resample_poly
 
 from upmixer.analysis.coherence import CoherenceEstimator, CoherenceState
 from upmixer.analysis.stft import StreamingSTFT
 from upmixer.config import UpmixConfig
 from upmixer.decomposition.direct_ambient import SoftMatrixDecomposer
-from upmixer.formats import FORMAT_MAP
+from upmixer.formats import (
+    FORMAT_MAP,
+    INPUT_FORMAT_MAP,
+    InputFormat,
+    can_upmix,
+    detect_input_format,
+)
+from upmixer.io.adm_writer import AdmBwfWriter
 from upmixer.io.reader import AudioReader
 from upmixer.io.writer import AudioWriter
 from upmixer.routing.channel_router import ChannelRouter
@@ -137,67 +147,130 @@ class StreamingProcessor:
 
 
 class UpmixPipeline:
-    """Top-level orchestrator for file-based processing using streaming internals."""
+    """Top-level orchestrator for file-based processing."""
 
     def __init__(self, config: UpmixConfig | None = None):
         self.config = config or UpmixConfig()
 
-    def process_file(self, input_path: str, output_path: str) -> None:
-        """Full file-based processing pipeline using streaming blocks."""
+    def process_file(
+        self,
+        input_path: str,
+        output_path: str,
+        input_format_override: str | None = None,
+    ) -> None:
+        """Upmix any supported input format to a higher output format."""
         cfg = self.config
 
-        # 1. Read input
         reader = AudioReader(input_path)
         audio, sr = reader.read()
-        left = audio[:, 0]
-        right = audio[:, 1]
-        n_samples = len(left)
+        n_samples = audio.shape[0]
+
+        # Resolve input format
+        if input_format_override is not None:
+            if input_format_override not in INPUT_FORMAT_MAP:
+                raise ValueError(
+                    f"Unknown input format '{input_format_override}'. "
+                    f"Valid: {sorted(INPUT_FORMAT_MAP.keys())}"
+                )
+            input_fmt = INPUT_FORMAT_MAP[input_format_override]
+            if input_fmt.n_channels != reader.n_channels:
+                raise ValueError(
+                    f"Input format '{input_format_override}' expects "
+                    f"{input_fmt.n_channels} channels but file has {reader.n_channels}"
+                )
+        else:
+            input_fmt = detect_input_format(reader.n_channels)
+
+        output_fmt = FORMAT_MAP[cfg.output_format]
+
+        if not can_upmix(input_fmt, output_fmt):
+            raise ValueError(
+                f"Cannot upmix {input_fmt.name} → {output_fmt.name}: "
+                f"output format is missing input channels or has fewer total channels. "
+                f"Output must be a strict superset of the input channel layout."
+            )
 
         fft_size, hop_size = cfg.resolve_fft_params(sr)
 
-        print(f"Input: {input_path}")
+        print(f"Input:  {input_path}")
+        print(f"  Format:  {input_fmt.name} ({input_fmt.n_channels}ch)")
         print(f"  Sample rate: {sr} Hz")
-        print(f"  Duration: {n_samples / sr:.2f}s ({n_samples} samples)")
-        print(f"  Output format: {cfg.output_format}")
-        print(f"  FFT size: {fft_size}, hop: {hop_size}")
+        print(f"  Duration:    {n_samples / sr:.2f}s ({n_samples} samples)")
+        print(f"  Output format: {output_fmt.name} ({output_fmt.n_channels}ch)")
 
-        # 2. Create streaming processor
+        if input_fmt.n_channels <= 2:
+            # Mono / stereo: coherence-based STFT pipeline
+            if input_fmt.n_channels == 1:
+                left = right = audio[:, 0]
+            else:
+                left, right = audio[:, 0], audio[:, 1]
+
+            print(f"  FFT size: {fft_size}, hop: {hop_size}")
+            channels = self._run_stereo_pipeline(left, right, sr, n_samples, fft_size, hop_size)
+            channels = self._post_process(channels, sr, left, right)
+        else:
+            # Multichannel: time-domain pass-through + derivation
+            from upmixer.upmix.multichannel import MultichannelUpmixer
+
+            input_channels = {
+                label: audio[:, i]
+                for i, label in enumerate(input_fmt.channels)
+            }
+            print("  Processing (multichannel pass-through + channel derivation)...")
+            upmixer = MultichannelUpmixer(cfg, input_fmt, output_fmt, sr)
+            channels = upmixer.process(input_channels)
+            channels = self._post_process_multichannel(channels, sr, audio)
+
+        out_sr = cfg.output_sample_rate if cfg.output_sample_rate else sr
+        if cfg.output_sample_rate and cfg.output_sample_rate != sr:
+            channels = self._resample_channels(channels, sr, cfg.output_sample_rate)
+            print(f"  Resampled: {sr} Hz → {cfg.output_sample_rate} Hz")
+
+        if cfg.output_type == "adm-bwf":
+            writer = AdmBwfWriter(output_path, out_sr, cfg)
+        else:
+            writer = AudioWriter(output_path, out_sr, cfg)
+        writer.write(channels)
+        print(f"Output: {output_path}")
+
+    def _run_stereo_pipeline(
+        self,
+        left: np.ndarray,
+        right: np.ndarray,
+        sr: int,
+        n_samples: int,
+        fft_size: int,
+        hop_size: int,
+    ) -> dict[str, np.ndarray]:
+        """Run the coherence-based STFT pipeline on a stereo (or mono→stereo) pair."""
+        cfg = self.config
         processor = StreamingProcessor(cfg, sr)
-
-        # 3. Process in blocks
-        block_size = cfg.block_size
         fmt = FORMAT_MAP[cfg.output_format]
         channel_names = [label.value for label in fmt.channels]
         all_outputs: dict[str, list[np.ndarray]] = {ch: [] for ch in channel_names}
 
-        # Streaming latency: the input STFT needs fft_size - hop_size
-        # samples before producing the first spectrum frame.
         latency = fft_size - hop_size
 
         print("  Processing...")
-        for start in range(0, n_samples, block_size):
-            end = min(start + block_size, n_samples)
+        for start in range(0, n_samples, cfg.block_size):
+            end = min(start + cfg.block_size, n_samples)
             block_out = processor.process_block(left[start:end], right[start:end])
             for ch_name, samples in block_out.items():
                 all_outputs[ch_name].append(samples)
 
-        # Feed extra zeros to flush remaining audio through the pipeline
         tail_zeros = np.zeros(latency + fft_size)
         tail_out = processor.process_block(tail_zeros, tail_zeros)
         for ch_name, samples in tail_out.items():
             all_outputs[ch_name].append(samples)
 
-        # Flush any partial hop
         flush_out = processor.flush()
         for ch_name, samples in flush_out.items():
             if len(samples) > 0:
                 all_outputs[ch_name].append(samples)
 
-        # 4. Concatenate, compensate latency, and trim to original length
         channels = {}
         for ch_name, chunks in all_outputs.items():
             full = np.concatenate(chunks)
-            # Remove latency (initial zeros from STFT fill-up)
             full = full[latency:]
             if len(full) > n_samples:
                 channels[ch_name] = full[:n_samples]
@@ -206,13 +279,7 @@ class UpmixPipeline:
             else:
                 channels[ch_name] = full
 
-        # 5. Time-domain post-processing
-        channels = self._post_process(channels, sr, left, right)
-
-        # 6. Write output
-        writer = AudioWriter(output_path, sr, cfg)
-        writer.write(channels)
-        print(f"Output: {output_path}")
+        return channels
 
     def _post_process(
         self,
@@ -221,12 +288,11 @@ class UpmixPipeline:
         original_left: np.ndarray,
         original_right: np.ndarray,
     ) -> dict[str, np.ndarray]:
-        """Time-domain post-processing: delay, normalization, limiting."""
+        """Time-domain post-processing for stereo-sourced output: delay, normalization, limiting."""
         cfg = self.config
         fmt = FORMAT_MAP[cfg.output_format]
         n_samples = len(original_left)
 
-        # Apply delay to back channels
         if fmt.has_back:
             delay_samples = int(cfg.back_delay_ms * sr / 1000.0)
             for ch_name in ("BL", "BR"):
@@ -235,7 +301,6 @@ class UpmixPipeline:
                         channels[ch_name], (delay_samples, 0)
                     )[:n_samples]
 
-        # Apply delay to top back channels
         if fmt.n_height_channels == 4:
             delay_samples = int(cfg.height_back_delay_ms * sr / 1000.0)
             for ch_name in ("TBL", "TBR"):
@@ -244,12 +309,46 @@ class UpmixPipeline:
                         channels[ch_name], (delay_samples, 0)
                     )[:n_samples]
 
-        # Energy normalization
         if cfg.normalize_output:
             channels = normalize_energy(channels, original_left, original_right)
 
-        # Peak limiting
         for name in channels:
             channels[name] = soft_limit(channels[name], cfg.peak_limit_threshold)
 
         return channels
+
+    def _post_process_multichannel(
+        self,
+        channels: dict[str, np.ndarray],
+        sr: int,
+        original_audio: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Post-processing for multichannel-sourced output: normalization and limiting.
+
+        Delays are already applied inside MultichannelUpmixer.process().
+        """
+        cfg = self.config
+
+        if cfg.normalize_output:
+            input_energy = float(np.sum(original_audio ** 2))
+            output_energy = float(sum(np.sum(ch ** 2) for ch in channels.values()))
+            if output_energy > 1e-20:
+                scale = np.sqrt(input_energy / output_energy)
+                channels = {name: ch * scale for name, ch in channels.items()}
+
+        for name in channels:
+            channels[name] = soft_limit(channels[name], cfg.peak_limit_threshold)
+
+        return channels
+
+    @staticmethod
+    def _resample_channels(
+        channels: dict[str, np.ndarray], src_sr: int, dst_sr: int
+    ) -> dict[str, np.ndarray]:
+        """Resample all channels from src_sr to dst_sr using polyphase filter."""
+        g = math.gcd(dst_sr, src_sr)
+        up, down = dst_sr // g, src_sr // g
+        return {
+            name: resample_poly(ch, up, down).astype(np.float64)
+            for name, ch in channels.items()
+        }
