@@ -182,6 +182,7 @@ class StemUpmixPipeline:
             for tmp in tmp_files:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
+            separator.close()  # flush persistent temp dir immediately
 
         if not all_stems:
             raise RuntimeError(

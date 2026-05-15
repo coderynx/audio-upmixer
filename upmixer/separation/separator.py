@@ -52,10 +52,14 @@ class StemSeparator:
     Separation is file-based (audio-separator writes to disk); stems are
     loaded back as numpy arrays after processing.
 
-    The underlying Separator (and model weights) are loaded lazily on the
-    first call to separate() and kept alive for all subsequent calls on this
-    instance. When processing multiple zones from a single file, the model is
-    therefore loaded only once — a significant runtime saving.
+    A single persistent temporary directory is used for all separate() calls
+    on this instance.  The underlying Separator object (and loaded model
+    weights) are kept alive across calls so the model is loaded only once —
+    a major runtime saving when processing multiple zones.
+
+    Individual stem files are deleted immediately after reading to keep disk
+    usage bounded.  The persistent temp dir is removed when close() is called
+    or the instance is garbage-collected.
 
     Args:
         model: Model filename. Demucs 4-stem and RoFormer 2-stem are both supported.
@@ -75,25 +79,33 @@ class StemSeparator:
             Path.home() / ".cache" / "upmixer-models"
         )
         self._sample_rate = sample_rate
-        self._loaded_sep = None   # created lazily, reused across separate() calls
+        self._loaded_sep = None   # loaded lazily, reused across all separate() calls
+        self._tmp_dir: str | None = None  # persistent output dir for this instance
 
-    def _get_separator(self, output_dir: str):
-        """Return a ready Separator, loading the model only on first call."""
+    def _ensure_tmp_dir(self) -> str:
+        """Return (creating if needed) the persistent temp directory."""
+        if self._tmp_dir is None or not os.path.exists(self._tmp_dir):
+            self._tmp_dir = tempfile.mkdtemp(prefix="upmixer_stems_")
+        return self._tmp_dir
+
+    def _get_separator(self) -> object:
+        """Return a ready Separator, loading the model only on first call.
+
+        Always uses the persistent _tmp_dir so the output_dir never changes
+        between calls — avoids stale path issues after temp-dir cleanup.
+        """
         from audio_separator.separator import Separator
 
         if self._loaded_sep is None:
             _check_import()
             self._loaded_sep = Separator(
                 model_file_dir=self._model_dir,
-                output_dir=output_dir,
+                output_dir=self._ensure_tmp_dir(),
                 output_format="WAV",
                 sample_rate=self._sample_rate,
                 normalization_threshold=0.9,
             )
             self._loaded_sep.load_model(model_filename=self._model)
-        else:
-            # Reuse already-loaded model; redirect outputs to the new directory.
-            self._loaded_sep.output_dir = output_dir
 
         return self._loaded_sep
 
@@ -106,39 +118,51 @@ class StemSeparator:
 
         Args:
             audio_path: Path to input audio file (any format/channel count).
-            output_dir: Where to write temporary stem files. Uses a temp dir if None.
+            output_dir: Ignored (kept for API compatibility). Stems are always
+                written to the instance's persistent temp directory.
 
         Returns:
             Dict mapping canonical stem name to numpy array (n_samples, 2) float32.
             Unknown/unrecognised stem names are silently skipped.
         """
-        import shutil
+        tmp_dir = self._ensure_tmp_dir()
+        sep = self._get_separator()
+        output_paths = sep.separate(audio_path)
 
-        use_tmp = output_dir is None
-        tmp_dir = tempfile.mkdtemp(prefix="upmixer_stems_") if use_tmp else output_dir
-
-        try:
-            sep = self._get_separator(tmp_dir)
-            output_paths = sep.separate(audio_path)
-
-            stems: dict[str, np.ndarray] = {}
-            for path in output_paths:
-                # audio-separator returns basenames; resolve against output_dir
-                full_path = path if os.path.isabs(path) else os.path.join(tmp_dir, path)
-                stem_name = _parse_stem_name(full_path)
-                if stem_name is None:
-                    continue
-                audio, _ = sf.read(full_path, dtype="float32", always_2d=True)
-                # Ensure stereo — mono models may write single-channel
-                if audio.shape[1] == 1:
-                    audio = np.concatenate([audio, audio], axis=1)
-                stems[stem_name] = audio  # (n_samples, 2)
-
-        finally:
-            if use_tmp:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+        stems: dict[str, np.ndarray] = {}
+        for path in output_paths:
+            # audio-separator may return basenames or absolute paths
+            full_path = path if os.path.isabs(path) else os.path.join(tmp_dir, path)
+            stem_name = _parse_stem_name(full_path)
+            if stem_name is None:
+                try:
+                    os.unlink(full_path)
+                except OSError:
+                    pass
+                continue
+            audio, _ = sf.read(full_path, dtype="float32", always_2d=True)
+            # Ensure stereo — mono models may write single-channel
+            if audio.shape[1] == 1:
+                audio = np.concatenate([audio, audio], axis=1)
+            stems[stem_name] = audio  # (n_samples, 2)
+            # Remove stem file immediately after reading to keep disk usage bounded
+            try:
+                os.unlink(full_path)
+            except OSError:
+                pass
 
         return stems
+
+    def close(self) -> None:
+        """Remove the persistent temp directory and release the Separator."""
+        import shutil
+        if self._tmp_dir and os.path.exists(self._tmp_dir):
+            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            self._tmp_dir = None
+        self._loaded_sep = None
+
+    def __del__(self) -> None:
+        self.close()
 
 
 def _parse_stem_name(path: str) -> str | None:
