@@ -1,10 +1,21 @@
 """Stem-separation-based upmix pipeline.
 
-Uses python-audio-separator to split a stereo file into instrument stems,
-then spatially routes each stem to the appropriate 3D position in the
-output channel layout.
+Uses python-audio-separator to split audio into instrument stems, then
+spatially routes each stem to the appropriate 3D position in the output layout.
 
-This is a separate, non-realtime pipeline — not suitable for streaming.
+Multichannel input handling:
+  Stereo / mono  → single "front" zone, separated directly.
+  Multichannel   → channels split into stereo pairs by spatial zone:
+                     front        (FL / FR)
+                     surround     (SL / SR)
+                     back         (BL / BR)      — 7.1+
+                     height_front (TFL / TFR)    — Atmos
+                     height_back  (TBL / TBR)    — Atmos 5.1.4 / 7.1.4
+                   Each zone is separated independently; stems are tagged
+                   "StemName@zone" so the router keeps them in their spatial home.
+                   Center (C) and LFE are passed through without separation.
+
+This is a non-realtime, file-based pipeline.
 For realtime/low-latency upmixing use UpmixPipeline in pipeline.py.
 
 Usage:
@@ -13,47 +24,59 @@ Usage:
     from upmixer.separation.stem_pipeline import StemUpmixPipeline
     from upmixer.config import UpmixConfig
 
-    cfg = UpmixConfig(output_format='7.1.2')
+    cfg = UpmixConfig(output_format='7.1.4')
     pipeline = StemUpmixPipeline(cfg)
-    pipeline.process_file('stereo.wav', 'output.wav')
+    pipeline.process_file('surround_51.wav', 'atmos_714.wav')
 """
 from __future__ import annotations
 
 import math
-import tempfile
 import os
+import tempfile
 
 import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
 
 from upmixer.config import UpmixConfig
-from upmixer.formats import FORMAT_MAP, INPUT_FORMAT_MAP, can_upmix, detect_input_format
+from upmixer.formats import ChannelLabel, FORMAT_MAP, INPUT_FORMAT_MAP, detect_input_format
 from upmixer.io.adm_writer import AdmBwfWriter
 from upmixer.io.reader import AudioReader
 from upmixer.io.writer import AudioWriter
 from upmixer.separation.separator import StemSeparator, DEFAULT_MODEL
 from upmixer.separation.stem_router import StemRouter
-from upmixer.utils import normalize_energy, soft_limit
+from upmixer.utils import soft_limit
+
+# Ordered list of (zone_name, left_channel, right_channel) pairs.
+# Only zones whose both channels exist in the input are extracted.
+_ZONE_PAIRS: list[tuple[str, ChannelLabel, ChannelLabel]] = [
+    ("front",        ChannelLabel.FL,  ChannelLabel.FR),
+    ("surround",     ChannelLabel.SL,  ChannelLabel.SR),
+    ("back",         ChannelLabel.BL,  ChannelLabel.BR),
+    ("height_front", ChannelLabel.TFL, ChannelLabel.TFR),
+    ("height_back",  ChannelLabel.TBL, ChannelLabel.TBR),
+]
+
+# Channels passed through directly without stem separation.
+_PASSTHROUGH_LABELS: list[ChannelLabel] = [ChannelLabel.C, ChannelLabel.LFE]
 
 
 class StemUpmixPipeline:
     """File-based upmix pipeline using instrument stem separation.
 
-    Stems are separated via python-audio-separator (requires separate install),
-    then spatially routed to a multichannel output using perceptually-motivated
-    default positions:
+    For stereo/mono input: separates the file directly as a single front zone.
 
-      Vocals  → Center (+ small FL/FR for harmony width, light height)
-      Bass    → LFE + FL/FR
-      Drums   → FL/FR primary, SL/SR room reverb, TFL/TFR overheads, LFE kick
-      Other   → SL/SR primary (surround bed), FL/FR secondary, height/back for pads
+    For multichannel input: extracts stereo pairs per spatial zone (front,
+    surround, back, height_front, height_back), separates each independently,
+    then routes zone-tagged stems to their spatial home in the output. Center
+    and LFE channels bypass separation and are injected directly.
 
     Args:
         config: UpmixConfig controlling gains, LFE cutoff, output format, etc.
         model: audio-separator model filename. Defaults to htdemucs_ft (4-stem).
         model_dir: Model cache directory. Defaults to ~/.cache/upmixer-models.
-        custom_routing: Override the default stem→channel routing table.
+        custom_routing: Override the fallback stem→channel routing table used
+            when a stem/zone combination is not in the built-in zone tables.
             Format: {stem_name: {channel_name: gain}}.
     """
 
@@ -75,11 +98,11 @@ class StemUpmixPipeline:
         output_path: str,
         input_format_override: str | None = None,
     ) -> None:
-        """Separate stems from input_path and write spatially routed multichannel file."""
+        """Separate stems and write spatially routed multichannel output file."""
         cfg = self.config
 
         reader = AudioReader(input_path)
-        _, sr = reader.read()
+        audio_full, sr = reader.read()
 
         if input_format_override is not None:
             if input_format_override not in INPUT_FORMAT_MAP:
@@ -99,55 +122,104 @@ class StemUpmixPipeline:
         output_fmt = FORMAT_MAP[cfg.output_format]
 
         print(f"Input:  {input_path}")
-        print(f"  Format:  {input_fmt.name} ({input_fmt.n_channels}ch)")
-        print(f"  Sample rate: {sr} Hz")
-        print(f"  Output format: {output_fmt.name} ({output_fmt.n_channels}ch)")
-        print(f"  Model: {self._model}")
+        print(f"  Format:       {input_fmt.name} ({input_fmt.n_channels}ch)")
+        print(f"  Sample rate:  {sr} Hz")
+        print(f"  Output format:{output_fmt.name} ({output_fmt.n_channels}ch)")
+        print(f"  Model:        {self._model}")
 
-        # audio-separator expects mono/stereo; downmix multichannel to stereo if needed
-        sep_input_path = input_path
-        downmix_tmp: str | None = None
-        if input_fmt.n_channels > 2:
-            audio_full, _ = reader.read()
-            stereo = _downmix_to_stereo(audio_full, input_fmt)
-            downmix_tmp = tempfile.mktemp(suffix=".wav", prefix="upmixer_downmix_")
-            sf.write(downmix_tmp, stereo, sr, subtype="PCM_24")
-            sep_input_path = downmix_tmp
-            print(f"  Downmixed {input_fmt.name} → stereo for separation")
-
-        # Determine separation sample rate: audio-separator works best at 44100
+        # audio-separator outputs at sep_sr regardless of input sr
         sep_sr = 44100
-        print("  Separating stems...")
         separator = StemSeparator(
             model=self._model,
             model_dir=self._model_dir,
             sample_rate=sep_sr,
         )
+
+        # Build zone pairs and passthrough channels
+        if input_fmt.n_channels <= 2:
+            # Stereo / mono: use input file directly, single front zone
+            sep_zones: dict[str, str | np.ndarray] = {"front": input_path}
+            passthrough: dict[str, np.ndarray] = {}
+            print("  Mode: stereo — single front zone")
+        else:
+            sep_zones, passthrough = _extract_zones(audio_full, input_fmt)
+            print(f"  Mode: multichannel — zones: {sorted(sep_zones.keys())}")
+            if passthrough:
+                print(f"  Passthrough: {sorted(passthrough.keys())}")
+
+        # Separate each zone
+        print("  Separating stems...")
+        all_stems: dict[str, np.ndarray] = {}
+        tmp_files: list[str] = []
+
         try:
-            stems = separator.separate(sep_input_path)
+            for zone_name, pair_src in sep_zones.items():
+                print(f"    {zone_name}...")
+                if isinstance(pair_src, str):
+                    sep_path = pair_src
+                else:
+                    tmp = tempfile.mktemp(
+                        suffix=".wav", prefix=f"upmixer_{zone_name}_"
+                    )
+                    sf.write(tmp, pair_src, sr, subtype="PCM_24")
+                    sep_path = tmp
+                    tmp_files.append(tmp)
+
+                zone_stems = separator.separate(sep_path)
+                for stem_name, stem_audio in zone_stems.items():
+                    all_stems[f"{stem_name}@{zone_name}"] = stem_audio
+
         finally:
-            if downmix_tmp and os.path.exists(downmix_tmp):
-                os.unlink(downmix_tmp)
+            for tmp in tmp_files:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
 
-        if not stems:
-            raise RuntimeError("Stem separation produced no output. Check model and input file.")
+        if not all_stems:
+            raise RuntimeError(
+                "Stem separation produced no output. Check model and input file."
+            )
 
-        stem_names = sorted(stems.keys())
-        n_samples = max(len(s) for s in stems.values())
-        print(f"  Stems: {stem_names}  ({n_samples / sep_sr:.2f}s at {sep_sr} Hz)")
+        n_samples = max(len(s) for s in all_stems.values())
+        stem_summary = sorted({k.split("@")[0] for k in all_stems})
+        print(
+            f"  Stems: {stem_summary}  ({n_samples / sep_sr:.2f}s at {sep_sr} Hz)"
+        )
 
-        # Route stems to channels
+        # Resample passthrough channels to sep_sr for consistent mixing
+        passthrough_resampled: dict[str, np.ndarray] = {}
+        if passthrough:
+            if sr != sep_sr:
+                g = math.gcd(sr, sep_sr)
+                up, down = sep_sr // g, sr // g
+                for ch_name, ch_audio in passthrough.items():
+                    passthrough_resampled[ch_name] = resample_poly(
+                        ch_audio, up, down
+                    ).astype(np.float64)
+            else:
+                passthrough_resampled = {k: v.astype(np.float64) for k, v in passthrough.items()}
+
+        # Route stems to channels (passthrough channels are skipped in routing)
         router = StemRouter(cfg, output_fmt, sep_sr, self._custom_routing)
-        channels = router.route(stems, n_samples)
+        channels = router.route(
+            all_stems, n_samples, passthrough_channels=set(passthrough_resampled.keys())
+        )
 
-        # Normalize and limit
-        orig_L = stems.get("Vocals", next(iter(stems.values())))[:, 0]
-        orig_R = stems.get("Vocals", next(iter(stems.values())))[:, 1] if stems.get("Vocals", next(iter(stems.values()))).shape[1] > 1 else orig_L
+        # Inject passthrough channels directly
+        for ch_name, ch_audio in passthrough_resampled.items():
+            if ch_name in channels:
+                n = min(len(ch_audio), n_samples)
+                channels[ch_name][:n] += ch_audio[:n]
 
+        # Normalize energy (stems + passthrough as reference)
         if cfg.normalize_output:
-            # Normalization reference: sum energy of all stems
-            total_input_energy = sum(float(np.sum(s ** 2)) for s in stems.values())
-            total_output_energy = sum(float(np.sum(ch ** 2)) for ch in channels.values())
+            total_input_energy = sum(
+                float(np.sum(s ** 2)) for s in all_stems.values()
+            ) + sum(
+                float(np.sum(v ** 2)) for v in passthrough.values()
+            )
+            total_output_energy = sum(
+                float(np.sum(ch ** 2)) for ch in channels.values()
+            )
             if total_output_energy > 1e-20:
                 scale = np.sqrt(total_input_energy / total_output_energy)
                 channels = {k: v * scale for k, v in channels.items()}
@@ -174,51 +246,31 @@ class StemUpmixPipeline:
         print(f"Output: {output_path}")
 
 
-def _downmix_to_stereo(audio: np.ndarray, input_fmt: object) -> np.ndarray:
-    """Downmix a multichannel array to stereo using ITU-R BS.775 coefficients.
+def _extract_zones(
+    audio: np.ndarray,
+    input_fmt: object,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Split multichannel audio into stereo pairs by spatial zone and passthrough channels.
 
-    Channel layout follows input_fmt.channels order.
-    Unknown channels are summed with unity gain into both L and R.
+    Returns:
+        zones: zone_name → (n_samples, 2) float64 array for stem separation.
+        passthrough: channel_name → (n_samples,) float64 array for direct injection.
     """
-    from upmixer.formats import ChannelLabel
+    ch_map = {
+        label: audio[:, i].astype(np.float64)
+        for i, label in enumerate(input_fmt.channels)
+    }
 
-    channels_list = list(input_fmt.channels)
-    ch_map = {label: audio[:, i] for i, label in enumerate(channels_list)}
+    zones: dict[str, np.ndarray] = {}
+    for zone_name, left_label, right_label in _ZONE_PAIRS:
+        if left_label in ch_map and right_label in ch_map:
+            zones[zone_name] = np.column_stack(
+                [ch_map[left_label], ch_map[right_label]]
+            )
 
-    L = np.zeros(len(audio), dtype=np.float64)
-    R = np.zeros(len(audio), dtype=np.float64)
+    passthrough: dict[str, np.ndarray] = {}
+    for label in _PASSTHROUGH_LABELS:
+        if label in ch_map:
+            passthrough[label.value] = ch_map[label]
 
-    # ITU-R BS.775 coefficients
-    if ChannelLabel.FL in ch_map:
-        L += ch_map[ChannelLabel.FL]
-    if ChannelLabel.FR in ch_map:
-        R += ch_map[ChannelLabel.FR]
-    if ChannelLabel.C in ch_map:
-        center = ch_map[ChannelLabel.C] * 0.7071
-        L += center
-        R += center
-    if ChannelLabel.SL in ch_map:
-        L += ch_map[ChannelLabel.SL] * 0.7071
-    if ChannelLabel.SR in ch_map:
-        R += ch_map[ChannelLabel.SR] * 0.7071
-    if ChannelLabel.BL in ch_map:
-        L += ch_map[ChannelLabel.BL] * 0.7071
-    if ChannelLabel.BR in ch_map:
-        R += ch_map[ChannelLabel.BR] * 0.7071
-    if ChannelLabel.TFL in ch_map:
-        L += ch_map[ChannelLabel.TFL] * 0.5
-    if ChannelLabel.TFR in ch_map:
-        R += ch_map[ChannelLabel.TFR] * 0.5
-    if ChannelLabel.TBL in ch_map:
-        L += ch_map[ChannelLabel.TBL] * 0.5
-    if ChannelLabel.TBR in ch_map:
-        R += ch_map[ChannelLabel.TBR] * 0.5
-    # LFE omitted — not part of ITU-R BS.775 stereo downmix
-
-    # Prevent clipping from summation
-    peak = max(np.max(np.abs(L)), np.max(np.abs(R)), 1e-10)
-    if peak > 0.99:
-        L = L * (0.99 / peak)
-        R = R * (0.99 / peak)
-
-    return np.column_stack([L, R])
+    return zones, passthrough
