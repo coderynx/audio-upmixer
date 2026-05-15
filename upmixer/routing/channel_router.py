@@ -102,53 +102,42 @@ class ChannelRouter:
         decomposition: SoftMatrixResult,
         mid_frame: np.ndarray,
     ) -> dict[str, np.ndarray]:
-        """Route one frame to output channels using perceptual spatial analysis."""
+        """Route one frame to output channels.
+
+        Surrounds receive the M-S side signal bass-filtered above surround_bass_cutoff_hz.
+        No per-bin spectral masking — M-S decomposition already ensures centered/coherent
+        content has near-zero side signal. Masking causes underwater spectral artifacts.
+        """
         cfg = self._config
         d = decomposition
 
-        # Transient gate: open (1.0) on sustained content, closes on attack transients
-        gate = self._transient_gate_min + (1.0 - self._transient_gate_min) * (
-            1.0 - d.transient_score
-        )
-
-        # Combined surround weight per bin: only diffuse, non-bass content
-        surround_w = d.width * self._surround_freq_mask
+        # Side signal (L-R)/2 is already near-zero for centered/coherent content —
+        # M-S decomposition handles spatial separation without extra per-bin masking.
+        # Apply only bass protection; no spectral masking to avoid underwater artifacts.
+        side_L = d.ambient_L * self._surround_freq_mask
+        side_R = d.ambient_R * self._surround_freq_mask
 
         channels: dict[str, np.ndarray] = {}
 
-        # Front: direct signal, no transient gate (transients should be fully localized here)
         channels["FL"] = d.front_L
         channels["FR"] = d.front_R
         channels["C"] = cfg.center_gain * d.center
         channels["LFE"] = self._lfe.extract_frame(mid_frame)
 
-        # Surround: width-weighted ambient, bass-protected, transient-gated
-        # → receives reverb tails, room ambience, wide-panned instruments
-        # → virtually silent during hard transients (snare hits, plucks)
-        channels["SL"] = cfg.surround_gain * d.ambient_L * surround_w * gate
-        channels["SR"] = cfg.surround_gain * d.ambient_R * surround_w * gate
+        channels["SL"] = cfg.surround_gain * side_L
+        channels["SR"] = cfg.surround_gain * side_R
 
         if self._format.has_back:
-            channels["BL"] = cfg.back_gain * d.ambient_L * surround_w * gate
-            channels["BR"] = cfg.back_gain * d.ambient_R * surround_w * gate
+            channels["BL"] = cfg.back_gain * side_L
+            channels["BR"] = cfg.back_gain * side_R
 
         if self._height_filter is not None:
-            # Front height: full L/R through elevation EQ
-            # No transient gate — aerial transients (cymbals, plucked strings) should
-            # feel elevated. Bass rolloff in the elevation EQ already prevents
-            # low-freq transients (kick, bass guitar) from reaching height channels.
             channels["TFL"] = self._height_filter.apply_frame(d.signal_L)
             channels["TFR"] = self._height_filter.apply_frame(d.signal_R)
 
             if self._format.n_height_channels == 4:
-                # Back height: diffuse ambient through elevation EQ, transient-gated
-                # → overhead reverb dome, room tails
-                channels["TBL"] = self._height_filter.apply_frame(
-                    d.ambient_L * surround_w
-                ) * gate
-                channels["TBR"] = self._height_filter.apply_frame(
-                    d.ambient_R * surround_w
-                ) * gate
+                channels["TBL"] = self._height_filter.apply_frame(side_L)
+                channels["TBR"] = self._height_filter.apply_frame(side_R)
 
         return channels
 

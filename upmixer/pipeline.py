@@ -54,7 +54,7 @@ class StreamingProcessor:
         self._coherence_state = self._coherence_est.create_state(n_freq)
 
         # Decomposition and routing
-        self._decomposer = SoftMatrixDecomposer(config)
+        self._decomposer = SoftMatrixDecomposer(config, sample_rate=sample_rate, n_freq=n_freq)
         self._router = ChannelRouter(config, sample_rate, n_freq)
 
         # Input buffering (accumulate until we have hop_size samples)

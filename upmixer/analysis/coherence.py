@@ -16,10 +16,18 @@ class CoherenceState:
 
 
 class CoherenceEstimator:
-    """Estimates inter-channel coherence per time-frequency bin."""
+    """Estimates inter-channel coherence per time-frequency bin.
+
+    Streaming path (estimate_frame): two-rate adaptive EMA.
+        - Coherence rising (new direct sound arrives): fast alpha (alpha_attack).
+        - Coherence falling (direct sound decays into reverb): slow alpha (alpha_release).
+    Batch path (estimate): single fixed alpha for reproducibility.
+    """
 
     def __init__(self, config: UpmixConfig):
-        self._alpha = config.coherence_smoothing
+        self._alpha = config.coherence_smoothing          # batch path
+        self._alpha_attack = config.coherence_attack_alpha   # streaming: fast
+        self._alpha_release = config.coherence_release_alpha  # streaming: slow
         self._epsilon = config.epsilon
 
     def create_state(self, n_freq_bins: int) -> CoherenceState:
@@ -54,6 +62,16 @@ class CoherenceEstimator:
             state.Phi_RR = power_R.copy()
             state.initialized = True
         else:
+            # Instantaneous coherence vs. previous smoothed coherence
+            prev_gamma = np.abs(state.Phi_LR) ** 2 / (
+                state.Phi_LL * state.Phi_RR + eps
+            )
+            inst_gamma = np.abs(cross_LR) ** 2 / (power_L * power_R + eps)
+
+            # Fast alpha where coherence is rising (new direct sound),
+            # slow alpha where coherence is falling (reverb decay).
+            alpha = np.where(inst_gamma >= prev_gamma, self._alpha_attack, self._alpha_release)
+
             state.Phi_LR = alpha * state.Phi_LR + (1.0 - alpha) * cross_LR
             state.Phi_LL = alpha * state.Phi_LL + (1.0 - alpha) * power_L
             state.Phi_RR = alpha * state.Phi_RR + (1.0 - alpha) * power_R

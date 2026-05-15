@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from upmixer.analysis.harmonicity import HarmonicityEstimator
+from upmixer.analysis.transient import PerBandTransientDetector
 from upmixer.config import UpmixConfig
 
 
@@ -17,7 +19,8 @@ class SoftMatrixResult:
     signal_L: np.ndarray        # Raw left input (for height extraction)
     signal_R: np.ndarray        # Raw right input
     width: np.ndarray           # Per-bin diffuseness = 1 - coherence (n_freq,)
-    transient_score: float      # 0=steady-state, 1=transient (spectral flux)
+    transient_score: np.ndarray # Per-bin transient mask (n_freq,) ∈ [0,1]
+    harmonic_mask: np.ndarray   # Per-bin harmonicity (n_freq,) ∈ [0,1]
 
 
 @dataclass
@@ -32,29 +35,39 @@ class SoftMatrixBatchResult:
     signal_L: np.ndarray
     signal_R: np.ndarray
     width: np.ndarray           # (n_freq, n_frames)
-    transient_score: np.ndarray # (n_frames,) — all zeros in batch mode
+    transient_score: np.ndarray # (n_frames,) — zeros in batch mode
+    harmonic_mask: np.ndarray   # (n_freq, n_frames) — zeros in batch mode
 
 
 class SoftMatrixDecomposer:
     """Perceptual spectral decomposer for music remix upmixing.
 
-    Per STFT frame, performs:
+    Per STFT frame:
     1. Panning-aware center extraction: center only for coherent, center-panned bins.
-    2. Width per bin: diffuseness = 1 - coherence. Router uses this to send only
-       diffuse content to surrounds (reverb tails, room, stereo instruments).
-    3. Transient detection via spectral flux: spikes in forward flux indicate
-       transients. Router uses this to anchor transients in the front field
-       and let only sustained/reverberant tails spread to surrounds.
+    2. Width = 1 - coherence: per-bin diffuseness passed to router.
+    3. Per-band transient detection: per-bin transient_score via PerBandTransientDetector.
+       A bass transient only gates bass-frequency surround routing, not treble.
+    4. Harmonicity mask: per-bin spectral floor analysis via HarmonicityEstimator.
+       Tonal peaks stay in front; noise-floor content routes to surrounds.
     """
 
-    def __init__(self, config: UpmixConfig):
+    def __init__(
+        self,
+        config: UpmixConfig,
+        sample_rate: int = 44100,
+        n_freq: int = 2049,
+    ):
         self._center_extraction_gain = config.center_extraction_gain
         self._center_attenuation = config.center_attenuation
         self._eps = config.epsilon
-        self._flux_threshold = config.transient_flux_threshold
 
-        # Transient detection state
-        self._prev_mag: np.ndarray | None = None
+        self._transient_detector = PerBandTransientDetector(config, sample_rate, n_freq)
+        self._transient_state = self._transient_detector.create_state()
+
+        self._harmonicity_est = HarmonicityEstimator(config, n_freq)
+        self._harmonicity_state = self._harmonicity_est.create_state()
+
+        self._prev_mag: np.ndarray | None = None  # legacy batch path
 
     def decompose_frame(
         self,
@@ -69,7 +82,6 @@ class SoftMatrixDecomposer:
         mag_R = np.abs(X_R_frame)
         pan = (mag_L - mag_R) / (mag_L + mag_R + self._eps)
 
-        # Center only where coherent AND center-panned
         center_weight = coherence_frame * (1.0 - np.abs(pan))
         center = self._center_extraction_gain * center_weight * mid
 
@@ -77,19 +89,14 @@ class SoftMatrixDecomposer:
         front_L = X_L_frame * (1.0 - reduction)
         front_R = X_R_frame * (1.0 - reduction)
 
-        # Per-bin diffuseness: 1=fully diffuse/ambient, 0=fully coherent/direct
         width = 1.0 - coherence_frame
 
-        # Transient score via spectral flux (positive-only onset detector)
-        mag = mag_L + mag_R
-        if self._prev_mag is not None:
-            positive_flux = np.sum(np.maximum(0.0, mag - self._prev_mag))
-            total_energy = np.sum(mag) + self._eps
-            flux = positive_flux / total_energy
-            transient_score = float(np.clip(flux / self._flux_threshold, 0.0, 1.0))
-        else:
-            transient_score = 0.0
-        self._prev_mag = mag
+        transient_score = self._transient_detector.detect_frame(
+            X_L_frame, X_R_frame, self._transient_state
+        )
+        harmonic_mask = self._harmonicity_est.estimate_frame(
+            X_L_frame, X_R_frame, self._harmonicity_state
+        )
 
         return SoftMatrixResult(
             center=center,
@@ -101,6 +108,7 @@ class SoftMatrixDecomposer:
             signal_R=X_R_frame,
             width=width,
             transient_score=transient_score,
+            harmonic_mask=harmonic_mask,
         )
 
     def decompose(
@@ -109,7 +117,7 @@ class SoftMatrixDecomposer:
         X_R: np.ndarray,
         coherence: np.ndarray,
     ) -> SoftMatrixBatchResult:
-        """Batch mode: process full spectrograms. Transient detection disabled."""
+        """Batch mode. Transient and harmonicity analysis not available."""
         mid = (X_L + X_R) * 0.5
         side = (X_L - X_R) * 0.5
 
@@ -124,6 +132,7 @@ class SoftMatrixDecomposer:
         front_L = X_L * (1.0 - reduction)
         front_R = X_R * (1.0 - reduction)
 
+        n_freq = X_L.shape[0]
         n_frames = X_L.shape[1] if X_L.ndim > 1 else 1
         return SoftMatrixBatchResult(
             center=center,
@@ -135,7 +144,10 @@ class SoftMatrixDecomposer:
             signal_R=X_R,
             width=1.0 - coherence,
             transient_score=np.zeros(n_frames),
+            harmonic_mask=np.zeros((n_freq, n_frames)),
         )
 
     def reset(self) -> None:
+        self._transient_detector.reset(self._transient_state)
+        self._harmonicity_est.reset(self._harmonicity_state)
         self._prev_mag = None

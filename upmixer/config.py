@@ -24,7 +24,9 @@ class UpmixConfig:
     block_size: int = 4096
 
     # Analysis parameters
-    coherence_smoothing: float = 0.6
+    coherence_smoothing: float = 0.6       # batch path (unchanged)
+    coherence_attack_alpha: float = 0.25   # streaming: fast track when coherence rises
+    coherence_release_alpha: float = 0.75  # streaming: slow release when coherence falls
     epsilon: float = 1e-10
 
     # Soft matrix parameters
@@ -49,8 +51,17 @@ class UpmixConfig:
 
     # Spatial analysis parameters
     surround_bass_cutoff_hz: float = 250.0  # bass below this stays in front, not surround
-    transient_gate_min: float = 0.15        # minimum surround gain during transients
-    transient_flux_threshold: float = 0.25  # normalized flux above this = full transient
+    transient_gate_min: float = 0.15        # minimum surround gain during transients (batch path)
+    transient_flux_threshold: float = 0.25  # legacy flux threshold (batch path)
+
+    # Per-band transient detection (streaming path)
+    transient_n_bands: int = 10            # octave bands from 20 Hz to Nyquist
+    transient_ema_alpha: float = 0.85      # per-band flux history EMA (slow = adapts to dynamics)
+    transient_sensitivity_k: float = 2.5  # flux must exceed k × EMA to score 1.0
+
+    # Harmonicity — HPSS-inspired spectral floor
+    harmonic_median_half_width: int = 8    # ±k bins sliding median window (17 bins ≈ 183 Hz at 44.1k/4096)
+    harmonic_smoothing_alpha: float = 0.7  # temporal EMA to suppress frame-to-frame flicker
 
     # Back channel parameters
     back_delay_ms: float = 15.0
