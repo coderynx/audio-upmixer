@@ -270,25 +270,32 @@ class StemUpmixPipeline:
             stem_features=stem_features,
         )
 
-        # Inject passthrough channels
+        # Normalize stem-derived channel energy BEFORE injecting passthrough.
+        #
+        # Why order matters: passthrough channels (C, LFE) carry the original
+        # center vocals and bass at their original amplitude. If we inject them
+        # first and then normalize, the large C energy causes total_output >> total_input
+        # which drives scale < 1, silently attenuating the vocals.
+        #
+        # By normalizing stems-only first, we balance the routing spread without
+        # touching the passthrough signal. C and LFE are then added at their original
+        # level; the subsequent BS.1770-4 pass handles the final loudness target.
+        if cfg.normalize_output:
+            stem_input_energy = sum(
+                float(np.sum(s ** 2)) for s in all_stems.values()
+            )
+            stem_output_energy = sum(
+                float(np.sum(ch ** 2)) for ch in channels.values()
+            )
+            if stem_output_energy > 1e-20:
+                scale = np.sqrt(stem_input_energy / stem_output_energy)
+                channels = {k: v * scale for k, v in channels.items()}
+
+        # Inject passthrough channels at their original level (not scaled above)
         for ch_name, ch_audio in passthrough_resampled.items():
             if ch_name in channels:
                 n = min(len(ch_audio), n_samples)
                 channels[ch_name][:n] += ch_audio[:n]
-
-        # Normalize energy
-        if cfg.normalize_output:
-            total_input_energy = sum(
-                float(np.sum(s ** 2)) for s in all_stems.values()
-            ) + sum(
-                float(np.sum(v ** 2)) for v in passthrough.values()
-            )
-            total_output_energy = sum(
-                float(np.sum(ch ** 2)) for ch in channels.values()
-            )
-            if total_output_energy > 1e-20:
-                scale = np.sqrt(total_input_energy / total_output_energy)
-                channels = {k: v * scale for k, v in channels.items()}
 
         # Loudness normalization — BS.1770-4, Dolby DEE compliance
         ln_measured_lkfs: float | None = None
