@@ -93,6 +93,36 @@ def diffuse_send(
     return signal * (1.0 - blend) + delayed * blend
 
 
+def preview_slice(
+    audio: np.ndarray,
+    sr: int,
+    duration_s: float = 30.0,
+    start_s: float | None = None,
+) -> tuple[np.ndarray, float, float]:
+    """Slice audio to a preview window.
+
+    Args:
+        audio:      2D array (n_samples, n_channels).
+        sr:         Sample rate.
+        duration_s: Desired preview length in seconds.
+        start_s:    Explicit start time. None = auto-center (middle of track).
+
+    Returns:
+        (sliced_audio, actual_start_s, actual_end_s)
+    """
+    n_total = audio.shape[0]
+    clip_len = min(int(duration_s * sr), n_total)
+
+    if start_s is None:
+        center = n_total // 2
+        start = max(0, center - clip_len // 2)
+    else:
+        start = max(0, min(int(start_s * sr), n_total - clip_len))
+
+    end = start + clip_len
+    return audio[start:end], start / sr, end / sr
+
+
 def normalize_energy(
     channels: dict[str, np.ndarray],
     original_left: np.ndarray,

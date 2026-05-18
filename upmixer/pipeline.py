@@ -6,14 +6,13 @@ from typing import Callable
 import numpy as np
 from scipy.signal import resample_poly
 
-from upmixer.analysis.coherence import CoherenceEstimator, CoherenceState
+from upmixer.analysis.coherence import CoherenceEstimator
 from upmixer.analysis.stft import StreamingSTFT
 from upmixer.config import UpmixConfig
 from upmixer.decomposition.direct_ambient import SoftMatrixDecomposer
 from upmixer.formats import (
     FORMAT_MAP,
     INPUT_FORMAT_MAP,
-    InputFormat,
     can_upmix,
     detect_input_format,
 )
@@ -22,7 +21,7 @@ from upmixer.io.reader import AudioReader
 from upmixer.io.writer import AudioWriter
 from upmixer.result import UpmixResult
 from upmixer.routing.channel_router import ChannelRouter
-from upmixer.utils import normalize_energy, soft_limit
+from upmixer.utils import normalize_energy, preview_slice, soft_limit
 
 _log = logging.getLogger("upmixer")
 
@@ -223,6 +222,16 @@ class UpmixPipeline:
         _log.info("  Duration:      %.2fs (%d samples)", n_samples / sr, n_samples)
         _log.info("  Output format: %s (%dch)", output_fmt.name, output_fmt.n_channels)
 
+        if cfg.preview:
+            audio, t0_preview, t1_preview = preview_slice(
+                audio, sr, cfg.preview_duration_s, cfg.preview_start_s
+            )
+            n_samples = audio.shape[0]
+            _log.info(
+                "  Preview:       %.2fs–%.2fs (%.2fs window)",
+                t0_preview, t1_preview, n_samples / sr,
+            )
+
         _progress(f"  Format: {input_fmt.name} → {output_fmt.name}", 0.1)
 
         if input_fmt.n_channels <= 2:
@@ -254,9 +263,14 @@ class UpmixPipeline:
         _progress("  Processing complete.", 0.9)
 
         out_sr = cfg.output_sample_rate if cfg.output_sample_rate else sr
-        if cfg.output_sample_rate and cfg.output_sample_rate != sr:
-            channels = self._resample_channels(channels, sr, cfg.output_sample_rate)
-            _log.info("  Resampled: %d Hz → %d Hz", sr, cfg.output_sample_rate)
+        # Dolby Atmos Music Delivery Playbook: ADM-BWF delivery requires 48 kHz.
+        # Override silently when the user has not set an explicit output rate.
+        if cfg.output_type == "adm-bwf" and cfg.output_sample_rate is None and out_sr != 48000:
+            out_sr = 48000
+            _log.info("  ADM-BWF: output forced to 48 kHz (Dolby spec)")
+        if out_sr != sr:
+            channels = self._resample_channels(channels, sr, out_sr)
+            _log.info("  Resampled: %d Hz → %d Hz", sr, out_sr)
 
         if cfg.output_type == "adm-bwf":
             writer = AdmBwfWriter(output_path, out_sr, cfg)

@@ -83,11 +83,16 @@ class UpmixConfig:
     content_mix_strength: float = 1.0    # [0=neutral, 1=full content-aware]
     content_hf_analysis_hz: float = 4000.0  # lower edge of HF band for air detection
 
-    # Loudness normalization (ITU-R BS.1770-4 / Dolby DEE compliance)
+    # Loudness normalization (ITU-R BS.1770-4 / Dolby Atmos Music Delivery Playbook)
     loudness_normalize: bool = True
-    loudness_target_lkfs: float = -24.0   # Dolby Atmos home / cinema
-    loudness_max_tp: float = -2.0          # Dolby True Peak ceiling
+    loudness_target_lkfs: float = -18.0   # Dolby Atmos Music target (June 2024 playbook)
+    loudness_max_tp: float = -1.0          # Dolby True Peak ceiling (playbook §loudness)
     loudness_max_gain_db: float = 30.0     # cap upward gain (prevent noise amplification)
+
+    # Preview mode — process only a short window instead of the full file
+    preview: bool = False
+    preview_duration_s: float = 30.0       # window length in seconds
+    preview_start_s: float | None = None   # None = auto-center (middle of track)
 
     def resolve_fft_params(self, actual_sample_rate: int) -> tuple[int, int]:
         """Returns (fft_size, hop_size) after applying sample rate adaptation."""

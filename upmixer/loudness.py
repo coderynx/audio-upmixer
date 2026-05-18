@@ -1,8 +1,8 @@
 """ITU-R BS.1770-4 integrated loudness measurement and normalization.
 
-Targets Dolby Encoding Engine (DEE) compliance:
-  Integrated loudness : -24.0 LKFS  (Dolby Atmos home / cinema)
-  True Peak           :  -2.0 dBTP  (Dolby ceiling)
+Targets Dolby Atmos Music Delivery Playbook (June 2024):
+  Integrated loudness : -18.0 LKFS  (Dolby Atmos Music target)
+  True Peak           :  -1.0 dBTP  (Dolby ceiling)
 
 Channel weights follow BS.1770-4 §2.2 Table 1:
   L / R / C   : 1.0
@@ -206,8 +206,8 @@ def normalize_loudness(
     channels: dict[str, np.ndarray],
     sample_rate: int,
     fmt: OutputFormat,
-    target_lkfs: float = -24.0,
-    max_tp_dbtp: float = -2.0,
+    target_lkfs: float = -18.0,
+    max_tp_dbtp: float = -1.0,
     max_gain_db: float = 30.0,
 ) -> tuple[dict[str, np.ndarray], dict]:
     """Apply a single linear gain for BS.1770-4 loudness + True Peak compliance.

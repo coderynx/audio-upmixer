@@ -222,13 +222,14 @@ def _axml_chunk(
     a('          <dialogue mixedContentKind="0">2</dialogue>')
     a('        </audioContent>')
 
-    # audioObject — no interact attribute (§2.7)
+    # audioObject — no interact attribute (§2.7); binaural render mode required (§2.7)
     a('        <audioObject audioObjectID="AO_1001"')
     a(f'                     audioObjectName="{fmt.name} Bed"')
     a(f'                     start="{zero}" duration="{dur}">')
     a(f'          <audioPackFormatIDRef>{pack_id}</audioPackFormatIDRef>')
     for i in range(n):
         a(f'          <audioTrackUIDRef>ATU_{i + 1:08d}</audioTrackUIDRef>')
+    a('          <binaural><binauralRenderMode>Off</binauralRenderMode></binaural>')
     a('        </audioObject>')
 
     # audioPackFormat — custom ID (§3.1)
@@ -444,6 +445,7 @@ def _axml_stem_beds_chunk(
         a(f'          <audioPackFormatIDRef>{pack_id}</audioPackFormatIDRef>')
         for label, track_idx in channels:
             a(f'          <audioTrackUIDRef>ATU_{track_idx + 1:08d}</audioTrackUIDRef>')
+        a('          <binaural><binauralRenderMode>Off</binauralRenderMode></binaural>')
         a('        </audioObject>')
 
     # audioPackFormats (DirectSpeakers)

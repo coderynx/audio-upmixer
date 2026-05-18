@@ -60,7 +60,7 @@ upmixer input.wav output.wav --mode stem -v
 | `--output-sample-rate` | same as input | Resample output (e.g. `48000`) |
 | `--output-subtype` | `PCM_24` | Bit depth: `PCM_16`, `PCM_24`, `PCM_32` |
 | `--no-loudness-normalize` | — | Disable BS.1770-4 loudness normalization |
-| `--loudness-target` | `-24.0` | Target integrated loudness in LKFS |
+| `--loudness-target` | `-18.0` | Target integrated loudness in LKFS (Dolby Atmos Music) |
 | `--stem-model` | `htdemucs_ft.yaml` | Separation model (4-stem Demucs by default) |
 | `--stem-model-dir` | `~/.cache/upmixer-models` | Model cache directory |
 | `--center-gain` | `0.85` | Center channel gain |
@@ -78,7 +78,7 @@ upmixer input.wav output.wav --mode stem -v
 ```python
 from upmixer import UpmixConfig, UpmixPipeline
 
-config = UpmixConfig(output_format="7.1.4", loudness_target_lkfs=-24.0)
+config = UpmixConfig(output_format="7.1.4", loudness_target_lkfs=-18.0)
 pipeline = UpmixPipeline(config)
 result = pipeline.process_file("stereo.wav", "atmos.wav")
 

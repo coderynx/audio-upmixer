@@ -4,7 +4,7 @@ import numpy as np
 import soundfile as sf
 
 from upmixer.config import UpmixConfig
-from upmixer.formats import FORMAT_MAP, ChannelLabel
+from upmixer.formats import FORMAT_MAP
 
 
 class AudioWriter:

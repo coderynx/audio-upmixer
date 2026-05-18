@@ -51,7 +51,7 @@ from upmixer.result import UpmixResult
 from upmixer.separation.separator import StemSeparator, DEFAULT_MODEL
 from upmixer.separation.stem_analyzer import analyze_stems
 from upmixer.separation.stem_router import StemRouter
-from upmixer.utils import soft_limit
+from upmixer.utils import preview_slice, soft_limit
 
 _log = logging.getLogger("upmixer")
 
@@ -151,8 +151,24 @@ class StemUpmixPipeline:
         _log.info("Input:  %s", input_path)
         _log.info("  Format:        %s (%dch)", input_fmt.name, input_fmt.n_channels)
         _log.info("  Sample rate:   %d Hz", sr)
+        _log.info("  Duration:      %.2fs", audio_full.shape[0] / sr)
         _log.info("  Output format: %s (%dch)", output_fmt.name, output_fmt.n_channels)
         _log.info("  Model:         %s", self._model)
+
+        # Preview: slice audio_full to the requested window before any processing.
+        # Stereo mode normally passes the original file path to the separator;
+        # after slicing we must pass a numpy array so the temp-file path below
+        # applies — forcing a write of the sliced audio for the separator.
+        _preview_stereo_forced_array: bool = False
+        if cfg.preview:
+            audio_full, t0_preview, t1_preview = preview_slice(
+                audio_full, sr, cfg.preview_duration_s, cfg.preview_start_s
+            )
+            _log.info(
+                "  Preview:       %.2fs–%.2fs (%.2fs window)",
+                t0_preview, t1_preview, audio_full.shape[0] / sr,
+            )
+            _preview_stereo_forced_array = True  # force numpy path even for stereo
 
         # Separate at the target output rate (or input rate if none specified).
         # audio-separator resamples its output internally, so stems always arrive
@@ -172,7 +188,18 @@ class StemUpmixPipeline:
         if input_fmt.n_channels <= 2:
             # Stereo / mono: single zone, untagged stems → DEFAULT_ROUTING
             # (full 3D spread including SL/SR/BL/BR/height/LFE).
-            sep_zones: dict[str, str | np.ndarray] = {"front": input_path}
+            # In preview mode use numpy array (forces temp-file write below)
+            # so the separator sees only the sliced window.
+            if _preview_stereo_forced_array:
+                n_ch = audio_full.shape[1] if audio_full.ndim > 1 else 1
+                front_arr = (
+                    np.column_stack([audio_full[:, 0], audio_full[:, 0]])
+                    if n_ch == 1
+                    else audio_full[:, :2]
+                )
+                sep_zones: dict[str, str | np.ndarray] = {"front": front_arr}
+            else:
+                sep_zones = {"front": input_path}
             passthrough: dict[str, np.ndarray] = {}
             stereo_mode = True
             _log.info("  Mode: stereo — single zone, full-3D routing")
@@ -247,6 +274,10 @@ class StemUpmixPipeline:
 
         router = StemRouter(cfg, output_fmt, sep_sr, self._custom_routing)
         out_sr = cfg.output_sample_rate if cfg.output_sample_rate else sep_sr
+        # Dolby Atmos Music Delivery Playbook: ADM-BWF delivery requires 48 kHz.
+        if cfg.output_type == "adm-bwf" and cfg.output_sample_rate is None and out_sr != 48000:
+            out_sr = 48000
+            _log.info("  ADM-BWF: output forced to 48 kHz (Dolby spec)")
 
         # Content-aware analysis: per-stem features drive spatial gain scaling
         _progress("  Analyzing stem content...", 0.75)
@@ -325,6 +356,15 @@ class StemUpmixPipeline:
 
         for name in channels:
             channels[name] = soft_limit(channels[name], cfg.peak_limit_threshold)
+
+        if out_sr != sep_sr:
+            g = math.gcd(out_sr, sep_sr)
+            up, down = out_sr // g, sep_sr // g
+            channels = {
+                name: resample_poly(ch, up, down).astype(np.float64)
+                for name, ch in channels.items()
+            }
+            _log.info("  Resampled: %d Hz → %d Hz", sep_sr, out_sr)
 
         if cfg.output_type == "adm-bwf":
             writer = AdmBwfWriter(output_path, out_sr, cfg)

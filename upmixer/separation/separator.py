@@ -12,8 +12,8 @@ import soundfile as sf
 _log = logging.getLogger("upmixer")
 
 
-# Default model — htdemucs_ft: 4-stem (drums/bass/vocals/other), good quality/speed
-DEFAULT_MODEL = "htdemucs_ft.yaml"
+# Default model — BS-Roformer-SW: high-quality vocal/instrument separation
+DEFAULT_MODEL = "BS-Roformer-SW.ckpt"
 
 # All stem names audio-separator may produce, mapped to canonical routing names.
 # Keys = substring that appears in the (StemName) tag in output filenames.
