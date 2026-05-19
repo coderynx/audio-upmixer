@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from upmixer.separation.stem_cache import StemCache, _cache_key, _stem_filename
+from upmixer.separation.stem_cache import StemCache, _cache_key, _preview_tag, _stem_filename
 
 
 # ---------------------------------------------------------------------------
@@ -265,3 +265,67 @@ class TestStemCacheMiss:
         os.utime(wav, (new_mtime, new_mtime))
 
         assert cache.load(wav, "model", 44100) is None
+
+
+# ---------------------------------------------------------------------------
+# StemCache preview isolation
+# ---------------------------------------------------------------------------
+
+class TestStemCachePreview:
+    def test_preview_key_differs_from_full(self, tmp_path):
+        wav = str(tmp_path / "x.wav")
+        _write_dummy_wav(wav)
+        full_key    = _cache_key(wav, "model", 44100, is_preview=False)
+        preview_key = _cache_key(wav, "model", 44100, is_preview=True, preview_duration=30.0)
+        assert full_key != preview_key
+
+    def test_different_preview_durations_differ(self, tmp_path):
+        wav = str(tmp_path / "x.wav")
+        _write_dummy_wav(wav)
+        k30 = _cache_key(wav, "model", 44100, is_preview=True, preview_duration=30.0)
+        k60 = _cache_key(wav, "model", 44100, is_preview=True, preview_duration=60.0)
+        assert k30 != k60
+
+    def test_preview_tag_full(self):
+        assert _preview_tag(False, None, None) == "full"
+
+    def test_preview_tag_encodes_duration(self):
+        tag = _preview_tag(True, 30.0, None)
+        assert tag.startswith("preview:")
+        assert "30.000" in tag
+
+    def test_preview_tag_encodes_start(self):
+        tag = _preview_tag(True, 30.0, 60.0)
+        assert "60.000" in tag
+
+    def test_save_preview_skips_write(self, tmp_path):
+        pytest.importorskip("soundfile")
+        wav = str(tmp_path / "src.wav")
+        _write_dummy_wav(wav)
+        cache = StemCache(str(tmp_path / "cache"))
+        stems = _make_stems()
+        cache.save(wav, "model", 44100, stems, 44100, is_preview=True)
+        # Cache dir should be empty — no entry written
+        entries = list((tmp_path / "cache").iterdir())
+        assert entries == []
+
+    def test_preview_save_not_visible_to_full_load(self, tmp_path):
+        pytest.importorskip("soundfile")
+        wav = str(tmp_path / "src.wav")
+        _write_dummy_wav(wav)
+        cache = StemCache(str(tmp_path / "cache"))
+        stems = _make_stems()
+        # Save preview stems (should be silently skipped)
+        cache.save(wav, "model", 44100, stems, 44100, is_preview=True)
+        # Full-file load → must be a miss
+        assert cache.load(wav, "model", 44100, is_preview=False) is None
+
+    def test_full_save_not_visible_to_preview_load(self, tmp_path):
+        pytest.importorskip("soundfile")
+        wav = str(tmp_path / "src.wav")
+        _write_dummy_wav(wav)
+        cache = StemCache(str(tmp_path / "cache"))
+        stems = _make_stems()
+        cache.save(wav, "model", 44100, stems, 44100, is_preview=False)
+        # Preview load → different key → miss
+        assert cache.load(wav, "model", 44100, is_preview=True, preview_duration=30.0) is None

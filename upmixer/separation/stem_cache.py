@@ -12,11 +12,20 @@ Cache structure on disk::
             Vocals__front.wav      # zone-tagged: '@' replaced by '__'
             ...
 
-Cache key: SHA-256 of ``abs_path|mtime|model|sep_sr`` (first 20 hex chars).
+Cache key: SHA-256 of ``abs_path|mtime|model|sep_sr|preview_tag``
+(first 20 hex chars).
 
-Cache invalidation: the key encodes the input file's absolute path, mtime
-(float, 6 decimal places), stem model name, and target sample rate.  Any
-change to these four factors produces a different key → cold miss.
+``preview_tag`` encodes whether the stems are a preview slice:
+``"full"`` for a complete separation, or ``"preview:{duration:.3f}@{start:.3f}"``
+for a preview window.  This ensures preview stems and full stems never share
+a cache entry — disabling preview after a preview run produces a cold miss
+and triggers a fresh full-file separation.
+
+Preview stems are **never written** to cache (they are short-lived test
+artifacts and would waste disk space for little benefit).
+
+Cache invalidation: any change to abs_path, mtime, model, sep_sr, or preview
+window produces a different key → cold miss.
 
 Stems are stored as float32 PCM_24 WAV (soundfile).  On load, arrays are
 returned as float64 to match the rest of the pipeline.
@@ -37,11 +46,36 @@ _METADATA_FILE = "metadata.json"
 _MTIME_TOLERANCE = 2.0  # seconds — FAT32 / network FS mtime granularity
 
 
-def _cache_key(input_path: str, model: str, sep_sr: int) -> str:
-    """Return a 20-char hex cache key for the given separation parameters."""
+def _preview_tag(
+    is_preview: bool,
+    preview_duration: float | None,
+    preview_start: float | None,
+) -> str:
+    """Return a cache-key component that encodes the preview window (or 'full')."""
+    if not is_preview:
+        return "full"
+    dur = preview_duration if preview_duration is not None else 30.0
+    start = preview_start if preview_start is not None else -1.0  # -1 = auto-center
+    return f"preview:{dur:.3f}@{start:.3f}"
+
+
+def _cache_key(
+    input_path: str,
+    model: str,
+    sep_sr: int,
+    is_preview: bool = False,
+    preview_duration: float | None = None,
+    preview_start: float | None = None,
+) -> str:
+    """Return a 20-char hex cache key for the given separation parameters.
+
+    Preview and full-file runs always produce different keys, so a cached
+    preview never masks a subsequent full-file separation.
+    """
     abs_path = str(Path(input_path).resolve())
     mtime = os.path.getmtime(abs_path)
-    raw = f"{abs_path}|{mtime:.6f}|{model}|{sep_sr}"
+    tag = _preview_tag(is_preview, preview_duration, preview_start)
+    raw = f"{abs_path}|{mtime:.6f}|{model}|{sep_sr}|{tag}"
     return hashlib.sha256(raw.encode()).hexdigest()[:20]
 
 
@@ -72,19 +106,25 @@ class StemCache:
         input_path: str,
         model: str,
         sep_sr: int,
+        is_preview: bool = False,
+        preview_duration: float | None = None,
+        preview_start: float | None = None,
     ) -> tuple[dict[str, np.ndarray], int] | None:
         """Try to load cached stems for the given parameters.
 
         Args:
-            input_path: Original input audio file path.
-            model:      Stem separation model name.
-            sep_sr:     Target separation sample rate in Hz.
+            input_path:       Original input audio file path.
+            model:            Stem separation model name.
+            sep_sr:           Target separation sample rate in Hz.
+            is_preview:       Whether this is a preview (sliced) run.
+            preview_duration: Preview window length in seconds.
+            preview_start:    Preview window start in seconds (None = auto-center).
 
         Returns:
             ``(stems_dict, sample_rate)`` on cache hit, or ``None`` on miss.
             Stems are returned as float64 arrays shaped ``(n_samples, 2)``.
         """
-        key = _cache_key(input_path, model, sep_sr)
+        key = _cache_key(input_path, model, sep_sr, is_preview, preview_duration, preview_start)
         entry_dir = self._root / key
 
         if not entry_dir.exists():
@@ -151,16 +191,29 @@ class StemCache:
         sep_sr: int,
         stems: dict[str, np.ndarray],
         sample_rate: int,
+        is_preview: bool = False,
+        preview_duration: float | None = None,
+        preview_start: float | None = None,
     ) -> None:
         """Write stems to the cache.
 
+        Preview stems (``is_preview=True``) are never cached — they are short
+        test slices that should not be served to subsequent full-file runs.
+
         Args:
-            input_path: Original input audio file path.
-            model:      Stem separation model name.
-            sep_sr:     Target separation sample rate in Hz.
-            stems:      Dict stem_key → ``(n_samples, 2)`` float array.
-            sample_rate: Actual sample rate of the stems (should equal sep_sr).
+            input_path:       Original input audio file path.
+            model:            Stem separation model name.
+            sep_sr:           Target separation sample rate in Hz.
+            stems:            Dict stem_key → ``(n_samples, 2)`` float array.
+            sample_rate:      Actual sample rate of the stems (should equal sep_sr).
+            is_preview:       If ``True``, skip writing (preview stems not cached).
+            preview_duration: Preview window length in seconds.
+            preview_start:    Preview window start in seconds (None = auto-center).
         """
+        if is_preview:
+            _log.debug("  StemCache: preview mode — skipping cache write")
+            return
+
         try:
             import soundfile as sf  # type: ignore[import-untyped]
         except ImportError:
@@ -169,7 +222,7 @@ class StemCache:
 
         abs_path = str(Path(input_path).resolve())
         mtime = os.path.getmtime(abs_path)
-        key = _cache_key(input_path, model, sep_sr)
+        key = _cache_key(input_path, model, sep_sr, is_preview, preview_duration, preview_start)
         entry_dir = self._root / key
         entry_dir.mkdir(parents=True, exist_ok=True)
 

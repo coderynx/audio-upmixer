@@ -193,7 +193,12 @@ class StemUpmixPipeline:
         if cfg.stem_cache_dir:
             from upmixer.separation.stem_cache import StemCache
             _stem_cache = StemCache(cfg.stem_cache_dir)
-            _cache_result = _stem_cache.load(input_path, self._model, sep_sr)
+            _cache_result = _stem_cache.load(
+                input_path, self._model, sep_sr,
+                is_preview=cfg.preview,
+                preview_duration=cfg.preview_duration_s,
+                preview_start=cfg.preview_start_s,
+            )
             if _cache_result is not None:
                 _cache_hit_stems, _ = _cache_result
 
@@ -278,7 +283,12 @@ class StemUpmixPipeline:
 
             # Save to cache for next run
             if _stem_cache is not None and all_stems:
-                _stem_cache.save(input_path, self._model, sep_sr, all_stems, sep_sr)
+                _stem_cache.save(
+                    input_path, self._model, sep_sr, all_stems, sep_sr,
+                    is_preview=cfg.preview,
+                    preview_duration=cfg.preview_duration_s,
+                    preview_start=cfg.preview_start_s,
+                )
 
         if not all_stems:
             raise RuntimeError(
