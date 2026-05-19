@@ -373,7 +373,6 @@ class StemUpmixPipeline:
         writer.write(channels)
 
         if cfg.downmix_output_path:
-            import soundfile as sf
             L, R = itu_downmix_stereo(channels, surround_coeff=cfg.surround_downmix_coeff)
             sf.write(cfg.downmix_output_path, np.column_stack([L, R]), out_sr, subtype=cfg.output_subtype)
             _log.info("  Downmix: %s", cfg.downmix_output_path)
