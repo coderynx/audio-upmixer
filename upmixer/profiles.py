@@ -52,6 +52,11 @@ class DeliveryProfile:
     # Specification v2022.07 §4.3).
     lfe_cutoff_hz: int | None = None
 
+    # Whether BS.1770-4 loudness normalization is mandatory for this profile.
+    # True for all streaming / broadcast profiles; set False for raw/archive
+    # outputs where the user manages loudness downstream.
+    loudness_normalize: bool = True
+
     # Informational — describes the downstream encoding step
     codec_note: str = ""
 

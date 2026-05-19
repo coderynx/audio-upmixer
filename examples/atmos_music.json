@@ -1,0 +1,12 @@
+{
+  "_comment": "Dolby Atmos Music Master Delivery — JSON manifest example",
+
+  "input":   "stereo.flac",
+  "output":  "atmos_music.adm.bwf",
+  "mode":    "stem",
+  "format":  "7.1.4",
+  "profile": "atmos-music",
+
+  "preview":          false,
+  "preview_duration": 30.0
+}

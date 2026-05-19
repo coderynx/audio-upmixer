@@ -23,6 +23,10 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "matplotlib>=3.7",
+    "pyyaml>=6.0",
+]
+manifest = [
+    "pyyaml>=6.0",
 ]
 separation-cpu = [
     "audio-separator[cpu]>=0.24",

@@ -19,9 +19,10 @@ from upmixer.formats import (
 from upmixer.io.adm_writer import AdmBwfWriter
 from upmixer.io.reader import AudioReader
 from upmixer.io.writer import AudioWriter
+from upmixer.mastering import MasteringChain, MasteringResult
 from upmixer.result import UpmixResult
 from upmixer.routing.channel_router import ChannelRouter
-from upmixer.utils import normalize_energy, preview_slice, soft_limit, itu_downmix_stereo
+from upmixer.utils import normalize_energy, preview_slice, itu_downmix_stereo
 
 _log = logging.getLogger("upmixer")
 
@@ -262,8 +263,14 @@ class UpmixPipeline:
 
         _progress("  Processing complete.", 0.9)
 
+        # Mastering phase — shared with stem pipeline via MasteringChain.
+        # Applies BS.1770-4 loudness normalization (if enabled) + soft-limiting.
+        _progress("  Mastering...", 0.93)
+        mastering = MasteringChain(cfg)
+        channels, mastering_result = mastering.process(channels, sr, output_fmt)
+
         out_sr = cfg.output_sample_rate if cfg.output_sample_rate else sr
-        # Dolby Atmos Music Delivery Playbook: ADM-BWF delivery requires 48 kHz.
+        # Dolby Atmos Music Delivery Specification v2022.07: ADM-BWF requires 48 kHz.
         # Override silently when the user has not set an explicit output rate.
         if cfg.output_type == "adm-bwf" and cfg.output_sample_rate is None and out_sr != 48000:
             out_sr = 48000
@@ -274,9 +281,14 @@ class UpmixPipeline:
 
         if cfg.output_type == "adm-bwf":
             writer = AdmBwfWriter(output_path, out_sr, cfg)
+            writer.write(
+                channels,
+                measured_lkfs=mastering_result.measured_lkfs,
+                measured_tp_dbtp=mastering_result.measured_tp_dbtp,
+            )
         else:
             writer = AudioWriter(output_path, out_sr, cfg)
-        writer.write(channels)
+            writer.write(channels)
 
         _progress(f"Output: {output_path}", 1.0)
 
@@ -294,6 +306,9 @@ class UpmixPipeline:
             n_channels_in=input_fmt.n_channels,
             n_channels_out=output_fmt.n_channels,
             mode="realtime",
+            measured_lkfs=mastering_result.measured_lkfs,
+            measured_tp_dbtp=mastering_result.measured_tp_dbtp,
+            applied_gain_db=mastering_result.applied_gain_db,
             processing_time_seconds=time.monotonic() - t0,
         )
 
@@ -379,16 +394,15 @@ class UpmixPipeline:
         original_left: np.ndarray,
         original_right: np.ndarray,
     ) -> dict[str, np.ndarray]:
-        """Time-domain post-processing for stereo-sourced output: delay, normalization, limiting."""
+        """Mixing-phase post-processing for stereo-sourced output: energy normalization.
+
+        Soft-limiting and loudness normalization are handled by the mastering
+        chain after this method returns.
+        """
         cfg = self.config
-        fmt = FORMAT_MAP[cfg.output_format]
-        n_samples = len(original_left)
 
         if cfg.normalize_output:
             channels = normalize_energy(channels, original_left, original_right)
-
-        for name in channels:
-            channels[name] = soft_limit(channels[name], cfg.peak_limit_threshold)
 
         return channels
 
@@ -398,9 +412,10 @@ class UpmixPipeline:
         sr: int,
         original_audio: np.ndarray,
     ) -> dict[str, np.ndarray]:
-        """Post-processing for multichannel-sourced output: normalization and limiting.
+        """Mixing-phase post-processing for multichannel-sourced output: energy normalization.
 
         Delays are already applied inside MultichannelUpmixer.process().
+        Soft-limiting and loudness normalization are handled by the mastering chain.
         """
         cfg = self.config
 
@@ -410,9 +425,6 @@ class UpmixPipeline:
             if output_energy > 1e-20:
                 scale = np.sqrt(input_energy / output_energy)
                 channels = {name: ch * scale for name, ch in channels.items()}
-
-        for name in channels:
-            channels[name] = soft_limit(channels[name], cfg.peak_limit_threshold)
 
         return channels
 

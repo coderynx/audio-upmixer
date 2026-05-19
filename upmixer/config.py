@@ -101,6 +101,52 @@ class UpmixConfig:
     preview_duration_s: float = 30.0       # window length in seconds
     preview_start_s: float | None = None   # None = auto-center (middle of track)
 
+    # ── Mastering: spectral shaping (EQ) ─────────────────────────────────────
+    # Applied before loudness normalization.  None = disabled.
+    # Profiles: "spatial-transparent", "spatial-air", "spatial-warm",
+    #           "spatial-present", "atmos-streaming"
+    mastering_eq_profile: str | None = None   # None = bypass
+    mastering_eq_strength: float = 1.0        # wet/dry blend 0.0–1.0
+
+    # ── Mastering: bus compressor ─────────────────────────────────────────────
+    # Cosmetic glue compressor — NOT a loudness processor.  Applied after EQ,
+    # before loudness normalization.  None = disabled.
+    # Profiles: "transparent", "glue", "warm"
+    # Individual params (float | None) override the profile when not None.
+    mastering_comp_profile: str | None = None
+    mastering_comp_threshold_db: float | None = None   # dBFS
+    mastering_comp_ratio: float | None = None          # ≥ 1.0
+    mastering_comp_attack_ms: float | None = None      # ms
+    mastering_comp_release_ms: float | None = None     # ms
+    mastering_comp_knee_db: float | None = None        # dB
+    mastering_comp_makeup_db: float | None = None      # dB
+
+    # ── Mastering: bass control ───────────────────────────────────────────────
+    # Multichannel low-end shaper: sub/mid-bass EQ, bass mono-maker, harmonic
+    # exciter, LFE trim.  None = use profile default.
+    # Profiles: "boost", "cut", "mono", "enhance"
+    mastering_bass_profile: str | None = None
+    mastering_bass_sub_gain_db: float | None = None     # dB, sub-bass (<80 Hz)
+    mastering_bass_mid_gain_db: float | None = None     # dB, mid-bass (80–200 Hz)
+    mastering_bass_mono_cutoff_hz: float | None = None  # Hz, bass mono-maker cutoff
+    mastering_bass_excite: bool = False                 # harmonic exciter on/off
+    mastering_bass_lfe_gain_db: float | None = None     # dB, LFE channel trim
+
+    # ── Mastering: EQ from reference (Match EQ) ───────────────────────────────
+    # When set, overrides mastering_eq_profile: a per-channel EQ is derived
+    # from the reference audio file (path) via EQMatcher and applied instead.
+    mastering_eq_reference: str | None = None    # path to reference audio file
+
+    # ── Mixing: stem rebalance (stem pipeline only) ───────────────────────────
+    # Per-stem gain adjustments (dB) applied before spatial routing.
+    # None = disabled.  e.g. {"Vocals": 2.0, "Drums": -1.0}
+    stem_rebalance: dict | None = None
+
+    # ── Mixing: per-stem EQ (stem pipeline only) ──────────────────────────────
+    # Maps stem name → STEM_EQ_PROFILES key.  None = disabled.
+    # e.g. {"Vocals": "vocal-presence", "Bass": "bass-warmth"}
+    stem_eq_profiles: dict | None = None
+
     def resolve_fft_params(self, actual_sample_rate: int) -> tuple[int, int]:
         """Returns (fft_size, hop_size) after applying sample rate adaptation."""
         if self.auto_fft_size:

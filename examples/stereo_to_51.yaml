@@ -1,0 +1,37 @@
+# Stereo → 5.1 quick upmix
+#
+# Fast realtime mode (coherence-based STFT). Works on any stereo input.
+# No stem separation dependency required.
+#
+# Usage:
+#   upmixer --manifest stereo_to_51.yaml
+# Or override input/output from the CLI:
+#   upmixer --manifest stereo_to_51.yaml my_track.flac my_output.wav
+
+input:  stereo.wav
+output: surround_51.wav
+
+format: 5.1
+mode:   realtime
+
+# ── Gain tuning ────────────────────────────────────────────────────────────────
+center_gain:   0.85   # center channel (lead vocals / dialog)
+surround_gain: 0.60   # side surrounds
+lfe_gain:      0.50   # LFE sub channel
+lfe_cutoff:    120    # LFE low-pass cutoff in Hz
+
+# ── Mastering ──────────────────────────────────────────────────────────────────
+mastering:
+  # EQ shaping (optional — remove eq_profile to bypass)
+  # spatial-warm adds body to typical streaming-mastered stereo sources
+  eq_profile: spatial-warm
+  eq_strength: 0.7
+
+  # Bus compression — none by default for realtime mode (preserve dynamics)
+  # Uncomment to add light glue:
+  # comp_profile: transparent
+
+  # Loudness normalization
+  loudness_normalize: true
+  loudness_target: -18.0
+  loudness_max_tp: -1.0

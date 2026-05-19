@@ -1,0 +1,63 @@
+# Stem-separation upmix → 7.1.4 WAV
+#
+# Best quality spatial upmix for studio / mastering use.
+# Requires: pip install "upmixer[separation-cpu]"
+#
+# Usage:
+#   upmixer --manifest stem_714.yaml
+
+input:  stereo.flac
+output: stem_714.wav
+
+mode:   stem
+format: 7.1.4
+
+# ── Stem separation model ──────────────────────────────────────────────────────
+# Default htdemucs_ft.yaml is a good 4-stem model (vocals/drums/bass/other).
+# Uncomment to use a higher-quality 6-stem or RoFormer model.
+# stem_model: htdemucs_6s.yaml
+# stem_model: BS-Roformer-Viperx-1297.ckpt
+
+# ── Mixing (stem mode only) ───────────────────────────────────────────────────
+# Applied after stem separation, before spatial routing.
+# Both sections are fully optional — remove to use default content-aware routing.
+mixing:
+  # Stem rebalance: bring vocals forward, tighten bass
+  # stem_rebalance:
+  #   Vocals: +1.0
+  #   Bass:   +0.5
+  #   Drums:  -0.5
+
+  # Per-stem EQ
+  # stem_eq:
+  #   Vocals: vocal-presence
+  #   Bass:   bass-warmth
+  #   Drums:  drums-punch
+
+# ── Mastering ──────────────────────────────────────────────────────────────────
+mastering:
+  # EQ shaping (optional)
+  eq_profile: spatial-present   # adds presence and definition to instruments
+  eq_strength: 0.8              # slightly reduced for a subtler effect
+
+  # Bus compression / glue (optional)
+  comp_profile: transparent     # very gentle — preserves studio dynamics
+  # comp_threshold: -22.0
+  # comp_ratio:     1.5
+
+  # Bass control (optional)
+  # bass_profile: enhance
+  # bass_lfe_gain: 1.0
+
+  # EQ from reference track (optional, overrides eq_profile)
+  # eq_reference: reference_714.wav
+
+  # Loudness normalization
+  loudness_normalize: true
+  loudness_target: -18.0
+  loudness_max_tp: -1.0
+
+# ── Quick preview ──────────────────────────────────────────────────────────────
+# Uncomment to test on a 30 s excerpt before committing to a full run.
+# preview: true
+# preview_duration: 30.0

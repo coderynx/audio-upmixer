@@ -125,7 +125,12 @@ def test_downmix_compatibility(stereo_mix, sample_rate):
 
 
 def test_energy_conservation(stereo_mix, sample_rate):
-    """Total output energy should approximately match input energy."""
+    """Total output energy should approximately match input energy.
+
+    Loudness normalization is disabled here because it applies a global gain
+    to hit a LKFS target, which deliberately changes the output energy level.
+    This test verifies the mixing-phase energy budget only.
+    """
     left, right = stereo_mix
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -133,7 +138,7 @@ def test_energy_conservation(stereo_mix, sample_rate):
         output_path = str(Path(tmpdir) / "output.wav")
         _create_test_wav(input_path, left, right, sample_rate)
 
-        config = UpmixConfig(output_format="5.1", auto_fft_size=False)
+        config = UpmixConfig(output_format="5.1", auto_fft_size=False, loudness_normalize=False)
         pipeline = UpmixPipeline(config)
         pipeline.process_file(input_path, output_path)
 

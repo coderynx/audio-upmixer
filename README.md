@@ -10,7 +10,11 @@ Supported output formats: 5.1, 7.1, 5.1.2, 5.1.4, 7.1.2, 7.1.4.
 
 ## Installation
 
-The stem separation mode requires an additional dependency. Install the CPU variant (works everywhere) or the GPU variant if you have CUDA:
+```bash
+pip install upmixer
+```
+
+Stem separation mode requires an additional dependency. Install the CPU variant (works everywhere) or the GPU variant if you have CUDA:
 
 ```bash
 # CPU (slower, works everywhere)
@@ -20,11 +24,20 @@ pip install "upmixer[separation-cpu]"
 pip install "upmixer[separation-gpu]"
 ```
 
+YAML manifest support requires PyYAML:
+
+```bash
+pip install "upmixer[manifest]"
+# or: pip install pyyaml
+```
+
 Python 3.11 or later is required.
 
 ---
 
 ## CLI usage
+
+### Classic mode
 
 ```bash
 # Stereo → 5.1 (realtime mode, fast)
@@ -35,6 +48,9 @@ upmixer input.wav output.wav --format 7.1.4 --mode stem
 
 # Write ADM-BWF for import into Logic Pro / DaVinci Resolve / Pro Tools
 upmixer input.wav output.wav --format 7.1.4 --output-type adm-bwf
+
+# Dolby Atmos Music streaming delivery (profile sets loudness, container, sample rate)
+upmixer input.flac output.adm.bwf --format 7.1.4 --profile atmos-music
 
 # Override auto-detected input format (8ch is ambiguous: 7.1 or 5.1.2)
 upmixer surround.wav output.wav --input-format 5.1.2 --format 7.1.4
@@ -49,27 +65,103 @@ upmixer input.wav output.wav -q
 upmixer input.wav output.wav --mode stem -v
 ```
 
-### Key options
+### Manifest-driven mode
+
+All parameters can be defined in a YAML or JSON manifest file. This is the recommended approach for complex or reproducible jobs:
+
+```bash
+# Run a job from a manifest
+upmixer --manifest examples/atmos_music.yaml
+
+# Manifest provides defaults; CLI flags override them
+upmixer --manifest examples/atmos_music.yaml input_override.flac output_override.adm.bwf
+
+# List all valid manifest keys and their types
+upmixer --manifest-keys
+```
+
+See the [`examples/`](examples/) directory for ready-to-use manifests.
+
+#### Manifest format (YAML)
+
+```yaml
+# examples/atmos_music.yaml
+input:   stereo.flac
+output:  atmos_music.adm.bwf
+mode:    stem
+format:  7.1.4
+profile: atmos-music
+
+# Override individual profile values
+loudness_target:  -18.0
+preview:          false
+```
+
+#### Manifest format (JSON)
+
+```json
+{
+  "input":   "stereo.flac",
+  "output":  "atmos_music.adm.bwf",
+  "mode":    "stem",
+  "format":  "7.1.4",
+  "profile": "atmos-music"
+}
+```
+
+#### Parameter priority order
+
+```
+CLI flags  >  manifest values  >  profile defaults  >  UpmixConfig defaults
+```
+
+CLI flags always win. Manifest values override profile defaults. Profile defaults override the built-in UpmixConfig defaults.
+
+### Key CLI options
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--manifest` / `-m` | — | YAML or JSON manifest file |
+| `--manifest-keys` | — | Print all valid manifest keys and exit |
 | `--format` | `5.1` | Output channel layout |
 | `--mode` | `realtime` | `realtime` or `stem` |
+| `--profile` | — | Delivery target profile (see below) |
+| `--profile-info` | — | Print full spec for every profile and exit |
 | `--input-format` | auto | Force input layout (required for ambiguous channel counts) |
 | `--output-type` | `wav` | `wav` or `adm-bwf` |
 | `--output-sample-rate` | same as input | Resample output (e.g. `48000`) |
 | `--output-subtype` | `PCM_24` | Bit depth: `PCM_16`, `PCM_24`, `PCM_32` |
 | `--no-loudness-normalize` | — | Disable BS.1770-4 loudness normalization |
-| `--loudness-target` | `-18.0` | Target integrated loudness in LKFS (Dolby Atmos Music) |
-| `--stem-model` | `htdemucs_ft.yaml` | Separation model (4-stem Demucs by default) |
+| `--loudness-target` | `-18.0` | Target integrated loudness in LKFS |
+| `--stem-model` | `htdemucs_ft.yaml` | Separation model |
 | `--stem-model-dir` | `~/.cache/upmixer-models` | Model cache directory |
 | `--center-gain` | `0.85` | Center channel gain |
 | `--surround-gain` | `0.60` | Side surround gain |
 | `--height-gain` | `0.55` | Height channel gain |
 | `--lfe-gain` | `0.50` | LFE gain |
+| `--lfe-cutoff` | `120` | LFE low-pass cutoff in Hz |
+| `--preview` | — | Process a 30 s excerpt instead of the full file |
+| `--preview-duration` | `30.0` | Preview window length in seconds |
+| `--preview-start` | auto-center | Preview start time in seconds |
 | `-q` / `--quiet` | — | Suppress all output except errors |
 | `-v` / `--verbose` | — | Debug logging |
 | `--json` | — | Print `UpmixResult` as JSON to stdout |
+
+### Delivery profiles
+
+Profiles bundle loudness, sample rate, bit depth, and container requirements for a specific distribution platform. Use `--profile-info` to see the full spec for each profile.
+
+| Profile | Loudness | True Peak | Sample rate | Container | Use case |
+|---------|----------|-----------|-------------|-----------|----------|
+| `atmos-music` | −18 LKFS | −1 dBTP | 48 kHz | ADM-BWF | Dolby Atmos Music (streaming) |
+| `atmos-bluray` | −27 LKFS | −2 dBTP | 48 kHz | WAV | Dolby Atmos Blu-ray (TrueHD) |
+
+Individual CLI flags always override profile values:
+
+```bash
+# Atmos Music profile but louder (some artists prefer -16)
+upmixer input.flac out.adm.bwf --format 7.1.4 --profile atmos-music --loudness-target -16.0
+```
 
 ---
 
@@ -107,20 +199,53 @@ def on_progress(message: str, fraction: float) -> None:
 result = pipeline.process_file("input.wav", "output.wav", progress_callback=on_progress)
 ```
 
+Manifest-driven API:
+
+```python
+from upmixer.config import UpmixConfig
+from upmixer.manifest import load_manifest, apply_manifest
+from upmixer.pipeline import UpmixPipeline
+
+config = UpmixConfig()
+manifest = load_manifest("job.yaml")
+job = apply_manifest(config, manifest)   # returns job-level params (input/output/mode/...)
+
+pipeline = UpmixPipeline(config)
+result = pipeline.process_file(job["input"], job["output"])
+```
+
 `UpmixResult` fields:
 
 ```python
-result.input_format          # e.g. "Stereo"
-result.output_format         # e.g. "7.1.4 Atmos"
-result.duration_seconds      # audio duration
-result.stems                 # list of stem names used (stem mode only)
-result.measured_lkfs         # integrated loudness before normalization
-result.applied_gain_db       # gain applied for loudness compliance
+result.input_format             # e.g. "Stereo"
+result.output_format            # e.g. "7.1.4 Atmos"
+result.duration_seconds         # audio duration
+result.stems                    # list of stem names used (stem mode only)
+result.measured_lkfs            # integrated loudness before normalization
+result.measured_tp_dbtp         # True Peak after loudness gain
+result.applied_gain_db          # total gain applied for loudness compliance
+result.tp_limited               # True if TP ceiling reduced the gain
 result.processing_time_seconds
-result.to_json()             # serialize to JSON string
+result.to_json()                # serialize to JSON string
 ```
 
-Logging follows the standard Python `logging` module under the `upmixer` logger name. Nothing is printed to stdout or stderr unless you configure a handler. The `--json` and `--quiet` CLI flags only affect the CLI entry point.
+`MasteringResult` (returned by `MasteringChain.process()`):
+
+```python
+from upmixer.mastering import MasteringChain, MasteringResult
+from upmixer.config import UpmixConfig
+from upmixer.formats import FORMAT_MAP
+
+chain = MasteringChain(UpmixConfig(loudness_normalize=True))
+channels, mastering_result = chain.process(channels_dict, sample_rate=48000, output_fmt=FORMAT_MAP["7.1.4"])
+
+mastering_result.measured_lkfs      # float | None
+mastering_result.measured_tp_dbtp   # float | None
+mastering_result.applied_gain_db    # float | None
+mastering_result.tp_limited         # bool
+```
+
+Logging follows the standard Python `logging` module under the `upmixer` logger name. Nothing is printed to stdout or stderr unless you configure a handler.
 
 ---
 
@@ -145,7 +270,17 @@ The input is separated into instrument stems using [python-audio-separator](http
 
 For multichannel inputs (5.1, 7.1, etc.), each stereo zone (front, surround, back, height) is separated independently. Stems are tagged with their zone and routed to preserve spatial intent of the original mix.
 
-Loudness is normalized to ITU-R BS.1770-4 with True Peak limiting before writing the output.
+### Processing pipeline
+
+The pipeline is split into two stages:
+
+**Mixing phase** — spatial routing and energy normalization. Handled by `UpmixPipeline` (realtime) or `StemUpmixPipeline` (stem). Produces a multichannel bed.
+
+**Mastering phase** — loudness compliance and peak control. Handled by `MasteringChain` and shared by both pipelines:
+
+1. **BS.1770-4 integrated loudness normalization** — scalar linear gain to hit the target LKFS. No dynamic processing, no clipping.
+2. **True Peak ceiling** — if the post-normalization True Peak exceeds `loudness_max_tp` dBTP, a second linear gain reduction is applied.
+3. **Tanh soft-limiter** — always applied last to catch any transient peaks that survived the True Peak check.
 
 ---
 
@@ -160,7 +295,7 @@ Loudness is normalized to ITU-R BS.1770-4 with True Peak limiting before writing
 | `7.1.2` | FL FR C LFE SL SR BL BR TFL TFR | 7.1 + front overhead |
 | `7.1.4` | FL FR C LFE SL SR BL BR TFL TFR TBL TBR | Full Atmos bed |
 
-ADM-BWF output (`--output-type adm-bwf`) embeds ITU-R BS.2076-2 metadata for DAW import. Tested with Logic Pro.
+ADM-BWF output (`--output-type adm-bwf`) embeds ITU-R BS.2076-2 metadata for DAW import, including BWF bext chunk loudness fields populated with BS.1770-4 measurement results (compliant with Dolby Atmos Music Master Delivery Specification v2022.07).
 
 ---
 
@@ -172,6 +307,7 @@ ADM-BWF output (`--output-type adm-bwf`) embeds ITU-R BS.2076-2 metadata for DAW
 - [NumPy](https://numpy.org/) — array processing
 - ITU-R BS.1770-4 — integrated loudness measurement and gating algorithm
 - ITU-R BS.2076-2 — Audio Definition Model (ADM) for broadcast WAV
+- Dolby Atmos Music Master Delivery Specification v2022.07 — loudness, container, and LFE requirements for streaming delivery
 - Dolby Atmos Music mixing practice — spatial routing philosophy for the stem engine
 
 ---

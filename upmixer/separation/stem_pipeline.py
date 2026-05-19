@@ -51,7 +51,8 @@ from upmixer.result import UpmixResult
 from upmixer.separation.separator import StemSeparator, DEFAULT_MODEL
 from upmixer.separation.stem_analyzer import analyze_stems
 from upmixer.separation.stem_router import StemRouter
-from upmixer.utils import preview_slice, soft_limit, itu_downmix_stereo
+from upmixer.mastering import MasteringChain
+from upmixer.utils import preview_slice, itu_downmix_stereo
 
 _log = logging.getLogger("upmixer")
 
@@ -282,6 +283,25 @@ class StemUpmixPipeline:
             else:
                 passthrough_resampled = {k: v.astype(np.float64) for k, v in passthrough.items()}
 
+        # ── Optional: stem rebalance (pre-routing) ───────────────────────────────
+        # Applied after all_stems is fully built and resampled, before routing.
+        # When disabled the existing content-aware routing runs unchanged.
+        if cfg.stem_rebalance:
+            from upmixer.separation.stem_rebalance import StemRebalancer
+            _log.info("  Applying stem rebalance: %s", cfg.stem_rebalance)
+            rebalancer = StemRebalancer(cfg.stem_rebalance, sep_sr)
+            all_stems = rebalancer.process(all_stems)
+            # Recompute n_samples in case any array changed shape (shouldn't happen,
+            # but guards against accidental truncation in custom rebalancers).
+            n_samples = max(len(s) for s in all_stems.values())
+
+        # ── Optional: per-stem EQ (pre-routing) ──────────────────────────────
+        if cfg.stem_eq_profiles:
+            from upmixer.separation.stem_eq import StemEQ
+            _log.info("  Applying per-stem EQ: %s", cfg.stem_eq_profiles)
+            stem_eq = StemEQ(cfg.stem_eq_profiles, sep_sr)
+            all_stems = stem_eq.process(all_stems)
+
         router = StemRouter(cfg, output_fmt, sep_sr, self._custom_routing)
         # out_sr already resolved above (before separator creation)
 
@@ -338,34 +358,12 @@ class StemUpmixPipeline:
                 n = min(len(ch_audio), n_samples)
                 channels[ch_name][:n] += ch_audio[:n]
 
-        # Loudness normalization — BS.1770-4, Dolby DEE compliance
-        ln_measured_lkfs: float | None = None
-        ln_measured_tp: float | None = None
-        ln_gain_db: float | None = None
-
-        if cfg.loudness_normalize:
-            _progress("  Normalizing loudness (BS.1770-4)...", 0.90)
-            from upmixer.loudness import normalize_loudness
-            channels, ln_info = normalize_loudness(
-                channels,
-                sep_sr,
-                output_fmt,
-                target_lkfs=cfg.loudness_target_lkfs,
-                max_tp_dbtp=cfg.loudness_max_tp,
-                max_gain_db=cfg.loudness_max_gain_db,
-            )
-            ln_measured_lkfs = ln_info["measured_lkfs"]
-            ln_measured_tp = ln_info["measured_tp_dbtp"]
-            ln_gain_db = ln_info["applied_gain_db"]
-            _log.info(
-                "  Loudness: %.1f LKFS → %.1f LKFS  gain %+.1f dB  TP %.1f dBTP%s",
-                ln_measured_lkfs, cfg.loudness_target_lkfs, ln_gain_db,
-                ln_measured_tp,
-                "  [TP limited]" if ln_info["tp_limited"] else "",
-            )
-
-        for name in channels:
-            channels[name] = soft_limit(channels[name], cfg.peak_limit_threshold)
+        # Mastering phase — BS.1770-4 loudness normalization + True Peak + soft-limiting.
+        # Separated from the routing/mixing phase above so both pipelines share
+        # identical mastering behaviour via MasteringChain.
+        _progress("  Mastering...", 0.90)
+        mastering = MasteringChain(cfg)
+        channels, mastering_result = mastering.process(channels, sep_sr, output_fmt)
 
         if out_sr != sep_sr:
             g = math.gcd(out_sr, sep_sr)
@@ -380,8 +378,8 @@ class StemUpmixPipeline:
             writer = AdmBwfWriter(output_path, out_sr, cfg)
             writer.write(
                 channels,
-                measured_lkfs=ln_measured_lkfs,
-                measured_tp_dbtp=ln_measured_tp,
+                measured_lkfs=mastering_result.measured_lkfs,
+                measured_tp_dbtp=mastering_result.measured_tp_dbtp,
             )
         else:
             writer = AudioWriter(output_path, out_sr, cfg)
@@ -405,9 +403,9 @@ class StemUpmixPipeline:
             n_channels_in=input_fmt.n_channels,
             n_channels_out=output_fmt.n_channels,
             mode="stem",
-            measured_lkfs=ln_measured_lkfs,
-            measured_tp_dbtp=ln_measured_tp,
-            applied_gain_db=ln_gain_db,
+            measured_lkfs=mastering_result.measured_lkfs,
+            measured_tp_dbtp=mastering_result.measured_tp_dbtp,
+            applied_gain_db=mastering_result.applied_gain_db,
             stems=stem_summary,
             processing_time_seconds=time.monotonic() - t0,
         )
