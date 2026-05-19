@@ -3,16 +3,7 @@
 # Spec: Dolby Atmos Music Master Delivery Specification v2022.07
 # Target: Apple Music, Amazon Music, Tidal
 #
-# The 'atmos-music' profile sets:
-#   loudness_target : -18.0 LKFS  (BS.1770-4 integrated)
-#   loudness_max_tp : -1.0 dBTP
-#   output_sample_rate: 48000 Hz
-#   output_subtype  : PCM_24
-#   output_type     : adm-bwf      (BS.2076-2 ADM metadata)
-#   lfe_cutoff      : 120 Hz
-#   loudness_normalize: true       (mandatory per spec)
-#
-# Replace the input/output paths before running:
+# Usage:
 #   upmixer --manifest atmos_music.yaml
 
 input:  stereo.flac
@@ -49,51 +40,52 @@ mixing:
   #   Bass:   bass-warmth
   #   Other:  other-air
 
+  # Stem cache — save separated stems for faster re-runs during testing
+  # stem_cache_dir: /tmp/upmixer_stems
+
 # ── Mastering ─────────────────────────────────────────────────────────────────
 mastering:
-  # EQ shaping — tonal character of the final mix (optional)
-  # Remove eq_profile or set to null to bypass.
-  # Profiles: spatial-transparent / spatial-air / spatial-warm / spatial-present / atmos-streaming
-  eq_profile: atmos-streaming   # subtle bass warmth + presence + air shelf
-  eq_strength: 1.0              # blend: 0.0 = bypass → 1.0 = full effect
+  # EQ shaping — tonal character of the final mix
+  eq:
+    profile: atmos-streaming   # subtle bass warmth + presence + air shelf
+    strength: 1.0              # blend: 0.0 = bypass → 1.0 = full effect
+    # EQ from reference track (overrides profile when set):
+    # reference: reference_atmos.wav
+    # match_strength: 0.5      # 0.0 = flat, 1.0 = full reference curve
 
-  # Bus compression / glue (optional)
-  # Remove comp_profile or set to null to bypass.
-  # Profiles: transparent (gentle) / glue (SSL-style) / warm (opto-style)
-  comp_profile: glue
-  # Uncomment to override individual compressor parameters:
-  # comp_threshold: -18.0   # dBFS
-  # comp_ratio:     2.0
-  # comp_attack:    20.0    # ms
-  # comp_release:   200.0   # ms
-  # comp_makeup:    0.0     # dB
+  # Bus compression / glue
+  compressor:
+    profile: glue
+    # Uncomment to override individual compressor parameters:
+    # threshold: -18.0   # dBFS
+    # ratio:     2.0
+    # attack:    20.0    # ms
+    # release:   200.0   # ms
+    # makeup:    0.0     # dB
 
-  # Bass control (optional) — multichannel low-end shaping
+  # Bass control — multichannel low-end shaping
   # Profiles: boost / cut / mono / enhance
-  # Remove or set to null to bypass. Individual params override the profile.
-  # bass_profile: enhance
-  # bass_sub_gain:    1.5   # dB, sub-bass (<80 Hz)
-  # bass_mid_gain:    0.5   # dB, mid-bass (80–200 Hz)
-  # bass_mono_cutoff: 80.0  # Hz, sum L/R bass below this to mono
-  # bass_excite: true        # harmonic exciter on sub-bass band
-  # bass_lfe_gain: 1.0       # dB, LFE channel trim
+  # bass:
+  #   profile: enhance
+  #   sub_gain:    1.5   # dB, sub-bass (<80 Hz)
+  #   mid_gain:    0.5   # dB, mid-bass (80–200 Hz)
+  #   mono_cutoff: 80.0  # Hz, sum L/R bass below this to mono
+  #   excite: true       # harmonic exciter on sub-bass band
+  #   lfe_gain: 1.0      # dB, LFE channel trim
 
-  # EQ from reference track (overrides eq_profile when set)
-  # Use a same-format reference for best results (7.1.4 → 7.1.4 reference).
-  # eq_reference: reference_atmos.wav
-  # After analysis, optionally save the generated profile for reuse:
-  # (Use --mastering-eq-reference-save from the CLI)
+  # Loudness normalization — controlled by the profile above
+  # (do not override unless you have a specific reason to deviate from spec)
+  loudness:
+    normalize: true
+    target: -18.0
+    max_tp: -1.0
 
-  # Loudness normalization — controlled by the profile above (do not override
-  # unless you have a specific reason to deviate from the spec).
-  loudness_normalize: true
-  loudness_target: -18.0
-  loudness_max_tp: -1.0
+# ── Processing ────────────────────────────────────────────────────────────────
+# processing:
+#   preview: true        # process only a short excerpt
+#   preview_duration: 30.0
+#   preview_start: 60.0  # start at 60 s (default: auto-center)
 
-# ── Optional overrides ─────────────────────────────────────────────────────────
-# Quick preview: process only 30 s from the middle of the track
-# preview: true
-# preview_duration: 30.0
-
-# Write an ITU-R BS.775-4 stereo fold-down for reference
-# downmix_output: stereo_check.wav
+# ── Output ────────────────────────────────────────────────────────────────────
+# output:
+#   downmix: stereo_check.wav   # write an ITU-R BS.775-4 stereo fold-down

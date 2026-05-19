@@ -12,7 +12,11 @@ from upmixer.manifest import (
     _FIELD_MAP,
     _JOB_KEYS,
     _MASTERING_KEY_MAP,
+    _MASTERING_SUBSECTIONS,
     _MIXING_KEY_MAP,
+    _ROUTING_KEY_MAP,
+    _OUTPUT_KEY_MAP,
+    _PROCESSING_KEY_MAP,
     _expand_nested_sections,
     apply_manifest,
     list_manifest_keys,
@@ -518,3 +522,253 @@ class TestListManifestKeysMixingBass:
             assert flat_key in _FIELD_MAP, (
                 f"_MIXING_KEY_MAP value '{flat_key}' not in _FIELD_MAP"
             )
+
+
+# ---------------------------------------------------------------------------
+# New nested sections: routing:, output:, processing:
+# ---------------------------------------------------------------------------
+
+class TestRoutingSection:
+    def test_routing_section_expands(self):
+        data = {"routing": {"center_gain": 0.9, "surround_gain": 0.5}}
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("center_gain") == 0.9
+        assert expanded.get("surround_gain") == 0.5
+        assert "routing" not in expanded
+
+    def test_routing_lfe_cutoff(self):
+        data = {"routing": {"lfe_cutoff": 80.0}}
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("lfe_cutoff") == 80.0
+
+    def test_routing_section_apply(self):
+        cfg = UpmixConfig()
+        apply_manifest(cfg, {"routing": {"center_gain": 0.7}}, allow_unknown_keys=False)
+        assert cfg.center_gain == pytest.approx(0.7)
+
+    def test_routing_key_map_covers_all_gain_params(self):
+        for k in ["center_gain", "surround_gain", "back_gain", "height_gain", "lfe_gain"]:
+            assert k in _ROUTING_KEY_MAP
+
+
+class TestOutputSection:
+    def test_output_type_expands(self):
+        data = {"output": {"type": "adm-bwf", "subtype": "PCM_24"}}
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("output_type") == "adm-bwf"
+        assert expanded.get("output_subtype") == "PCM_24"
+        assert "output" not in expanded
+
+    def test_output_sample_rate(self):
+        data = {"output": {"sample_rate": 48000}}
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("output_sample_rate") == 48000
+
+    def test_output_section_apply(self):
+        cfg = UpmixConfig()
+        apply_manifest(cfg, {"output": {"subtype": "PCM_16"}}, allow_unknown_keys=False)
+        assert cfg.output_subtype == "PCM_16"
+
+
+class TestProcessingSection:
+    def test_preview_expands(self):
+        data = {"processing": {"preview": True, "preview_duration": 20.0}}
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("preview") is True
+        assert expanded.get("preview_duration") == 20.0
+        assert "processing" not in expanded
+
+    def test_fft_size_expands(self):
+        data = {"processing": {"fft_size": 8192}}
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("fft_size") == 8192
+
+    def test_processing_apply(self):
+        cfg = UpmixConfig()
+        apply_manifest(cfg, {"processing": {"preview": True}}, allow_unknown_keys=False)
+        assert cfg.preview is True
+
+
+# ---------------------------------------------------------------------------
+# Two-level mastering: mastering.eq, mastering.compressor, mastering.bass,
+# mastering.loudness
+# ---------------------------------------------------------------------------
+
+class TestMasteringSubsections:
+    def test_mastering_subsections_dict_has_expected_keys(self):
+        assert "eq" in _MASTERING_SUBSECTIONS
+        assert "compressor" in _MASTERING_SUBSECTIONS
+        assert "bass" in _MASTERING_SUBSECTIONS
+        assert "loudness" in _MASTERING_SUBSECTIONS
+
+    def test_two_level_eq_section(self):
+        data = {
+            "mastering": {
+                "eq": {
+                    "profile": "atmos-streaming",
+                    "strength": 0.8,
+                    "match_strength": 0.4,
+                }
+            }
+        }
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("mastering_eq_profile") == "atmos-streaming"
+        assert expanded.get("mastering_eq_strength") == pytest.approx(0.8)
+        assert expanded.get("mastering_eq_match_strength") == pytest.approx(0.4)
+        assert "mastering" not in expanded
+
+    def test_two_level_compressor_section(self):
+        data = {
+            "mastering": {
+                "compressor": {
+                    "profile": "glue",
+                    "threshold": -18.0,
+                }
+            }
+        }
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("mastering_comp_profile") == "glue"
+        assert expanded.get("mastering_comp_threshold_db") == pytest.approx(-18.0)
+
+    def test_two_level_bass_section(self):
+        data = {
+            "mastering": {
+                "bass": {
+                    "profile": "enhance",
+                    "sub_gain": 1.5,
+                    "excite": True,
+                }
+            }
+        }
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("mastering_bass_profile") == "enhance"
+        assert expanded.get("mastering_bass_sub_gain_db") == pytest.approx(1.5)
+        assert expanded.get("mastering_bass_excite") is True
+
+    def test_two_level_loudness_section(self):
+        data = {
+            "mastering": {
+                "loudness": {
+                    "normalize": True,
+                    "target": -18.0,
+                    "max_tp": -1.0,
+                }
+            }
+        }
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("loudness_normalize") is True
+        assert expanded.get("loudness_target") == pytest.approx(-18.0)
+        assert expanded.get("loudness_max_tp") == pytest.approx(-1.0)
+
+    def test_one_level_and_two_level_mixed(self):
+        """Backward-compat one-level keys alongside two-level sub-section."""
+        data = {
+            "mastering": {
+                "eq_profile": "spatial-air",         # one-level form
+                "compressor": {"profile": "glue"},   # two-level form
+            }
+        }
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("mastering_eq_profile") == "spatial-air"
+        assert expanded.get("mastering_comp_profile") == "glue"
+
+    def test_two_level_apply_manifest(self):
+        cfg = UpmixConfig()
+        apply_manifest(cfg, {
+            "mastering": {
+                "eq": {"profile": "spatial-air", "match_strength": 0.3},
+                "loudness": {"normalize": False},
+            }
+        }, allow_unknown_keys=False)
+        assert cfg.mastering_eq_profile == "spatial-air"
+        assert cfg.mastering_eq_match_strength == pytest.approx(0.3)
+        assert cfg.loudness_normalize is False
+
+
+# ---------------------------------------------------------------------------
+# EQ match strength field
+# ---------------------------------------------------------------------------
+
+class TestEqMatchStrengthField:
+    def test_flat_key_in_field_map(self):
+        assert "mastering_eq_match_strength" in _FIELD_MAP
+
+    def test_flat_key_apply(self):
+        cfg = UpmixConfig()
+        apply_manifest(cfg, {"mastering_eq_match_strength": 0.3})
+        assert cfg.mastering_eq_match_strength == pytest.approx(0.3)
+
+    def test_mastering_key_map_has_eq_match_strength(self):
+        assert "eq_match_strength" in _MASTERING_KEY_MAP
+
+    def test_mastering_section_eq_match_strength(self):
+        data = {"mastering": {"eq_match_strength": 0.25}}
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("mastering_eq_match_strength") == pytest.approx(0.25)
+
+    def test_default_is_0_5(self):
+        cfg = UpmixConfig()
+        assert cfg.mastering_eq_match_strength == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Stem cache dir field
+# ---------------------------------------------------------------------------
+
+class TestStemCacheDirField:
+    def test_flat_key_in_field_map(self):
+        assert "stem_cache_dir" in _FIELD_MAP
+
+    def test_mixing_key_map_has_stem_cache_dir(self):
+        assert "stem_cache_dir" in _MIXING_KEY_MAP
+
+    def test_flat_key_apply(self):
+        cfg = UpmixConfig()
+        apply_manifest(cfg, {"stem_cache_dir": "/tmp/stems"})
+        assert cfg.stem_cache_dir == "/tmp/stems"
+
+    def test_mixing_section_stem_cache_dir(self):
+        data = {"mixing": {"stem_cache_dir": "/tmp/stems"}}
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("stem_cache_dir") == "/tmp/stems"
+
+    def test_default_is_none(self):
+        cfg = UpmixConfig()
+        assert cfg.stem_cache_dir is None
+
+
+# ---------------------------------------------------------------------------
+# All sections coexist
+# ---------------------------------------------------------------------------
+
+class TestAllSectionsCoexist:
+    def test_all_sections_expand_together(self):
+        data = {
+            "input": "in.wav",
+            "output_key_conflict_test": "val",
+            "mastering": {
+                "eq": {"profile": "atmos-streaming"},
+                "loudness": {"target": -18.0},
+            },
+            "mixing": {
+                "stem_rebalance": {"Vocals": 2.0},
+                "stem_cache_dir": "/tmp/s",
+            },
+            "routing": {"center_gain": 0.8},
+            "output": {"type": "adm-bwf"},
+            "processing": {"preview": True},
+        }
+        expanded = _expand_nested_sections(data)
+        assert expanded.get("mastering_eq_profile") == "atmos-streaming"
+        assert expanded.get("loudness_target") == pytest.approx(-18.0)
+        assert expanded.get("stem_rebalance") == {"Vocals": 2.0}
+        assert expanded.get("stem_cache_dir") == "/tmp/s"
+        assert expanded.get("center_gain") == pytest.approx(0.8)
+        assert expanded.get("output_type") == "adm-bwf"
+        assert expanded.get("preview") is True
+        assert "mastering" not in expanded
+        assert "mixing" not in expanded
+        assert "routing" not in expanded
+        assert "output" not in expanded
+        assert "processing" not in expanded
+        assert expanded.get("input") == "in.wav"

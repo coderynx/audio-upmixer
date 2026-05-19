@@ -136,6 +136,11 @@ class UpmixConfig:
     # When set, overrides mastering_eq_profile: a per-channel EQ is derived
     # from the reference audio file (path) via EQMatcher and applied instead.
     mastering_eq_reference: str | None = None    # path to reference audio file
+    # EQ match strength: scales gain_dB values before FIR design (0.0=flat,
+    # 1.0=full curve). Semantically different from mastering_eq_strength
+    # (wet/dry blend) — gain scaling is more predictable for broad spectral
+    # shapes. Default 0.5 gives half the reference curve deviation.
+    mastering_eq_match_strength: float = 0.5
 
     # ── Mixing: stem rebalance (stem pipeline only) ───────────────────────────
     # Per-stem gain adjustments (dB) applied before spatial routing.
@@ -146,6 +151,13 @@ class UpmixConfig:
     # Maps stem name → STEM_EQ_PROFILES key.  None = disabled.
     # e.g. {"Vocals": "vocal-presence", "Bass": "bass-warmth"}
     stem_eq_profiles: dict | None = None
+
+    # ── Mixing: stem separation cache ─────────────────────────────────────────
+    # Directory for caching separated stems to disk.  On subsequent runs with
+    # the same input file (path + mtime), model, and sample rate the cached
+    # stems are loaded directly, skipping the (slow) separation step.
+    # None = caching disabled.
+    stem_cache_dir: str | None = None
 
     def resolve_fft_params(self, actual_sample_rate: int) -> tuple[int, int]:
         """Returns (fft_size, hop_size) after applying sample rate adaptation."""

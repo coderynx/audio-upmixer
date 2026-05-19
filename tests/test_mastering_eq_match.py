@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from upmixer.mastering_eq_match import (
+from upmixer.mastering.eq_match import (
     _CHANNEL_PROXIES,
     _gaussian_smooth_log,
     EQMatcher,
@@ -168,7 +168,7 @@ class TestEQMatcherAnalyzeStereo:
 
     def test_breakpoints_count(self, tmp_path):
         """Should return approximately N_BREAKPOINTS breakpoints."""
-        from upmixer.mastering_eq_match import _N_BREAKPOINTS
+        from upmixer.mastering.eq_match import _N_BREAKPOINTS
         ref_path = _stereo_wav(tmp_path)
         m = EQMatcher(44100)
         result = m.analyze(ref_path, ["FL"])
@@ -255,7 +255,7 @@ class TestSpectralShaperPerChannel:
     """Verify SpectralShaper works in per-channel mode with EQMatcher output."""
 
     def test_per_channel_mode_runs(self, tmp_path):
-        from upmixer.mastering_eq import SpectralShaper
+        from upmixer.mastering.eq import SpectralShaper
 
         bps: dict[str, list[tuple[float, float]]] = {
             "FL": [(20., 0.), (1000., 0.), (10000., 1.5), (20000., 1.5)],
@@ -276,7 +276,7 @@ class TestSpectralShaperPerChannel:
             assert np.all(np.isfinite(arr))
 
     def test_per_channel_lfe_bypassed(self, tmp_path):
-        from upmixer.mastering_eq import SpectralShaper
+        from upmixer.mastering.eq import SpectralShaper
 
         bps = {"FL": [(20., 0.), (20000., 2.)]}
         t = np.linspace(0, 1, 44100, endpoint=False)
@@ -291,7 +291,7 @@ class TestSpectralShaperPerChannel:
         np.testing.assert_array_equal(out["LFE"], chs["LFE"])
 
     def test_missing_channel_in_bps_passes_through(self):
-        from upmixer.mastering_eq import SpectralShaper
+        from upmixer.mastering.eq import SpectralShaper
 
         bps = {"FL": [(20., 0.), (20000., 2.)]}  # FR not in bps
         t = np.linspace(0, 1, 44100, endpoint=False)
@@ -306,6 +306,86 @@ class TestSpectralShaperPerChannel:
         assert out["FR"] is chs["FR"]  # pass-through, not filtered
 
     def test_neither_profile_nor_bps_raises(self):
-        from upmixer.mastering_eq import SpectralShaper
+        from upmixer.mastering.eq import SpectralShaper
         with pytest.raises(ValueError, match="profile.*per_channel"):
             SpectralShaper(profile=None, strength=1.0, sample_rate=44100)
+
+
+# ---------------------------------------------------------------------------
+# scale_breakpoints
+# ---------------------------------------------------------------------------
+
+class TestScaleBreakpoints:
+    def test_import(self):
+        from upmixer.mastering.eq_match import scale_breakpoints
+        assert callable(scale_breakpoints)
+
+    def _sample_bps(self) -> dict[str, list[tuple[float, float]]]:
+        return {
+            "FL": [(100., 4.0), (1000., -2.0), (10000., 3.0)],
+            "FR": [(100., 2.0), (1000., 0.0),  (10000., -1.0)],
+        }
+
+    def test_zero_strength_returns_flat(self):
+        from upmixer.mastering.eq_match import scale_breakpoints
+        bps = self._sample_bps()
+        scaled = scale_breakpoints(bps, 0.0)
+        for ch, bp_list in scaled.items():
+            for f, g in bp_list:
+                assert g == pytest.approx(0.0), f"g={g} not 0 at strength=0"
+
+    def test_one_strength_unchanged(self):
+        from upmixer.mastering.eq_match import scale_breakpoints
+        bps = self._sample_bps()
+        scaled = scale_breakpoints(bps, 1.0)
+        for ch in bps:
+            for (f_orig, g_orig), (f_sc, g_sc) in zip(bps[ch], scaled[ch]):
+                assert g_sc == pytest.approx(g_orig)
+
+    def test_half_strength_halves_gains(self):
+        from upmixer.mastering.eq_match import scale_breakpoints
+        bps = self._sample_bps()
+        scaled = scale_breakpoints(bps, 0.5)
+        for ch in bps:
+            for (f_orig, g_orig), (f_sc, g_sc) in zip(bps[ch], scaled[ch]):
+                assert g_sc == pytest.approx(g_orig * 0.5)
+
+    def test_freqs_unchanged(self):
+        from upmixer.mastering.eq_match import scale_breakpoints
+        bps = self._sample_bps()
+        scaled = scale_breakpoints(bps, 0.3)
+        for ch in bps:
+            for (f_orig, _), (f_sc, _) in zip(bps[ch], scaled[ch]):
+                assert f_sc == pytest.approx(f_orig)
+
+    def test_channels_preserved(self):
+        from upmixer.mastering.eq_match import scale_breakpoints
+        bps = self._sample_bps()
+        scaled = scale_breakpoints(bps, 0.5)
+        assert set(scaled.keys()) == set(bps.keys())
+
+    def test_length_preserved(self):
+        from upmixer.mastering.eq_match import scale_breakpoints
+        bps = self._sample_bps()
+        scaled = scale_breakpoints(bps, 0.7)
+        for ch in bps:
+            assert len(scaled[ch]) == len(bps[ch])
+
+    def test_clamps_above_1(self):
+        from upmixer.mastering.eq_match import scale_breakpoints
+        bps = {"FL": [(100., 4.0)]}
+        scaled = scale_breakpoints(bps, 1.5)  # should clamp to 1.0
+        assert scaled["FL"][0][1] == pytest.approx(4.0)
+
+    def test_clamps_below_0(self):
+        from upmixer.mastering.eq_match import scale_breakpoints
+        bps = {"FL": [(100., 4.0)]}
+        scaled = scale_breakpoints(bps, -0.5)  # should clamp to 0.0
+        assert scaled["FL"][0][1] == pytest.approx(0.0)
+
+    def test_does_not_mutate_original(self):
+        from upmixer.mastering.eq_match import scale_breakpoints
+        bps = {"FL": [(100., 4.0), (1000., -2.0)]}
+        original_gains = [g for _, g in bps["FL"]]
+        _ = scale_breakpoints(bps, 0.5)
+        assert [g for _, g in bps["FL"]] == original_gains

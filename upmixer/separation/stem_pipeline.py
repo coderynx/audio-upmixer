@@ -186,14 +186,16 @@ class StemUpmixPipeline:
             _log.info("  ADM-BWF: output forced to 48 kHz (Dolby spec)")
         sep_sr = out_sr  # separate at final output rate; separator handles resample
 
-        # Derive log level for audio-separator: verbose if our logger is at DEBUG
-        sep_log_level = logging.DEBUG if _log.isEnabledFor(logging.DEBUG) else logging.WARNING
-        separator = StemSeparator(
-            model=self._model,
-            model_dir=self._model_dir,
-            sample_rate=sep_sr,
-            log_level=sep_log_level,
-        )
+        # ── Stem cache: try to load pre-separated stems ───────────────────────
+        # Check before building the separator (avoids loading the model).
+        _stem_cache = None
+        _cache_hit_stems: dict[str, np.ndarray] | None = None
+        if cfg.stem_cache_dir:
+            from upmixer.separation.stem_cache import StemCache
+            _stem_cache = StemCache(cfg.stem_cache_dir)
+            _cache_result = _stem_cache.load(input_path, self._model, sep_sr)
+            if _cache_result is not None:
+                _cache_hit_stems, _ = _cache_result
 
         # Build zone pairs and passthrough channels
         if input_fmt.n_channels <= 2:
@@ -223,40 +225,60 @@ class StemUpmixPipeline:
 
         _progress("  Separating stems...", 0.1)
 
-        # Separate each zone
+        # Separate each zone (skip if cache hit)
         all_stems: dict[str, np.ndarray] = {}
-        tmp_files: list[str] = []
-        zone_names = list(sep_zones.keys())
-        n_zones = len(zone_names)
 
-        try:
-            for zone_idx, zone_name in enumerate(zone_names):
-                pair_src = sep_zones[zone_name]
-                zone_frac = 0.15 + 0.60 * (zone_idx / n_zones)
-                _progress(f"    Separating zone: {zone_name}...", zone_frac)
+        if _cache_hit_stems is not None:
+            # Cache hit — skip separation entirely
+            all_stems = _cache_hit_stems
+            _log.info("  Stem cache: using cached stems (separation skipped)")
+        else:
+            # Derive log level: verbose if our logger is at DEBUG
+            sep_log_level = (
+                logging.DEBUG if _log.isEnabledFor(logging.DEBUG) else logging.WARNING
+            )
+            separator = StemSeparator(
+                model=self._model,
+                model_dir=self._model_dir,
+                sample_rate=sep_sr,
+                log_level=sep_log_level,
+            )
+            tmp_files: list[str] = []
+            zone_names = list(sep_zones.keys())
+            n_zones = len(zone_names)
 
-                if isinstance(pair_src, str):
-                    sep_path = pair_src
-                else:
-                    tmp = tempfile.mktemp(
-                        suffix=".wav", prefix=f"upmixer_{zone_name}_"
-                    )
-                    sf.write(tmp, pair_src, sr, subtype="PCM_24")
-                    sep_path = tmp
-                    tmp_files.append(tmp)
+            try:
+                for zone_idx, zone_name in enumerate(zone_names):
+                    pair_src = sep_zones[zone_name]
+                    zone_frac = 0.15 + 0.60 * (zone_idx / n_zones)
+                    _progress(f"    Separating zone: {zone_name}...", zone_frac)
 
-                zone_stems = separator.separate(sep_path)
-                for stem_name, stem_audio in zone_stems.items():
-                    # Stereo: unzoned keys → DEFAULT_ROUTING (full 3D + LFE).
-                    # Multichannel: zone-tagged keys → ZONE_ROUTING.
-                    key = stem_name if stereo_mode else f"{stem_name}@{zone_name}"
-                    all_stems[key] = stem_audio
+                    if isinstance(pair_src, str):
+                        sep_path = pair_src
+                    else:
+                        tmp = tempfile.mktemp(
+                            suffix=".wav", prefix=f"upmixer_{zone_name}_"
+                        )
+                        sf.write(tmp, pair_src, sr, subtype="PCM_24")
+                        sep_path = tmp
+                        tmp_files.append(tmp)
 
-        finally:
-            for tmp in tmp_files:
-                if os.path.exists(tmp):
-                    os.unlink(tmp)
-            separator.close()  # flush persistent temp dir immediately
+                    zone_stems = separator.separate(sep_path)
+                    for stem_name, stem_audio in zone_stems.items():
+                        # Stereo: unzoned keys → DEFAULT_ROUTING (full 3D + LFE).
+                        # Multichannel: zone-tagged keys → ZONE_ROUTING.
+                        key = stem_name if stereo_mode else f"{stem_name}@{zone_name}"
+                        all_stems[key] = stem_audio
+
+            finally:
+                for tmp in tmp_files:
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
+                separator.close()  # flush persistent temp dir immediately
+
+            # Save to cache for next run
+            if _stem_cache is not None and all_stems:
+                _stem_cache.save(input_path, self._model, sep_sr, all_stems, sep_sr)
 
         if not all_stems:
             raise RuntimeError(

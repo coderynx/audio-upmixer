@@ -14,24 +14,35 @@ output: surround_51.wav
 format: 5.1
 mode:   realtime
 
-# ── Gain tuning ────────────────────────────────────────────────────────────────
-center_gain:   0.85   # center channel (lead vocals / dialog)
-surround_gain: 0.60   # side surrounds
-lfe_gain:      0.50   # LFE sub channel
-lfe_cutoff:    120    # LFE low-pass cutoff in Hz
+# ── Routing ────────────────────────────────────────────────────────────────────
+routing:
+  center_gain:   0.85   # center channel (lead vocals / dialog)
+  surround_gain: 0.60   # side surrounds
+  lfe_gain:      0.50   # LFE sub channel
+  lfe_cutoff:    120    # LFE low-pass cutoff in Hz
 
 # ── Mastering ──────────────────────────────────────────────────────────────────
 mastering:
-  # EQ shaping (optional — remove eq_profile to bypass)
-  # spatial-warm adds body to typical streaming-mastered stereo sources
-  eq_profile: spatial-warm
-  eq_strength: 0.7
+  # EQ shaping — spatial-warm adds body to typical streaming-mastered stereo sources
+  eq:
+    profile: spatial-warm
+    strength: 0.7
+    # EQ from reference (overrides profile when set):
+    # reference: reference_51.wav
+    # match_strength: 0.5
 
   # Bus compression — none by default for realtime mode (preserve dynamics)
   # Uncomment to add light glue:
-  # comp_profile: transparent
+  # compressor:
+  #   profile: transparent
 
   # Loudness normalization
-  loudness_normalize: true
-  loudness_target: -18.0
-  loudness_max_tp: -1.0
+  loudness:
+    normalize: true
+    target: -18.0
+    max_tp: -1.0
+
+# ── Processing ────────────────────────────────────────────────────────────────
+# processing:
+#   preview: true
+#   preview_duration: 30.0

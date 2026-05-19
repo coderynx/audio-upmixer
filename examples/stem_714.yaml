@@ -20,7 +20,7 @@ format: 7.1.4
 
 # ── Mixing (stem mode only) ───────────────────────────────────────────────────
 # Applied after stem separation, before spatial routing.
-# Both sections are fully optional — remove to use default content-aware routing.
+# Remove section or comment it out to use default content-aware routing.
 mixing:
   # Stem rebalance: bring vocals forward, tighten bass
   # stem_rebalance:
@@ -34,30 +34,38 @@ mixing:
   #   Bass:   bass-warmth
   #   Drums:  drums-punch
 
+  # Stem cache — skip re-separation on repeated test runs
+  # stem_cache_dir: /tmp/upmixer_stems
+
 # ── Mastering ──────────────────────────────────────────────────────────────────
 mastering:
-  # EQ shaping (optional)
-  eq_profile: spatial-present   # adds presence and definition to instruments
-  eq_strength: 0.8              # slightly reduced for a subtler effect
+  # EQ shaping
+  eq:
+    profile: spatial-present   # adds presence and definition to instruments
+    strength: 0.8              # slightly reduced for a subtler effect
+    # EQ from reference (overrides profile):
+    # reference: reference_714.wav
+    # match_strength: 0.5
 
-  # Bus compression / glue (optional)
-  comp_profile: transparent     # very gentle — preserves studio dynamics
-  # comp_threshold: -22.0
-  # comp_ratio:     1.5
+  # Bus compression / glue
+  compressor:
+    profile: transparent       # very gentle — preserves studio dynamics
+    # threshold: -22.0
+    # ratio:     1.5
 
   # Bass control (optional)
-  # bass_profile: enhance
-  # bass_lfe_gain: 1.0
-
-  # EQ from reference track (optional, overrides eq_profile)
-  # eq_reference: reference_714.wav
+  # bass:
+  #   profile: enhance
+  #   lfe_gain: 1.0
 
   # Loudness normalization
-  loudness_normalize: true
-  loudness_target: -18.0
-  loudness_max_tp: -1.0
+  loudness:
+    normalize: true
+    target: -18.0
+    max_tp: -1.0
 
-# ── Quick preview ──────────────────────────────────────────────────────────────
+# ── Processing ────────────────────────────────────────────────────────────────
 # Uncomment to test on a 30 s excerpt before committing to a full run.
-# preview: true
-# preview_duration: 30.0
+# processing:
+#   preview: true
+#   preview_duration: 30.0

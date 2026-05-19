@@ -107,10 +107,13 @@ _FIELD_MAP: dict[str, tuple[str, type]] = {
     "mastering_bass_lfe_gain_db":    ("mastering_bass_lfe_gain_db",    float),
     # Mastering — EQ from reference (Match EQ)
     "mastering_eq_reference":        ("mastering_eq_reference",        str),
+    "mastering_eq_match_strength":   ("mastering_eq_match_strength",   float),
     # Mixing — stem rebalance (stem pipeline only)
     "stem_rebalance":                ("stem_rebalance",                dict),
     # Mixing — per-stem EQ (stem pipeline only)
     "stem_eq_profiles":              ("stem_eq_profiles",              dict),
+    # Mixing — stem cache
+    "stem_cache_dir":                ("stem_cache_dir",                str),
     # Downmix
     "downmix_output":             ("downmix_output_path",    str),
     "downmix_surround_coeff":     ("surround_downmix_coeff", float),
@@ -136,9 +139,10 @@ _FIELD_MAP: dict[str, tuple[str, type]] = {
 
 _MASTERING_KEY_MAP: dict[str, str] = {
     # EQ
-    "eq_profile":       "mastering_eq_profile",
-    "eq_strength":      "mastering_eq_strength",
-    "eq_reference":     "mastering_eq_reference",
+    "eq_profile":          "mastering_eq_profile",
+    "eq_strength":         "mastering_eq_strength",
+    "eq_reference":        "mastering_eq_reference",
+    "eq_match_strength":   "mastering_eq_match_strength",
     # Compressor
     "comp_profile":     "mastering_comp_profile",
     "comp_threshold":   "mastering_comp_threshold_db",
@@ -160,6 +164,113 @@ _MASTERING_KEY_MAP: dict[str, str] = {
     "loudness_max_tp":    "loudness_max_tp",
 }
 
+# ── Two-level mastering sub-section maps ──────────────────────────────────────
+# When a mastering: sub-key maps to a dict (e.g. mastering: {eq: {profile: x}}),
+# the inner dict is expanded using these maps.  This allows fully nested YAML:
+#
+#   mastering:
+#     eq:
+#       profile: atmos-streaming
+#       strength: 0.8
+#       match_strength: 0.4
+#     compressor:
+#       profile: glue
+#     bass:
+#       profile: enhance
+#     loudness:
+#       normalize: true
+#       target: -18.0
+
+_MASTERING_EQ_SUBMAP: dict[str, str] = {
+    "profile":        "mastering_eq_profile",
+    "strength":       "mastering_eq_strength",
+    "reference":      "mastering_eq_reference",
+    "match_strength": "mastering_eq_match_strength",
+}
+
+_MASTERING_COMP_SUBMAP: dict[str, str] = {
+    "profile":   "mastering_comp_profile",
+    "threshold": "mastering_comp_threshold_db",
+    "ratio":     "mastering_comp_ratio",
+    "attack":    "mastering_comp_attack_ms",
+    "release":   "mastering_comp_release_ms",
+    "knee":      "mastering_comp_knee_db",
+    "makeup":    "mastering_comp_makeup_db",
+}
+
+_MASTERING_BASS_SUBMAP: dict[str, str] = {
+    "profile":     "mastering_bass_profile",
+    "sub_gain":    "mastering_bass_sub_gain_db",
+    "mid_gain":    "mastering_bass_mid_gain_db",
+    "mono_cutoff": "mastering_bass_mono_cutoff_hz",
+    "excite":      "mastering_bass_excite",
+    "lfe_gain":    "mastering_bass_lfe_gain_db",
+}
+
+_MASTERING_LOUDNESS_SUBMAP: dict[str, str] = {
+    "normalize": "loudness_normalize",
+    "target":    "loudness_target",
+    "max_tp":    "loudness_max_tp",
+}
+
+_MASTERING_SUBSECTIONS: dict[str, dict[str, str]] = {
+    "eq":         _MASTERING_EQ_SUBMAP,
+    "compressor": _MASTERING_COMP_SUBMAP,
+    "bass":       _MASTERING_BASS_SUBMAP,
+    "loudness":   _MASTERING_LOUDNESS_SUBMAP,
+}
+
+# ── Routing section ───────────────────────────────────────────────────────────
+# routing:
+#   center_gain: 0.85
+#   surround_gain: 0.6
+#   lfe_cutoff: 120
+
+_ROUTING_KEY_MAP: dict[str, str] = {
+    "center_gain":            "center_gain",
+    "surround_gain":          "surround_gain",
+    "back_gain":              "back_gain",
+    "height_gain":            "height_gain",
+    "lfe_gain":               "lfe_gain",
+    "lfe_cutoff":             "lfe_cutoff",
+    "center_extraction_gain": "center_extraction_gain",
+    "center_attenuation":     "center_attenuation",
+    "height_low_rolloff_gain":"height_low_rolloff_gain",
+    "height_high_shelf_gain": "height_high_shelf_gain",
+    "content_mix_strength":   "content_mix_strength",
+}
+
+# ── Output section ────────────────────────────────────────────────────────────
+# output:
+#   type: adm-bwf
+#   subtype: PCM_24
+#   sample_rate: 48000
+#   downmix: stereo_check.wav
+
+_OUTPUT_KEY_MAP: dict[str, str] = {
+    "type":             "output_type",
+    "subtype":          "output_subtype",
+    "sample_rate":      "output_sample_rate",
+    "downmix":          "downmix_output",
+    "downmix_surround": "downmix_surround_coeff",
+}
+
+# ── Processing section ────────────────────────────────────────────────────────
+# processing:
+#   normalize: true
+#   fft_size: 4096
+#   preview: true
+#   preview_duration: 30.0
+
+_PROCESSING_KEY_MAP: dict[str, str] = {
+    "normalize":       "normalize_output",
+    "fft_size":        "fft_size",
+    "block_size":      "block_size",
+    "preview":         "preview",
+    "preview_duration":"preview_duration",
+    "preview_start":   "preview_start",
+}
+
 # ── Nested mixing: section ────────────────────────────────────────────────────
 # Mirrors mastering: section but for mixing-phase params.
 # Usage (YAML):
@@ -175,19 +286,74 @@ _MASTERING_KEY_MAP: dict[str, str] = {
 _MIXING_KEY_MAP: dict[str, str] = {
     "stem_rebalance": "stem_rebalance",    # dict value passes through as-is
     "stem_eq":        "stem_eq_profiles",  # renamed for config
+    "stem_cache_dir": "stem_cache_dir",    # stem separation cache directory
 }
 
 
 def _expand_nested_sections(data: dict) -> dict:
-    """Expand ``mastering:`` and ``mixing:`` sub-dicts into flat manifest keys.
+    """Expand nested YAML sections into flat manifest keys.
 
-    If *data* contains a ``"mastering"`` key whose value is a mapping, its
-    sub-keys are translated via :data:`_MASTERING_KEY_MAP` and injected into
-    the top-level dict.  Similarly for a ``"mixing"`` key via
-    :data:`_MIXING_KEY_MAP`.  Unknown sub-keys are passed through unchanged
-    (a warning will be emitted by the caller for unrecognised manifest keys).
+    Supported sections:
 
-    The original ``"mastering"`` / ``"mixing"`` keys are removed.  Existing
+    ``mastering:``
+        One-level form (backward compatible)::
+
+            mastering:
+              eq_profile: atmos-streaming
+              comp_profile: glue
+
+        Two-level form (structured)::
+
+            mastering:
+              eq:
+                profile: atmos-streaming
+                strength: 0.8
+                match_strength: 0.4
+              compressor:
+                profile: glue
+              bass:
+                profile: enhance
+              loudness:
+                normalize: true
+
+        Sub-keys that are dicts are dispatched via :data:`_MASTERING_SUBSECTIONS`;
+        flat sub-keys are handled via :data:`_MASTERING_KEY_MAP`.  Both forms
+        may be mixed freely.
+
+    ``mixing:``
+        ::
+
+            mixing:
+              stem_rebalance:
+                Vocals: +2.0
+              stem_eq:
+                Bass: bass-warmth
+              stem_cache_dir: /tmp/stems
+
+    ``routing:``
+        ::
+
+            routing:
+              center_gain: 0.85
+              surround_gain: 0.6
+              lfe_cutoff: 120
+
+    ``output:``
+        ::
+
+            output:
+              type: adm-bwf
+              subtype: PCM_24
+              sample_rate: 48000
+
+    ``processing:``
+        ::
+
+            processing:
+              preview: true
+              preview_duration: 30.0
+
+    The original section keys are removed from the returned dict.  Existing
     flat keys take priority — nested values do **not** overwrite them.
 
     Args:
@@ -195,31 +361,57 @@ def _expand_nested_sections(data: dict) -> dict:
 
     Returns:
         Expanded flat dict.  A copy is made when expansion occurs; the
-        original dict is returned unchanged when neither section is present.
+        original dict is returned unchanged when no known sections are present.
     """
-    has_mastering = "mastering" in data and isinstance(data.get("mastering"), dict)
-    has_mixing    = "mixing"    in data and isinstance(data.get("mixing"),    dict)
+    _SECTION_KEYS = {"mastering", "mixing", "routing", "output", "processing"}
+    present = {k for k in _SECTION_KEYS if k in data and isinstance(data.get(k), dict)}
 
-    if not has_mastering and not has_mixing:
+    if not present:
         return data
 
-    skip = set()
-    if has_mastering:
-        skip.add("mastering")
-    if has_mixing:
-        skip.add("mixing")
+    expanded = {k: v for k, v in data.items() if k not in present}
 
-    expanded = {k: v for k, v in data.items() if k not in skip}
-
-    if has_mastering:
+    # ── mastering: ────────────────────────────────────────────────────────────
+    if "mastering" in present:
         for sub_key, value in data["mastering"].items():
-            flat_key = _MASTERING_KEY_MAP.get(sub_key, f"mastering_{sub_key}")
+            if isinstance(value, dict) and sub_key in _MASTERING_SUBSECTIONS:
+                # Two-level: mastering.eq.profile, mastering.bass.sub_gain, etc.
+                submap = _MASTERING_SUBSECTIONS[sub_key]
+                for inner_key, inner_val in value.items():
+                    flat_key = submap.get(inner_key, f"mastering_{sub_key}_{inner_key}")
+                    if flat_key not in expanded:
+                        expanded[flat_key] = inner_val
+            else:
+                # One-level: mastering.eq_profile, mastering.comp_profile, etc.
+                flat_key = _MASTERING_KEY_MAP.get(sub_key, f"mastering_{sub_key}")
+                if flat_key not in expanded:
+                    expanded[flat_key] = value
+
+    # ── mixing: ───────────────────────────────────────────────────────────────
+    if "mixing" in present:
+        for sub_key, value in data["mixing"].items():
+            flat_key = _MIXING_KEY_MAP.get(sub_key, sub_key)
             if flat_key not in expanded:
                 expanded[flat_key] = value
 
-    if has_mixing:
-        for sub_key, value in data["mixing"].items():
-            flat_key = _MIXING_KEY_MAP.get(sub_key, sub_key)
+    # ── routing: ──────────────────────────────────────────────────────────────
+    if "routing" in present:
+        for sub_key, value in data["routing"].items():
+            flat_key = _ROUTING_KEY_MAP.get(sub_key, sub_key)
+            if flat_key not in expanded:
+                expanded[flat_key] = value
+
+    # ── output: ───────────────────────────────────────────────────────────────
+    if "output" in present:
+        for sub_key, value in data["output"].items():
+            flat_key = _OUTPUT_KEY_MAP.get(sub_key, sub_key)
+            if flat_key not in expanded:
+                expanded[flat_key] = value
+
+    # ── processing: ───────────────────────────────────────────────────────────
+    if "processing" in present:
+        for sub_key, value in data["processing"].items():
+            flat_key = _PROCESSING_KEY_MAP.get(sub_key, sub_key)
             if flat_key not in expanded:
                 expanded[flat_key] = value
 

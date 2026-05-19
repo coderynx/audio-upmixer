@@ -152,6 +152,8 @@ def _apply_cli_flags(config: UpmixConfig, args: argparse.Namespace, sample_rate_
     # Mastering — EQ from reference
     if args.mastering_eq_reference is not None:
         config.mastering_eq_reference = args.mastering_eq_reference
+    if args.mastering_eq_match_strength is not None:
+        config.mastering_eq_match_strength = max(0.0, min(1.0, args.mastering_eq_match_strength))
     # Mixing — stem rebalance
     if args.stem_rebalance is not None:
         config.stem_rebalance = _parse_key_value_pairs(args.stem_rebalance, float)
@@ -168,6 +170,9 @@ def _apply_cli_flags(config: UpmixConfig, args: argparse.Namespace, sample_rate_
     # Mixing — per-stem EQ
     if args.stem_eq is not None:
         config.stem_eq_profiles = _parse_key_value_pairs(args.stem_eq, str)
+    # Mixing — stem cache
+    if args.stem_cache_dir is not None:
+        config.stem_cache_dir = args.stem_cache_dir
 
 
 def _parse_key_value_pairs(s: str, value_type: type) -> dict:
@@ -480,6 +485,18 @@ def main() -> None:
         help="Save the generated EQ profile to a YAML or JSON file for reuse.",
     )
     parser.add_argument(
+        "--mastering-eq-match-strength",
+        type=float,
+        default=None,
+        metavar="S",
+        help=(
+            "EQ match curve intensity: scales gain_dB values before FIR design "
+            "(0.0 = flat, 1.0 = full reference curve). Default: 0.5. "
+            "Semantically different from --mastering-eq-strength (wet/dry blend) — "
+            "gain scaling is more predictable for broad spectral shapes."
+        ),
+    )
+    parser.add_argument(
         "--generate-eq-profile",
         action="store_true",
         help=(
@@ -520,6 +537,19 @@ def main() -> None:
             "Format: 'Vocals=vocal-presence,Bass=bass-warmth'. "
             "Valid profiles: vocal-presence, vocal-warmth, bass-warmth, "
             "bass-cut, drums-punch, other-air, flat."
+        ),
+    )
+
+    # ── Mixing: stem cache ────────────────────────────────────────────────────
+    parser.add_argument(
+        "--stem-cache-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Cache separated stems to this directory (stem mode only). "
+            "On subsequent runs with the same input file, model, and sample "
+            "rate the cached stems are loaded directly, skipping re-separation. "
+            "Key: SHA-256(abs_path|mtime|model|sample_rate)."
         ),
     )
 
@@ -611,7 +641,7 @@ def main() -> None:
             parser.error(
                 "--generate-eq-profile requires --mastering-eq-reference-save PATH"
             )
-        from upmixer.mastering_eq_match import EQMatcher
+        from upmixer.mastering.eq_match import EQMatcher
         import soundfile as _sf  # type: ignore[import-untyped]
         _info = _sf.info(ref_path)
         sr = _info.samplerate
@@ -677,7 +707,7 @@ def main() -> None:
     # ── Optional: save EQ reference profile after run ─────────────────────────
     ref_save = getattr(args, "mastering_eq_reference_save", None)
     if ref_save and config.mastering_eq_reference is not None:
-        from upmixer.mastering_eq_match import EQMatcher
+        from upmixer.mastering.eq_match import EQMatcher
         from upmixer.formats import FORMAT_MAP
         fmt = FORMAT_MAP.get(config.output_format)
         ch_names = list(fmt.channels) if fmt else []

@@ -11,7 +11,10 @@ Processing order
    all channels except LFE.  Controlled by ``config.mastering_eq_profile`` and
    ``config.mastering_eq_strength``.  Disabled when profile is ``None``.
    When ``config.mastering_eq_reference`` is set, per-channel FIRs derived
-   from the reference track are used instead of a preset profile.
+   from the reference track are used instead of a preset profile.  The EQ
+   match curve is scaled by ``config.mastering_eq_match_strength`` before the
+   FIR is built — this scales the gain_dB values themselves (not a wet/dry
+   blend), giving more predictable intensity control for broad spectral shapes.
 2. **Bus compression** (optional) — linked-sidechain RMS glue compressor.
    Cosmetic only; does not substitute for loudness normalization.  Controlled
    by ``config.mastering_comp_profile`` (``None`` = disabled).  Individual
@@ -109,23 +112,26 @@ class MasteringChain:
 
         # ── Step 1: spectral shaping (EQ / EQ Match) ──────────────────────────
         if cfg.mastering_eq_reference is not None:
-            # Per-channel EQ from reference track (overrides mastering_eq_profile)
-            from upmixer.mastering_eq import SpectralShaper
-            from upmixer.mastering_eq_match import EQMatcher
+            # Per-channel EQ from reference track (overrides mastering_eq_profile).
+            # Scale gain_dB values by mastering_eq_match_strength before FIR
+            # design — more predictable than wet/dry for broad spectral curves.
+            from .eq import SpectralShaper
+            from .eq_match import EQMatcher, scale_breakpoints
             _log.info("  EQ Match: analysing reference '%s'...", cfg.mastering_eq_reference)
             matcher = EQMatcher(sample_rate)
             per_ch_bps = matcher.analyze(
                 cfg.mastering_eq_reference, list(channels.keys())
             )
+            per_ch_bps = scale_breakpoints(per_ch_bps, cfg.mastering_eq_match_strength)
             shaper = SpectralShaper(
                 profile=None,
-                strength=cfg.mastering_eq_strength,
+                strength=1.0,
                 sample_rate=sample_rate,
                 per_channel_breakpoints=per_ch_bps,
             )
             channels = shaper.process(channels)
         elif cfg.mastering_eq_profile is not None:
-            from upmixer.mastering_eq import SpectralShaper
+            from .eq import SpectralShaper
             shaper = SpectralShaper(
                 profile=cfg.mastering_eq_profile,
                 strength=cfg.mastering_eq_strength,
@@ -135,7 +141,7 @@ class MasteringChain:
 
         # ── Step 2: bus compression ────────────────────────────────────────────
         if cfg.mastering_comp_profile is not None:
-            from upmixer.mastering_comp import BusCompressor, COMP_PROFILES
+            from .compressor import BusCompressor, COMP_PROFILES
 
             preset = COMP_PROFILES.get(cfg.mastering_comp_profile, {})
             if not preset:
@@ -146,11 +152,6 @@ class MasteringChain:
                     sorted(COMP_PROFILES.keys()),
                 )
             else:
-                # Individual config params override preset when explicitly set (not None)
-                def _p(attr: str) -> float:
-                    val = getattr(cfg, attr)
-                    return val if val is not None else preset[attr.removeprefix("mastering_comp_")]
-
                 comp = BusCompressor(
                     threshold_db=cfg.mastering_comp_threshold_db
                     if cfg.mastering_comp_threshold_db is not None
@@ -184,7 +185,7 @@ class MasteringChain:
             or cfg.mastering_bass_excite
         )
         if _bass_active:
-            from upmixer.mastering_bass import BassController, BASS_PROFILES
+            from .bass import BassController, BASS_PROFILES
             preset = BASS_PROFILES.get(cfg.mastering_bass_profile or "", {})
 
             def _bp(attr: str, default: float = 0.0) -> float:
