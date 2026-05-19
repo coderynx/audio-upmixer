@@ -6,9 +6,9 @@ always override profile defaults.
 
 Built-in profiles
 -----------------
-atmos-music    Dolby Atmos Music Delivery Playbook (June 2024)
+atmos-music    Dolby Atmos Music Master Delivery Specification v2022.07
                Apple Music, Amazon Music, Tidal, etc.
-               -18 LKFS / -1 dBTP / 48 kHz / ADM-BWF
+               -18 LKFS / -1 dBTP / 48 kHz / ADM-BWF / LFE 120 Hz
 
 atmos-bluray   Dolby Atmos Blu-ray via TrueHD/MLP
                -27 LKFS / -2 dBTP / 48 kHz / WAV → TrueHD encoder
@@ -47,6 +47,11 @@ class DeliveryProfile:
     bit_depth: int     # PCM bit depth (16 / 24 / 32)
     output_type: str   # "wav" or "adm-bwf"
 
+    # LFE low-pass cutoff (Hz). None = use UpmixConfig default (120 Hz).
+    # Spec-mandated range: 100–150 Hz (Dolby Atmos Music Master Delivery
+    # Specification v2022.07 §4.3).
+    lfe_cutoff_hz: int | None = None
+
     # Informational — describes the downstream encoding step
     codec_note: str = ""
 
@@ -63,15 +68,16 @@ PROFILES: dict[str, DeliveryProfile] = {
         name="atmos-music",
         display_name="Dolby Atmos Music (Streaming)",
         description=(
-            "Dolby Atmos Music Delivery Playbook June 2024. "
+            "Dolby Atmos Music Master Delivery Specification v2022.07. "
             "Apple Music, Amazon Music, Tidal, etc. "
-            "ADM-BWF container; loudness -18 LKFS / -1 dBTP."
+            "ADM-BWF container; loudness -18 LKFS / -1 dBTP / LFE ≤120 Hz."
         ),
         loudness_target_lkfs=-18.0,
         loudness_max_tp=-1.0,
         sample_rate=48_000,
         bit_depth=24,
         output_type="adm-bwf",
+        lfe_cutoff_hz=120,
         codec_note=(
             "ADM-BWF / ITU-R BS.2076-2 (24-bit LPCM + XML metadata). "
             "Feed to a Dolby Media Encoder (DME)."

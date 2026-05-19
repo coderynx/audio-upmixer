@@ -279,6 +279,8 @@ def main():
             print(f"  Sample rate     : {p.sample_rate // 1000} kHz")
             print(f"  Bit depth       : {p.bit_depth}-bit")
             print(f"  Output type     : {p.output_type}")
+            lfe_str = f"{p.lfe_cutoff_hz} Hz" if p.lfe_cutoff_hz is not None else "default (120 Hz)"
+            print(f"  LFE cutoff      : {lfe_str}")
             print(f"  Notes           : {p.codec_note}")
         print()
         sys.exit(0)
@@ -315,6 +317,9 @@ def main():
         config.output_type = profile.output_type
         if args.output_sample_rate is None:
             config.output_sample_rate = profile.sample_rate
+        # LFE cutoff: profile enforces spec range; user --lfe-cutoff overrides below.
+        if profile.lfe_cutoff_hz is not None and args.lfe_cutoff is None:
+            config.lfe_cutoff_hz = float(profile.lfe_cutoff_hz)
         import logging as _l
         _l.getLogger("upmixer").info(
             "  Profile: %s — %+.1f LKFS / %+.1f dBTP / %d kHz / %s / %s",

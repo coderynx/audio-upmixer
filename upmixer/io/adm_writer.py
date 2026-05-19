@@ -154,8 +154,32 @@ def _fmt_chunk(fmt: OutputFormat, sample_rate: int, bit_depth: int) -> bytes:
     )  # 16 bytes
 
 
-def _bext_chunk() -> bytes:
-    """Build a minimal BWF v2 bext chunk (EBU Tech 3285 r3)."""
+def _loudness_i16(value: float | None) -> int:
+    """Encode a loudness / True Peak value to BWF bext int16 representation.
+
+    Unit: 0.01 dB / LKFS (EBU Tech 3285 r3, §2.8 LOUDNESS_VALUE etc.).
+    0x7FFF (32767) = sentinel "not indicated".
+    Range of encodable values: −327.68 … +327.66 (well beyond any real level).
+    """
+    if value is None:
+        return 0x7FFF  # not indicated
+    return int(round(max(-327.68, min(327.66, value)) * 100))
+
+
+def _bext_chunk(
+    loudness_lkfs: float | None = None,
+    tp_dbtp: float | None = None,
+) -> bytes:
+    """Build a BWF v2 bext chunk (EBU Tech 3285 r3) with optional loudness metadata.
+
+    Args:
+        loudness_lkfs: Integrated programme loudness (BS.1770-4) in LKFS.
+                       Written to LOUDNESS_VALUE field (offset 412).
+        tp_dbtp:       Maximum True Peak level in dBTP.
+                       Written to MAX_TRUE_PEAK_LEVEL field (offset 416).
+        All other loudness fields (LRA, momentary, short-term) are set to
+        the "not indicated" sentinel (0x7FFF) as they are not measured.
+    """
     now = datetime.utcnow()
     buf = bytearray(602)
 
@@ -170,8 +194,12 @@ def _bext_chunk() -> bytes:
 
     struct.pack_into("<H", buf, 346, 2)  # BWF version = 2
 
-    for offset in (412, 414, 416, 418, 420):
-        struct.pack_into("<H", buf, offset, 0x7FFF)  # loudness = not indicated
+    # EBU Tech 3285 r3 §2.8: loudness metadata fields (signed int16, 0.01 units)
+    struct.pack_into("<h", buf, 412, _loudness_i16(loudness_lkfs))  # LOUDNESS_VALUE
+    struct.pack_into("<H", buf, 414, 0x7FFF)                        # LOUDNESS_RANGE (not measured)
+    struct.pack_into("<h", buf, 416, _loudness_i16(tp_dbtp))        # MAX_TRUE_PEAK_LEVEL
+    struct.pack_into("<H", buf, 418, 0x7FFF)                        # MAX_MOMENTARY_LOUDNESS (not measured)
+    struct.pack_into("<H", buf, 420, 0x7FFF)                        # MAX_SHORT_TERM_LOUDNESS (not measured)
 
     return bytes(buf) + b"\r\n"
 
@@ -578,7 +606,21 @@ class AdmBwfWriter:
         self._config = config
         self._format = FORMAT_MAP[config.output_format]
 
-    def write(self, channels: dict[str, np.ndarray]) -> None:
+    def write(
+        self,
+        channels: dict[str, np.ndarray],
+        measured_lkfs: float | None = None,
+        measured_tp_dbtp: float | None = None,
+    ) -> None:
+        """Write multichannel audio to ADM BWF file.
+
+        Args:
+            channels:        Dict channel_name → 1D float64 array.
+            measured_lkfs:   BS.1770-4 integrated loudness (LKFS), written to
+                             bext LOUDNESS_VALUE field.  None = "not indicated".
+            measured_tp_dbtp: Maximum True Peak (dBTP), written to bext
+                             MAX_TRUE_PEAK_LEVEL field.  None = "not indicated".
+        """
         fmt = self._format
         if fmt.name not in _DOLBY_ALLOWED_FORMATS:
             raise ValueError(
@@ -603,14 +645,16 @@ class AdmBwfWriter:
         duration_s = audio.shape[0] / sr
 
         fmt_bytes  = _fmt_chunk(fmt, sr, bit_depth)
+        bext_bytes = _bext_chunk(loudness_lkfs=measured_lkfs, tp_dbtp=measured_tp_dbtp)
         chna_bytes = _chna_chunk(fmt)
         pcm_bytes  = _audio_to_pcm(audio, bit_depth)
         axml_bytes = _axml_chunk(fmt, duration_s, sr, bit_depth)
 
-        # Chunk order matches Logic Pro export: fmt data axml chna
-        # bext omitted — Logic Pro doesn't write it in ADM BWF exports.
+        # Chunk order: fmt bext data axml chna
+        # bext placed before data per EBU Tech 3285 r3 recommendation.
         wave_body = (
             _make_chunk(b"fmt ", fmt_bytes)
+            + _make_chunk(b"bext", bext_bytes)
             + _make_chunk(b"data", pcm_bytes)
             + _make_chunk(b"axml", axml_bytes)
             + _make_chunk(b"chna", chna_bytes)

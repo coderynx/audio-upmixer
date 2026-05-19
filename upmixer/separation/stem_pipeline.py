@@ -372,9 +372,14 @@ class StemUpmixPipeline:
 
         if cfg.output_type == "adm-bwf":
             writer = AdmBwfWriter(output_path, out_sr, cfg)
+            writer.write(
+                channels,
+                measured_lkfs=ln_measured_lkfs,
+                measured_tp_dbtp=ln_measured_tp,
+            )
         else:
             writer = AudioWriter(output_path, out_sr, cfg)
-        writer.write(channels)
+            writer.write(channels)
 
         if cfg.downmix_output_path:
             L, R = itu_downmix_stereo(channels, surround_coeff=cfg.surround_downmix_coeff)

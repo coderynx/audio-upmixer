@@ -177,7 +177,20 @@ class StemSeparator:
                 except OSError:
                     pass
                 continue
-            audio, _ = sf.read(full_path, dtype="float32", always_2d=True)
+            try:
+                audio, _ = sf.read(full_path, dtype="float32", always_2d=True)
+            except Exception as exc:
+                # Separator may write an empty or corrupt file for silent stems
+                # (e.g. a "drums" stem from a piano-only track).  Log and skip.
+                _log.warning(
+                    "Skipping stem '%s' — could not read '%s': %s",
+                    stem_name, os.path.basename(full_path), exc,
+                )
+                try:
+                    os.unlink(full_path)
+                except OSError:
+                    pass
+                continue
             # Ensure stereo — mono models may write single-channel
             if audio.shape[1] == 1:
                 audio = np.concatenate([audio, audio], axis=1)
