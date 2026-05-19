@@ -50,6 +50,11 @@ _FRONT_CHANNELS    = {ChannelLabel.FL, ChannelLabel.FR}
 _SURROUND_CHANNELS = {ChannelLabel.SL, ChannelLabel.SR, ChannelLabel.BL, ChannelLabel.BR}
 _HEIGHT_CHANNELS   = {ChannelLabel.TFL, ChannelLabel.TFR, ChannelLabel.TBL, ChannelLabel.TBR}
 
+# Stem names considered "vocal" for C→FL/FR gain redistribution.
+_VOCAL_STEM_NAMES: frozenset[str] = frozenset({
+    "Vocals", "Lead Vocals", "Backing Vocals",
+})
+
 
 def _content_scale(features: StemFeatures, label: ChannelLabel) -> float:
     """Per-channel multiplicative scale driven by stem content analysis.
@@ -377,6 +382,24 @@ class StemRouter:
             stem_R = audio[:n, 1].astype(np.float64) if audio.shape[1] > 1 else stem_L.copy()
             stem_mono = (stem_L + stem_R) * 0.5
 
+            # C-to-FL/FR gain redirect — vocal stems only.
+            #
+            # When C is passthrough (multichannel input), the Vocals→C routing
+            # gain (e.g. 0.72) is discarded by the skip check below.  FL/FR
+            # only receive the "phantom support" gain (e.g. 0.28), leaving
+            # vocals underrepresented in the front bed vs. the original mix.
+            #
+            # Fix: for vocal stems, redirect the C gain to FL and FR at 0.5×
+            # each (equal L/R split of the mono centre signal).
+            # Result: FL gain 0.28 → 0.64 — closer to original FL vocal content.
+            # The redirect can never exceed original FL level (0.64 < 1.0).
+            #
+            # Non-vocal stems (Bass, Drums, Other…): never redirected.
+            # Stereo input: C not in skip → c_redirect = 0 → unchanged.
+            c_redirect: float = 0.0
+            if "C" in skip and "C" in stem_routing and stem_name in _VOCAL_STEM_NAMES:
+                c_redirect = stem_routing["C"] * 0.5
+
             lfe_signal: np.ndarray | None = None
 
             for label in self._fmt.channels:
@@ -386,6 +409,9 @@ class StemRouter:
 
                 # Apply content scale on top of static table gain
                 gain = stem_routing[ch]
+                # Add redirected C gain to FL/FR when C is passthrough
+                if c_redirect > 0.0 and label in (ChannelLabel.FL, ChannelLabel.FR):
+                    gain += c_redirect
                 if features is not None:
                     gain = gain * _content_scale(features, label)
 

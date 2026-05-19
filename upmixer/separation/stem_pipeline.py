@@ -319,7 +319,11 @@ class StemUpmixPipeline:
                 float(np.sum(ch ** 2)) for ch in channels.values()
             )
             if stem_output_energy > 1e-20:
-                scale = np.sqrt(stem_input_energy / stem_output_energy)
+                # Cap at 1.0: never amplify derived channels above source energy.
+                # Upward scaling (scale > 1) inflates FL/FR relative to the
+                # passthrough C (vocals), causing perceived low vocal level on
+                # mixes where routing gains lose energy vs. input.
+                scale = min(1.0, np.sqrt(stem_input_energy / stem_output_energy))
                 channels = {k: v * scale for k, v in channels.items()}
 
         # Inject passthrough channels at their original level (not scaled above)
