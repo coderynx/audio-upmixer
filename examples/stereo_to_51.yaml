@@ -23,13 +23,16 @@ routing:
 
 # ── Mastering ──────────────────────────────────────────────────────────────────
 mastering:
-  # EQ shaping — spatial-warm adds body to typical streaming-mastered stereo sources
+  # Preset EQ — spatial-warm adds body to streaming-mastered stereo sources
   eq:
     profile: spatial-warm
     strength: 0.7
-    # EQ from reference (overrides profile when set):
-    # reference: reference_51.wav
-    # match_strength: 0.5
+
+  # EQ Match — independent reference-based spectral matching
+  # Can run together with eq above.
+  # eq_match:
+  #   reference: reference_51.wav
+  #   strength: 0.5
 
   # Bus compression — none by default for realtime mode (preserve dynamics)
   # Uncomment to add light glue:

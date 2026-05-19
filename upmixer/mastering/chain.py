@@ -110,27 +110,8 @@ class MasteringChain:
         cfg = self._cfg
         result = MasteringResult()
 
-        # ── Step 1: spectral shaping (EQ / EQ Match) ──────────────────────────
-        if cfg.mastering_eq_reference is not None:
-            # Per-channel EQ from reference track (overrides mastering_eq_profile).
-            # Scale gain_dB values by mastering_eq_match_strength before FIR
-            # design — more predictable than wet/dry for broad spectral curves.
-            from .eq import SpectralShaper
-            from .eq_match import EQMatcher, scale_breakpoints
-            _log.info("  EQ Match: analysing reference '%s'...", cfg.mastering_eq_reference)
-            matcher = EQMatcher(sample_rate)
-            per_ch_bps = matcher.analyze(
-                cfg.mastering_eq_reference, list(channels.keys())
-            )
-            per_ch_bps = scale_breakpoints(per_ch_bps, cfg.mastering_eq_match_strength)
-            shaper = SpectralShaper(
-                profile=None,
-                strength=1.0,
-                sample_rate=sample_rate,
-                per_channel_breakpoints=per_ch_bps,
-            )
-            channels = shaper.process(channels)
-        elif cfg.mastering_eq_profile is not None:
+        # ── Step 1a: preset EQ profile ────────────────────────────────────────
+        if cfg.mastering_eq_profile is not None:
             from .eq import SpectralShaper
             shaper = SpectralShaper(
                 profile=cfg.mastering_eq_profile,
@@ -138,6 +119,23 @@ class MasteringChain:
                 sample_rate=sample_rate,
             )
             channels = shaper.process(channels)
+
+        # ── Step 1b: EQ match from reference (independent of step 1a) ────────
+        if cfg.mastering_eq_reference is not None:
+            from .eq import EQMatchShaper
+            from .eq_match import EQMatcher, scale_breakpoints
+            _log.info("  EQ Match: analysing reference '%s'...", cfg.mastering_eq_reference)
+            matcher = EQMatcher(sample_rate)
+            per_ch_bps = matcher.analyze(
+                cfg.mastering_eq_reference, list(channels.keys())
+            )
+            per_ch_bps = scale_breakpoints(per_ch_bps, cfg.mastering_eq_match_strength)
+            eq_match = EQMatchShaper(
+                per_channel_breakpoints=per_ch_bps,
+                strength=1.0,
+                sample_rate=sample_rate,
+            )
+            channels = eq_match.process(channels)
 
         # ── Step 2: bus compression ────────────────────────────────────────────
         if cfg.mastering_comp_profile is not None:

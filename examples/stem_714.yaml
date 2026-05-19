@@ -39,13 +39,16 @@ mixing:
 
 # ── Mastering ──────────────────────────────────────────────────────────────────
 mastering:
-  # EQ shaping
+  # Preset EQ
   eq:
     profile: spatial-present   # adds presence and definition to instruments
     strength: 0.8              # slightly reduced for a subtler effect
-    # EQ from reference (overrides profile):
-    # reference: reference_714.wav
-    # match_strength: 0.5
+
+  # EQ Match — independent reference-based spectral matching
+  # Can run together with eq above.
+  # eq_match:
+  #   reference: reference_714.wav
+  #   strength: 0.5
 
   # Bus compression / glue
   compressor:

@@ -1,29 +1,30 @@
-"""Spectral shaping ("EQ Match") for the mastering bus.
+"""Spectral shaping (EQ) for the mastering bus.
 
-Applies a predefined tonal curve to all output channels via minimum-phase FIR
-filtering.  Designed for spatial audio mastering — the LFE channel is always
-bypassed, and height channels receive the same treatment as the front bed (the
-elevation EQ applied during routing already handles height-specific coloration).
+Two independent processors:
 
-Processing
-----------
-1. Look up the profile's frequency / gain-dB breakpoints.
-2. Build a linear-phase FIR with ``scipy.signal.firwin2`` from normalized
+:class:`SpectralShaper`
+    Applies a predefined tonal curve to all channels except LFE via minimum-
+    phase FIR filtering.
+
+:class:`EQMatchShaper`
+    Applies per-channel FIRs derived from an external source (e.g.
+    :class:`~upmixer.mastering.eq_match.EQMatcher`) to match the spectral
+    envelope of a reference track.  LFE is always bypassed.
+
+Processing (both classes)
+--------------------------
+1. Build a linear-phase FIR with ``scipy.signal.firwin2`` from normalized
    frequency / linear-gain pairs (DC and Nyquist endpoints added automatically).
-3. Convert to minimum-phase via ``scipy.signal.minimum_phase`` — removes
-   pre-ringing, all energy at the start of the impulse response.
-4. Apply to each non-LFE channel with FFT-based convolution (``fftconvolve``),
-   then wet/dry blend with ``strength``.
+2. Convert to minimum-phase via ``scipy.signal.minimum_phase``.
+3. Apply with FFT-based convolution (``fftconvolve``), then wet/dry blend.
 
-Filter impulse responses are cached at module level by (profile, sample_rate,
-n_taps) so the expensive firwin2 + minimum_phase computation runs only once per
-session.
+Filter impulse responses are cached at module level so the expensive
+firwin2 + minimum_phase computation runs only once per session.
 
-Built-in profiles
------------------
+Built-in profiles (SpectralShaper)
+------------------------------------
 spatial-transparent   Nearly flat — enables the pipeline without audible effect.
-spatial-air           High-frequency air: +2.5 dB shelf above 15 kHz.  Adds
-                      sparkle and height-channel openness.
+spatial-air           High-frequency air: +2.5 dB shelf above 15 kHz.
 spatial-warm          Low-mid warmth: +1.5 dB around 300 Hz, subtle 3 kHz
                       softening.  Balances bright or thin mixes.
 spatial-present       Presence curve: +2 dB 4 kHz region.  Adds clarity and
@@ -31,14 +32,6 @@ spatial-present       Presence curve: +2 dB 4 kHz region.  Adds clarity and
 atmos-streaming       Modeled on well-mastered Dolby Atmos Music streaming
                       content: subtle bass warmth (100 Hz), presence bump
                       (5 kHz), and air shelf (18 kHz).
-
-Per-channel mode (EQ Match)
-----------------------------
-When *per_channel_breakpoints* is supplied to the constructor the shaper
-operates in **per-channel mode**: each channel receives its own FIR derived
-from the provided (freq_hz, gain_dB) breakpoints (e.g. from
-:class:`~upmixer.mastering_eq_match.EQMatcher`).  The *profile* argument must
-be ``None`` in this mode.  LFE is still bypassed.
 """
 from __future__ import annotations
 
@@ -201,61 +194,47 @@ def _build_fir(profile: str, sample_rate: int, n_taps: int) -> np.ndarray:
     return h_mp
 
 
-# ── SpectralShaper ────────────────────────────────────────────────────────────
+# ── Shared FIR application helper ────────────────────────────────────────────
+
+def _apply_fir(ch: np.ndarray, ir: np.ndarray, strength: float) -> np.ndarray:
+    """Apply *ir* to *ch* with wet/dry *strength* blend."""
+    ch64 = ch.astype(np.float64)
+    filtered = fftconvolve(ch64, ir, mode="full")[: len(ch64)]
+    if strength >= 1.0:
+        return filtered.astype(ch.dtype)
+    blended = (1.0 - strength) * ch64 + strength * filtered
+    return blended.astype(ch.dtype)
+
+
+# ── SpectralShaper — preset profile EQ ───────────────────────────────────────
 
 class SpectralShaper:
-    """Spectral shaping (EQ) for the multichannel mastering bus.
+    """Preset profile EQ for the multichannel mastering bus.
 
-    Applies a predefined tonal curve to all channels except LFE via minimum-
-    phase FIR filtering.  A wet/dry ``strength`` parameter controls the blend
-    from full bypass (0.0) to full effect (1.0).
+    Applies a single predefined tonal curve to all channels except LFE via
+    minimum-phase FIR filtering.  A wet/dry ``strength`` parameter controls the
+    blend from full bypass (0.0) to full effect (1.0).
 
-    Two modes of operation:
-
-    **Profile mode** (default):
-        Pass a ``profile`` name from :data:`EQ_PROFILE_NAMES`.  The same FIR is
-        applied to every non-LFE channel.
-
-    **Per-channel mode** (EQ Match):
-        Pass ``profile=None`` and supply ``per_channel_breakpoints``, a dict
-        mapping each channel name to its own ``list[tuple[float, float]]``
-        breakpoints (as returned by
-        :meth:`~upmixer.mastering_eq_match.EQMatcher.analyze`).  Each channel
-        receives its own FIR; channels absent from the dict are passed through
-        unchanged (no filter applied, even at strength=1.0).
-
-    This processor is cosmetic — it shifts the tonal balance without
-    substantially changing loudness.
+    For reference-based (match EQ) processing use :class:`EQMatchShaper`.
 
     Args:
-        profile:                  EQ profile name, or ``None`` for per-channel
-                                  mode.  See :data:`EQ_PROFILE_NAMES`.
-        strength:                 Wet/dry blend [0.0 = bypass … 1.0 = full].
-        sample_rate:              Audio sample rate in Hz.
-        n_taps:                   FIR tap count before minimum-phase conversion
-                                  (default 1023).
-        per_channel_breakpoints:  Per-channel (freq_hz, gain_dB) breakpoints.
-                                  Required when ``profile`` is ``None``.
+        profile:     EQ profile name.  See :data:`EQ_PROFILE_NAMES`.
+        strength:    Wet/dry blend [0.0 = bypass … 1.0 = full].
+        sample_rate: Audio sample rate in Hz.
+        n_taps:      FIR tap count before minimum-phase conversion (default 1023).
 
     Raises:
-        KeyError:    if *profile* is not in :data:`EQ_PROFILES` (profile mode).
-        ValueError:  if neither *profile* nor *per_channel_breakpoints* given.
+        KeyError: if *profile* is not in :data:`EQ_PROFILES`.
     """
 
     def __init__(
         self,
-        profile: str | None,
+        profile: str,
         strength: float,
         sample_rate: int,
         n_taps: int = 1023,
-        per_channel_breakpoints: dict[str, list[tuple[float, float]]] | None = None,
     ) -> None:
-        if profile is None and per_channel_breakpoints is None:
-            raise ValueError(
-                "SpectralShaper requires either 'profile' or "
-                "'per_channel_breakpoints'."
-            )
-        if profile is not None and profile not in EQ_PROFILES:
+        if profile not in EQ_PROFILES:
             raise KeyError(
                 f"Unknown EQ profile '{profile}'. "
                 f"Valid choices: {EQ_PROFILE_NAMES}"
@@ -265,21 +244,11 @@ class SpectralShaper:
         self._sr = sample_rate
         self._n_taps = n_taps
         self._ir: np.ndarray | None = None
-        self._pc_bps = per_channel_breakpoints  # per-channel mode data
 
     def _get_ir(self) -> np.ndarray:
-        """Return the shared FIR for profile mode."""
         if self._ir is None:
-            self._ir = _build_fir(self._profile, self._sr, self._n_taps)  # type: ignore[arg-type]
+            self._ir = _build_fir(self._profile, self._sr, self._n_taps)
         return self._ir
-
-    def _get_pc_ir(self, ch_name: str) -> np.ndarray | None:
-        """Return per-channel FIR, or None if channel not in breakpoints dict."""
-        assert self._pc_bps is not None
-        bps = self._pc_bps.get(ch_name)
-        if bps is None:
-            return None
-        return _build_fir_from_breakpoints(bps, self._sr, self._n_taps)
 
     def process(
         self,
@@ -293,54 +262,90 @@ class SpectralShaper:
             lfe_key:  Channel name to bypass (default ``"LFE"``).
 
         Returns:
-            New channel dict.  Arrays have the same shape and dtype as the
-            inputs.  LFE is returned unchanged.
+            New channel dict with the same shape/dtype.  LFE is unchanged.
         """
         if self._strength == 0.0:
-            return channels  # full bypass — no copy needed
-
-        # ── Per-channel (EQ Match) mode ───────────────────────────────────────
-        if self._pc_bps is not None:
-            _log.info(
-                "  EQ shaping (match): %d channels  strength=%.2f",
-                len([c for c in channels if c != lfe_key]),
-                self._strength,
-            )
-            out: dict[str, np.ndarray] = {}
-            for name, ch in channels.items():
-                if name == lfe_key:
-                    out[name] = ch
-                    continue
-                ir = self._get_pc_ir(name)
-                if ir is None:
-                    out[name] = ch  # no breakpoints for this channel
-                    continue
-                out[name] = self._filter_channel(ch, ir)
-            return out
-
-        # ── Profile mode ──────────────────────────────────────────────────────
+            return channels
         ir = self._get_ir()
         _log.info(
             "  EQ shaping: profile=%s  strength=%.2f  IR=%d taps",
             self._profile, self._strength, len(ir),
         )
-        out = {}
+        out: dict[str, np.ndarray] = {}
+        for name, ch in channels.items():
+            if name == lfe_key:
+                out[name] = ch
+            else:
+                out[name] = _apply_fir(ch, ir, self._strength)
+        return out
+
+
+# ── EQMatchShaper — per-channel EQ match ─────────────────────────────────────
+
+class EQMatchShaper:
+    """Per-channel EQ match processor for the multichannel mastering bus.
+
+    Applies an individual minimum-phase FIR to each channel from a dict of
+    (freq_hz, gain_dB) breakpoints, typically produced by
+    :class:`~upmixer.mastering.eq_match.EQMatcher`.  LFE is always bypassed.
+    Channels absent from the breakpoints dict are passed through unchanged.
+
+    Independent of :class:`SpectralShaper` — both can be active simultaneously.
+
+    Args:
+        per_channel_breakpoints: Dict channel_name → list of (freq_hz, gain_dB).
+        strength:                Wet/dry blend [0.0 = bypass … 1.0 = full].
+        sample_rate:             Audio sample rate in Hz.
+        n_taps:                  FIR tap count (default 1023).
+    """
+
+    def __init__(
+        self,
+        per_channel_breakpoints: dict[str, list[tuple[float, float]]],
+        strength: float,
+        sample_rate: int,
+        n_taps: int = 1023,
+    ) -> None:
+        self._pc_bps = per_channel_breakpoints
+        self._strength = float(np.clip(strength, 0.0, 1.0))
+        self._sr = sample_rate
+        self._n_taps = n_taps
+
+    def _get_ir(self, ch_name: str) -> np.ndarray | None:
+        bps = self._pc_bps.get(ch_name)
+        if bps is None:
+            return None
+        return _build_fir_from_breakpoints(bps, self._sr, self._n_taps)
+
+    def process(
+        self,
+        channels: dict[str, np.ndarray],
+        lfe_key: str = "LFE",
+    ) -> dict[str, np.ndarray]:
+        """Apply per-channel EQ match to all channels except *lfe_key*.
+
+        Args:
+            channels: Dict channel_name → 1-D float array.
+            lfe_key:  Channel name to bypass (default ``"LFE"``).
+
+        Returns:
+            New channel dict.  LFE and channels without breakpoints are unchanged.
+        """
+        if self._strength == 0.0:
+            return channels
+        _log.info(
+            "  EQ match: %d channels  strength=%.2f",
+            len([c for c in channels if c != lfe_key]),
+            self._strength,
+        )
+        out: dict[str, np.ndarray] = {}
         for name, ch in channels.items():
             if name == lfe_key:
                 out[name] = ch
                 continue
-            out[name] = self._filter_channel(ch, ir)
+            ir = self._get_ir(name)
+            if ir is None:
+                out[name] = ch
+                continue
+            out[name] = _apply_fir(ch, ir, self._strength)
         return out
-
-    def _filter_channel(
-        self,
-        ch: np.ndarray,
-        ir: np.ndarray,
-    ) -> np.ndarray:
-        """Apply *ir* to *ch* with wet/dry blend."""
-        ch64 = ch.astype(np.float64)
-        filtered = fftconvolve(ch64, ir, mode="full")[: len(ch64)]
-        if self._strength >= 1.0:
-            return filtered.astype(ch.dtype)
-        blended = (1.0 - self._strength) * ch64 + self._strength * filtered
-        return blended.astype(ch.dtype)

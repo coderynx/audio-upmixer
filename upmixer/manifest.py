@@ -182,10 +182,16 @@ _MASTERING_KEY_MAP: dict[str, str] = {
 #       target: -18.0
 
 _MASTERING_EQ_SUBMAP: dict[str, str] = {
-    "profile":        "mastering_eq_profile",
-    "strength":       "mastering_eq_strength",
+    "profile":  "mastering_eq_profile",
+    "strength": "mastering_eq_strength",
+    # Deprecated: use mastering.eq_match section instead
     "reference":      "mastering_eq_reference",
     "match_strength": "mastering_eq_match_strength",
+}
+
+_MASTERING_EQ_MATCH_SUBMAP: dict[str, str] = {
+    "reference": "mastering_eq_reference",
+    "strength":  "mastering_eq_match_strength",
 }
 
 _MASTERING_COMP_SUBMAP: dict[str, str] = {
@@ -215,6 +221,7 @@ _MASTERING_LOUDNESS_SUBMAP: dict[str, str] = {
 
 _MASTERING_SUBSECTIONS: dict[str, dict[str, str]] = {
     "eq":         _MASTERING_EQ_SUBMAP,
+    "eq_match":   _MASTERING_EQ_MATCH_SUBMAP,
     "compressor": _MASTERING_COMP_SUBMAP,
     "bass":       _MASTERING_BASS_SUBMAP,
     "loudness":   _MASTERING_LOUDNESS_SUBMAP,
@@ -308,7 +315,9 @@ def _expand_nested_sections(data: dict) -> dict:
               eq:
                 profile: atmos-streaming
                 strength: 0.8
-                match_strength: 0.4
+              eq_match:
+                reference: reference.wav
+                strength: 0.5
               compressor:
                 profile: glue
               bass:

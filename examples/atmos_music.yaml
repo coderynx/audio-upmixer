@@ -45,13 +45,16 @@ mixing:
 
 # ── Mastering ─────────────────────────────────────────────────────────────────
 mastering:
-  # EQ shaping — tonal character of the final mix
+  # Preset EQ — tonal character of the final mix
   eq:
     profile: atmos-streaming   # subtle bass warmth + presence + air shelf
     strength: 1.0              # blend: 0.0 = bypass → 1.0 = full effect
-    # EQ from reference track (overrides profile when set):
-    # reference: reference_atmos.wav
-    # match_strength: 0.5      # 0.0 = flat, 1.0 = full reference curve
+
+  # EQ Match — spectral matching to a reference track (independent of eq above)
+  # Both eq and eq_match can be active simultaneously.
+  # eq_match:
+  #   reference: reference_atmos.wav
+  #   strength: 0.5            # 0.0 = flat, 1.0 = full reference curve
 
   # Bus compression / glue
   compressor:

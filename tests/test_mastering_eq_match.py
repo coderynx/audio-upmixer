@@ -248,14 +248,14 @@ class TestEQMatcherSaveLoad:
 
 
 # ---------------------------------------------------------------------------
-# SpectralShaper per-channel mode (integration)
+# EQMatchShaper (per-channel EQ match)
 # ---------------------------------------------------------------------------
 
-class TestSpectralShaperPerChannel:
-    """Verify SpectralShaper works in per-channel mode with EQMatcher output."""
+class TestEQMatchShaper:
+    """Verify EQMatchShaper works with EQMatcher output."""
 
     def test_per_channel_mode_runs(self, tmp_path):
-        from upmixer.mastering.eq import SpectralShaper
+        from upmixer.mastering.eq import EQMatchShaper
 
         bps: dict[str, list[tuple[float, float]]] = {
             "FL": [(20., 0.), (1000., 0.), (10000., 1.5), (20000., 1.5)],
@@ -267,48 +267,40 @@ class TestSpectralShaperPerChannel:
         chs = {"FL": sig.copy(), "FR": sig.copy(), "C": sig.copy(),
                "LFE": sig.copy() * 0.5, "SL": sig.copy(), "SR": sig.copy()}
 
-        shaper = SpectralShaper(
-            profile=None, strength=1.0, sample_rate=44100,
-            per_channel_breakpoints=bps,
+        shaper = EQMatchShaper(
+            per_channel_breakpoints=bps, strength=1.0, sample_rate=44100,
         )
         out = shaper.process(chs)
         for arr in out.values():
             assert np.all(np.isfinite(arr))
 
-    def test_per_channel_lfe_bypassed(self, tmp_path):
-        from upmixer.mastering.eq import SpectralShaper
+    def test_lfe_bypassed(self, tmp_path):
+        from upmixer.mastering.eq import EQMatchShaper
 
         bps = {"FL": [(20., 0.), (20000., 2.)]}
         t = np.linspace(0, 1, 44100, endpoint=False)
         sig = 0.3 * np.sin(2 * np.pi * 440 * t).astype(np.float64)
         chs = {"FL": sig.copy(), "LFE": sig.copy()}
 
-        shaper = SpectralShaper(
-            profile=None, strength=1.0, sample_rate=44100,
-            per_channel_breakpoints=bps,
+        shaper = EQMatchShaper(
+            per_channel_breakpoints=bps, strength=1.0, sample_rate=44100,
         )
         out = shaper.process(chs)
         np.testing.assert_array_equal(out["LFE"], chs["LFE"])
 
     def test_missing_channel_in_bps_passes_through(self):
-        from upmixer.mastering.eq import SpectralShaper
+        from upmixer.mastering.eq import EQMatchShaper
 
         bps = {"FL": [(20., 0.), (20000., 2.)]}  # FR not in bps
         t = np.linspace(0, 1, 44100, endpoint=False)
         sig = 0.3 * np.sin(2 * np.pi * 440 * t).astype(np.float64)
         chs = {"FL": sig.copy(), "FR": sig.copy()}
 
-        shaper = SpectralShaper(
-            profile=None, strength=1.0, sample_rate=44100,
-            per_channel_breakpoints=bps,
+        shaper = EQMatchShaper(
+            per_channel_breakpoints=bps, strength=1.0, sample_rate=44100,
         )
         out = shaper.process(chs)
         assert out["FR"] is chs["FR"]  # pass-through, not filtered
-
-    def test_neither_profile_nor_bps_raises(self):
-        from upmixer.mastering.eq import SpectralShaper
-        with pytest.raises(ValueError, match="profile.*per_channel"):
-            SpectralShaper(profile=None, strength=1.0, sample_rate=44100)
 
 
 # ---------------------------------------------------------------------------

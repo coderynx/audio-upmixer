@@ -6,6 +6,7 @@ from upmixer.mastering.eq import (  # noqa: F401
     EQ_PROFILES,
     EQ_PROFILE_NAMES,
     SpectralShaper,
+    EQMatchShaper,
     _build_fir,
     _build_fir_from_breakpoints,
 )

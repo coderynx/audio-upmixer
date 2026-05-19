@@ -98,8 +98,14 @@ _CHANNEL_PROXIES: dict[int, dict[str, Any]] = {
 # Number of log-spaced breakpoints returned
 _N_BREAKPOINTS: int = 40
 _MIN_FREQ_HZ: float = 20.0
-# Normalisation band — mean dB is computed over this range
+# Normalisation band — mean dB is computed over this range (80 Hz – 8 kHz)
 _NORM_LOW_HZ: float = 80.0
+_NORM_HIGH_HZ: float = 8000.0
+
+# Gain clamp below this frequency — prevents bed channels from excessive bass
+# boost that conflicts with the LFE channel (approximate LFE crossover).
+_LFE_XOVER_HZ: float = 120.0
+_BASS_LIMIT_DB: float = 2.0
 
 # 1/3-octave smoothing sigma (in octave units)
 _SMOOTH_SIGMA_OCT: float = 0.25
@@ -204,8 +210,8 @@ class EQMatcher:
         # 1/3-oct Gaussian smooth
         smoothed = _gaussian_smooth_log(log_freqs, mag_db, _SMOOTH_SIGMA_OCT)
 
-        # Normalise to mid-band mean (80 Hz – Nyquist/2)
-        norm_mask = freqs >= _NORM_LOW_HZ
+        # Normalise to mid-band mean (80 Hz – 8 kHz)
+        norm_mask = (freqs >= _NORM_LOW_HZ) & (freqs <= _NORM_HIGH_HZ)
         if norm_mask.any():
             smoothed -= smoothed[norm_mask].mean()
 
@@ -218,6 +224,11 @@ class EQMatcher:
 
         # Interpolate smoothed curve at breakpoint frequencies
         bp_gains = np.interp(bp_freqs, freqs, smoothed)
+
+        # Clamp sub-bass gains — bed channels should not carry the deep bass
+        # that the LFE channel handles; prevents boominess from bass-heavy refs.
+        bass_mask = bp_freqs < _LFE_XOVER_HZ
+        bp_gains[bass_mask] = np.clip(bp_gains[bass_mask], -_BASS_LIMIT_DB, _BASS_LIMIT_DB)
 
         return [(float(f), float(g)) for f, g in zip(bp_freqs, bp_gains)]
 
