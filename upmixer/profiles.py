@@ -99,7 +99,6 @@ PROFILES: dict[str, DeliveryProfile] = {
         output_type="wav",
         codec_note=(
             "Feed output WAV to a Dolby Media Encore (DME)."
-            "96 kHz supported on Blu-ray (≤8ch); override with --output-sample-rate 96000."
         ),
     ),
 }
