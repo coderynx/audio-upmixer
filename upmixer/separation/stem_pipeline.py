@@ -51,7 +51,7 @@ from upmixer.result import UpmixResult
 from upmixer.separation.separator import StemSeparator, DEFAULT_MODEL
 from upmixer.separation.stem_analyzer import analyze_stems
 from upmixer.separation.stem_router import StemRouter
-from upmixer.utils import preview_slice, soft_limit
+from upmixer.utils import preview_slice, soft_limit, itu_downmix_stereo
 
 _log = logging.getLogger("upmixer")
 
@@ -371,6 +371,12 @@ class StemUpmixPipeline:
         else:
             writer = AudioWriter(output_path, out_sr, cfg)
         writer.write(channels)
+
+        if cfg.downmix_output_path:
+            import soundfile as sf
+            L, R = itu_downmix_stereo(channels, surround_coeff=cfg.surround_downmix_coeff)
+            sf.write(cfg.downmix_output_path, np.column_stack([L, R]), out_sr, subtype=cfg.output_subtype)
+            _log.info("  Downmix: %s", cfg.downmix_output_path)
 
         _progress(f"Output: {output_path}", 1.0)
 

@@ -3,7 +3,12 @@ from scipy.signal import butter, sosfilt
 
 from upmixer.config import UpmixConfig
 from upmixer.formats import ChannelLabel, InputFormat, OutputFormat
-from upmixer.utils import elevation_eq as _elevation_eq, haas_decorrelate, diffuse_send
+from upmixer.utils import (
+    elevation_eq as _elevation_eq,
+    haas_decorrelate,
+    diffuse_send,
+    _ITU_C_COEFF,
+)
 
 
 def _lfe_filter(
@@ -55,7 +60,8 @@ class MultichannelUpmixer:
 
         # Center
         if "C" not in out and FL is not None and FR is not None:
-            out["C"] = 0.35 * (FL + FR)
+            # ITU-R BS.775-4 Table 2 inverse: k_c/2 ≈ 0.3536
+            out["C"] = (_ITU_C_COEFF * 0.5) * (FL + FR)
             C = out["C"]
 
         # LFE

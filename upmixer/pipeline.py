@@ -21,7 +21,7 @@ from upmixer.io.reader import AudioReader
 from upmixer.io.writer import AudioWriter
 from upmixer.result import UpmixResult
 from upmixer.routing.channel_router import ChannelRouter
-from upmixer.utils import normalize_energy, preview_slice, soft_limit
+from upmixer.utils import normalize_energy, preview_slice, soft_limit, itu_downmix_stereo
 
 _log = logging.getLogger("upmixer")
 
@@ -280,6 +280,9 @@ class UpmixPipeline:
 
         _progress(f"Output: {output_path}", 1.0)
 
+        if cfg.downmix_output_path:
+            self._write_downmix(channels, out_sr, cfg)
+
         return UpmixResult(
             input_path=input_path,
             output_path=output_path,
@@ -424,3 +427,14 @@ class UpmixPipeline:
             name: resample_poly(ch, up, down).astype(np.float64)
             for name, ch in channels.items()
         }
+
+    @staticmethod
+    def _write_downmix(
+        channels: dict[str, np.ndarray], sample_rate: int, cfg: UpmixConfig
+    ) -> None:
+        """Write ITU-R BS.775-4 Table 2 stereo downmix to cfg.downmix_output_path."""
+        import soundfile as sf
+        L, R = itu_downmix_stereo(channels, surround_coeff=cfg.surround_downmix_coeff)
+        stereo = np.column_stack([L, R])
+        sf.write(cfg.downmix_output_path, stereo, sample_rate, subtype=cfg.output_subtype)
+        _log.info("  Downmix: %s", cfg.downmix_output_path)

@@ -66,6 +66,22 @@ _DOLBY_SPEAKER_LABEL: dict[ChannelLabel, str] = {
     ChannelLabel.TBR: "RC_Rtrs",
 }
 
+# ITU-R BS.2051-3 Table 1 speaker position labels (SP labels)
+_BS2051_SP_LABEL: dict[ChannelLabel, str] = {
+    ChannelLabel.FL:  "M+030",
+    ChannelLabel.FR:  "M-030",
+    ChannelLabel.C:   "M+000",
+    ChannelLabel.LFE: "LFE1",
+    ChannelLabel.SL:  "M+110",
+    ChannelLabel.SR:  "M-110",
+    ChannelLabel.BL:  "M+135",
+    ChannelLabel.BR:  "M-135",
+    ChannelLabel.TFL: "U+030",
+    ChannelLabel.TFR: "U-030",
+    ChannelLabel.TBL: "U+110",
+    ChannelLabel.TBR: "U-110",
+}
+
 # Cartesian (X, Y, Z) positions per spec §2.5 Table 2-13
 _DOLBY_POSITION: dict[ChannelLabel, tuple[float, float, float]] = {
     ChannelLabel.FL:  (-1.0,  1.0,  0.0),
@@ -213,6 +229,8 @@ def _axml_chunk(
     a('                        audioProgrammeName="Main Programme"')
     a(f'                        start="{zero}" end="{dur}">')
     a('          <audioContentIDRef>ACO_1001</audioContentIDRef>')
+    if fmt.bs2051_system:
+        a(f'          <audioProgrammeLabel language="en">ITU-R BS.2051-3 System {fmt.bs2051_system}</audioProgrammeLabel>')
     a('        </audioProgramme>')
 
     # audioContent — dialogue element required, no typeLabel/typeDefinition (§2.8)
@@ -258,6 +276,9 @@ def _axml_chunk(
         a(f'            <position coordinate="Y">{_pos_str(y)}</position>')
         a(f'            <position coordinate="Z">{_pos_str(z)}</position>')
         a(f'            <speakerLabel>{speaker}</speakerLabel>')
+        bs_label = _BS2051_SP_LABEL.get(label)
+        if bs_label:
+            a(f'            <speakerLabel>{bs_label}</speakerLabel>')
         a('          </audioBlockFormat>')
         a('        </audioChannelFormat>')
 
@@ -402,6 +423,7 @@ def _axml_stem_beds_chunk(
     duration_s: float,
     sample_rate: int,
     bit_depth: int,
+    bs2051_system: str = "",
 ) -> bytes:
     """Generate Dolby-profile ADM XML for per-stem DirectSpeakers beds.
 
@@ -425,6 +447,8 @@ def _axml_stem_beds_chunk(
     a('                        audioProgrammeName="Stem Mix"')
     a(f'                        start="{zero}" end="{dur}">')
     a('          <audioContentIDRef>ACO_1001</audioContentIDRef>')
+    if bs2051_system:
+        a(f'          <audioProgrammeLabel language="en">ITU-R BS.2051-3 System {bs2051_system}</audioProgrammeLabel>')
     a('        </audioProgramme>')
 
     # audioContent — one entry per stem
@@ -475,6 +499,9 @@ def _axml_stem_beds_chunk(
             a(f'            <position coordinate="Y">{_pos_str(y)}</position>')
             a(f'            <position coordinate="Z">{_pos_str(z)}</position>')
             a(f'            <speakerLabel>{speaker}</speakerLabel>')
+            bs_label = _BS2051_SP_LABEL.get(label)
+            if bs_label:
+                a(f'            <speakerLabel>{bs_label}</speakerLabel>')
             a('          </audioBlockFormat>')
             a('        </audioChannelFormat>')
 
@@ -736,7 +763,7 @@ class AdmBwfStemWriter:
         fmt_bytes  = _fmt_chunk_n(n_tracks, self._sr, bit_depth)
         chna_bytes = _chna_stem_beds_chunk(stem_beds)
         pcm_bytes  = _audio_to_pcm(interleaved, bit_depth)
-        axml_bytes = _axml_stem_beds_chunk(stem_beds, duration_s, self._sr, bit_depth)
+        axml_bytes = _axml_stem_beds_chunk(stem_beds, duration_s, self._sr, bit_depth, self._output_fmt.bs2051_system)
 
         wave_body = (
             _make_chunk(b"fmt ", fmt_bytes)

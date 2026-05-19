@@ -1,5 +1,10 @@
+import math
+
 import numpy as np
 from scipy.signal import butter, sosfilt
+
+# ITU-R BS.775-4 Annex 4 Table 2 — fixed center mixing coefficient (1/√2)
+_ITU_C_COEFF: float = 1.0 / math.sqrt(2)   # ≈ 0.7071
 
 
 def db_to_linear(db: float) -> float:
@@ -121,6 +126,75 @@ def preview_slice(
 
     end = start + clip_len
     return audio[start:end], start / sr, end / sr
+
+
+def itu_downmix_stereo(
+    channels: dict[str, np.ndarray],
+    surround_coeff: float = _ITU_C_COEFF,
+) -> tuple[np.ndarray, np.ndarray]:
+    """ITU-R BS.775-4 Annex 4 Table 2 — multichannel to 2/0 stereo downmix.
+
+    L' = FL + (1/√2)·C + k_s·SL  [+ k_s·(1/√2)·BL if present]
+    R' = FR + (1/√2)·C + k_s·SR  [+ k_s·(1/√2)·BR if present]
+
+    LFE and height channels excluded per standard.
+    Back surrounds fold into side surrounds attenuated by (1/√2) so total
+    surround energy matches a 3/2 source.
+
+    Args:
+        channels:       Multichannel dict — any subset of FL, FR, C, SL, SR, BL, BR.
+        surround_coeff: k_s per Annex 8.  Valid values: 0.7071 (default), 0.5, 0.0.
+
+    Returns:
+        (L_out, R_out) 1D float64 arrays.
+    """
+    _skip = {"LFE", "TFL", "TFR", "TBL", "TBR"}
+    n = next((len(v) for k, v in channels.items() if k not in _skip), 0)
+    if n == 0:
+        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.float64)
+
+    def _ch(key: str) -> np.ndarray:
+        return channels.get(key, np.zeros(n, dtype=np.float64))
+
+    SL = _ch("SL") + (_ITU_C_COEFF * _ch("BL") if "BL" in channels else 0.0)
+    SR = _ch("SR") + (_ITU_C_COEFF * _ch("BR") if "BR" in channels else 0.0)
+
+    L_out = _ch("FL") + _ITU_C_COEFF * _ch("C") + surround_coeff * SL
+    R_out = _ch("FR") + _ITU_C_COEFF * _ch("C") + surround_coeff * SR
+
+    return L_out.astype(np.float64), R_out.astype(np.float64)
+
+
+def itu_downmix_mono(
+    channels: dict[str, np.ndarray],
+    surround_coeff: float = 0.5,
+) -> np.ndarray:
+    """ITU-R BS.775-4 Annex 4 Table 2 — multichannel to 1/0 mono downmix.
+
+    M = (1/√2)·(FL + FR) + C + k_s·(SL + SR)
+
+    LFE and height channels excluded per standard.
+    Default surround_coeff = 0.5 per Table 2 mono row.
+
+    Args:
+        channels:       Multichannel dict — any subset of FL, FR, C, SL, SR, BL, BR.
+        surround_coeff: Surround mixing coefficient (default: 0.5 per Table 2 mono).
+
+    Returns:
+        M 1D float64 array.
+    """
+    _skip = {"LFE", "TFL", "TFR", "TBL", "TBR"}
+    n = next((len(v) for k, v in channels.items() if k not in _skip), 0)
+    if n == 0:
+        return np.zeros(0, dtype=np.float64)
+
+    def _ch(key: str) -> np.ndarray:
+        return channels.get(key, np.zeros(n, dtype=np.float64))
+
+    SL = _ch("SL") + (_ITU_C_COEFF * _ch("BL") if "BL" in channels else 0.0)
+    SR = _ch("SR") + (_ITU_C_COEFF * _ch("BR") if "BR" in channels else 0.0)
+
+    return (_ITU_C_COEFF * (_ch("FL") + _ch("FR")) + _ch("C") + surround_coeff * (SL + SR)).astype(np.float64)
 
 
 def normalize_energy(

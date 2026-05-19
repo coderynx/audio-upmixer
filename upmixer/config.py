@@ -83,11 +83,18 @@ class UpmixConfig:
     content_mix_strength: float = 1.0    # [0=neutral, 1=full content-aware]
     content_hf_analysis_hz: float = 4000.0  # lower edge of HF band for air detection
 
+    # ITU-R BS.775-4 downmix coefficients (Annex 8)
+    # k_s for 3/2 → 2/0 stereo folddown: 0.7071 (default), 0.5000, or 0.0000
+    surround_downmix_coeff: float = 0.7071
+
     # Loudness normalization (ITU-R BS.1770-4 / Dolby Atmos Music Delivery Playbook)
     loudness_normalize: bool = True
     loudness_target_lkfs: float = -18.0   # Dolby Atmos Music target (June 2024 playbook)
     loudness_max_tp: float = -1.0          # Dolby True Peak ceiling (playbook §loudness)
     loudness_max_gain_db: float = 30.0     # cap upward gain (prevent noise amplification)
+
+    # ITU-R BS.775-4 stereo downmix output (written alongside multichannel output)
+    downmix_output_path: str | None = None
 
     # Preview mode — process only a short window instead of the full file
     preview: bool = False

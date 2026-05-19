@@ -192,6 +192,33 @@ def main():
         help="Resample output to this sample rate (e.g. 48000, 96000). Default: same as input.",
     )
 
+    # --- ITU-R BS.775-4 downmix output ---
+    parser.add_argument(
+        "--downmix-output",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Write an ITU-R BS.775-4 stereo downmix WAV alongside the multichannel output. "
+            "Downmix uses Table 2 equations: L' = FL + (1/√2)·C + k_s·SL, "
+            "R' = FR + (1/√2)·C + k_s·SR. "
+            "k_s set by --downmix-surround-coeff (default: 0.7071). "
+            "LFE and height channels excluded per standard."
+        ),
+    )
+    parser.add_argument(
+        "--downmix-surround-coeff",
+        type=float,
+        choices=[0.7071, 0.5, 0.0],
+        default=None,
+        metavar="K",
+        help=(
+            "ITU-R BS.775-4 Annex 8 surround mixing coefficient k_s for the "
+            "3/2 → 2/0 stereo folddown embedded in output metadata. "
+            "Valid values: 0.7071 (default, −3 dB), 0.5 (−6 dB), 0.0 (off). "
+            "Affects only downmix metadata — multichannel channels are unchanged."
+        ),
+    )
+
     # --- Preview mode ---
     parser.add_argument(
         "--preview",
@@ -343,6 +370,10 @@ def main():
         config.output_subtype = args.output_subtype
     if args.output_sample_rate is not None:
         config.output_sample_rate = args.output_sample_rate
+    if args.downmix_surround_coeff is not None:
+        config.surround_downmix_coeff = args.downmix_surround_coeff
+    if args.downmix_output is not None:
+        config.downmix_output_path = args.downmix_output
     if args.preview:
         config.preview = True
     if args.preview_duration is not None:

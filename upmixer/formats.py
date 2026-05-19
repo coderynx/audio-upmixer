@@ -42,6 +42,11 @@ class OutputFormat:
     def has_back(self) -> bool:
         return ChannelLabel.BL in self.channels
 
+    @property
+    def bs2051_system(self) -> str:
+        """ITU-R BS.2051-3 system code, or empty string if no direct mapping."""
+        return {"5.1": "B", "5.1.2": "C", "5.1.4": "D", "7.1": "I", "7.1.4": "J"}.get(self.name, "")
+
 
 # Standard WAVEX channel orderings
 SURROUND_51 = OutputFormat(
