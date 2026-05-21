@@ -1,6 +1,6 @@
 """Spectral + RMS reference matching for the mastering bus (step 0).
 
-Runs before SpectralShaper and EQMatchShaper to imprint the overall "feel" of
+Runs before SpectralShaper to imprint the overall "feel" of
 a reference track onto the target mix.  Two independent, individually-toggleable
 stages:
 
@@ -13,15 +13,9 @@ RMS matching
     channels → clamped gain applied uniformly to ALL channels (including LFE)
     to preserve inter-channel balance.
 
-Reference channel-count handling
----------------------------------
-Uses the same proxy table as :mod:`~upmixer.mastering.eq_match`.  The table is
-intentionally copied here (not imported from that module) to avoid coupling to
-private names.
-
 LFE handling
 ------------
-Unlike :class:`~upmixer.mastering.eq.EQMatchShaper`, LFE is NOT bypassed.
+Unlike :class:`~upmixer.mastering.eq.SpectralShaper`, LFE is NOT bypassed.
 The proxy table already provides sensible mappings for LFE:
 
 - 1-ch ref  → channel 0 (mono)
@@ -45,7 +39,19 @@ from .eq import _apply_fir, _build_fir_from_breakpoints
 
 _log = logging.getLogger("upmixer")
 
-# ── Channel proxy table (copied verbatim from eq_match.py) ───────────────────
+from upmixer.manifest import register_block_keys as _rbk
+_rbk("mastering", {
+    "match_reference": {
+        "path":     ("config", "mastering_match_ref_path"),
+        "strength": ("config", "mastering_match_ref_strength"),
+        "spectrum": ("config", "mastering_match_ref_spectrum"),
+        "rms":      ("config", "mastering_match_ref_rms"),
+        "max_db":   ("config", "mastering_match_ref_max_db"),
+    },
+})
+del _rbk
+
+# ── Channel proxy table ───────────────────────────────────────────────────────
 # Maps (n_reference_channels) → {target_channel: reference_index | proxy_name}
 # Special proxy names:
 #   "mid"    = (ch0 + ch1) / 2
@@ -96,7 +102,6 @@ def _gaussian_smooth_log(
     values: np.ndarray,
     sigma_oct: float,
 ) -> np.ndarray:
-    """Gaussian kernel smoothing on a log-frequency axis (copied from eq_match)."""
     n = len(log_freqs)
     smoothed = np.empty(n)
     df = log_freqs[1] - log_freqs[0] if n > 1 else 1.0

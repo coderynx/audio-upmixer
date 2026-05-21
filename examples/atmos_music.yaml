@@ -42,9 +42,9 @@ mastering:
   eq:
     profile: atmos-streaming  # subtle bass warmth + presence + air shelf
     strength: 1.0             # 0.0 = bypass → 1.0 = full effect
-  # EQ Match — spectral matching to a reference track (independent of eq)
-  # eq_match:
-  #   reference: reference_atmos.wav
+  # Reference matching — spectral + RMS matching to a reference track (independent of eq)
+  # match_reference:
+  #   path: reference_atmos.wav
   #   strength: 0.5
   compressor:
     profile: glue

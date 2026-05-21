@@ -1,17 +1,10 @@
 """Spectral shaping (EQ) for the mastering bus.
 
-Two independent processors:
-
 :class:`SpectralShaper`
     Applies a predefined tonal curve to all channels except LFE via minimum-
     phase FIR filtering.
 
-:class:`EQMatchShaper`
-    Applies per-channel FIRs derived from an external source (e.g.
-    :class:`~upmixer.mastering.eq_match.EQMatcher`) to match the spectral
-    envelope of a reference track.  LFE is always bypassed.
-
-Processing (both classes)
+Processing
 --------------------------
 1. Build a linear-phase FIR with ``scipy.signal.firwin2`` from normalized
    frequency / linear-gain pairs (DC and Nyquist endpoints added automatically).
@@ -225,7 +218,7 @@ class SpectralShaper:
     minimum-phase FIR filtering.  A wet/dry ``strength`` parameter controls the
     blend from full bypass (0.0) to full effect (1.0).
 
-    For reference-based (match EQ) processing use :class:`EQMatchShaper`.
+    For reference-based matching use :class:`~upmixer.mastering.match_reference.ReferenceMatchProcessor`.
 
     Args:
         profile:     EQ profile name.  See :data:`EQ_PROFILE_NAMES`.
@@ -287,75 +280,4 @@ class SpectralShaper:
                 out[name] = ch
             else:
                 out[name] = _apply_fir(ch, ir, self._strength)
-        return out
-
-
-# ── EQMatchShaper — per-channel EQ match ─────────────────────────────────────
-
-class EQMatchShaper:
-    """Per-channel EQ match processor for the multichannel mastering bus.
-
-    Applies an individual minimum-phase FIR to each channel from a dict of
-    (freq_hz, gain_dB) breakpoints, typically produced by
-    :class:`~upmixer.mastering.eq_match.EQMatcher`.  LFE is always bypassed.
-    Channels absent from the breakpoints dict are passed through unchanged.
-
-    Independent of :class:`SpectralShaper` — both can be active simultaneously.
-
-    Args:
-        per_channel_breakpoints: Dict channel_name → list of (freq_hz, gain_dB).
-        strength:                Wet/dry blend [0.0 = bypass … 1.0 = full].
-        sample_rate:             Audio sample rate in Hz.
-        n_taps:                  FIR tap count (default 1023).
-    """
-
-    def __init__(
-        self,
-        per_channel_breakpoints: dict[str, list[tuple[float, float]]],
-        strength: float,
-        sample_rate: int,
-        n_taps: int = 1023,
-    ) -> None:
-        self._pc_bps = per_channel_breakpoints
-        self._strength = float(np.clip(strength, 0.0, 1.0))
-        self._sr = sample_rate
-        self._n_taps = n_taps
-
-    def _get_ir(self, ch_name: str) -> np.ndarray | None:
-        bps = self._pc_bps.get(ch_name)
-        if bps is None:
-            return None
-        return _build_fir_from_breakpoints(bps, self._sr, self._n_taps)
-
-    def process(
-        self,
-        channels: dict[str, np.ndarray],
-        lfe_key: str = "LFE",
-    ) -> dict[str, np.ndarray]:
-        """Apply per-channel EQ match to all channels except *lfe_key*.
-
-        Args:
-            channels: Dict channel_name → 1-D float array.
-            lfe_key:  Channel name to bypass (default ``"LFE"``).
-
-        Returns:
-            New channel dict.  LFE and channels without breakpoints are unchanged.
-        """
-        if self._strength == 0.0:
-            return channels
-        _log.info(
-            "  EQ match: %d channels  strength=%.2f",
-            len([c for c in channels if c != lfe_key]),
-            self._strength,
-        )
-        out: dict[str, np.ndarray] = {}
-        for name, ch in channels.items():
-            if name == lfe_key:
-                out[name] = ch
-                continue
-            ir = self._get_ir(name)
-            if ir is None:
-                out[name] = ch
-                continue
-            out[name] = _apply_fir(ch, ir, self._strength)
         return out

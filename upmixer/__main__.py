@@ -126,11 +126,17 @@ def _apply_cli_flags(config: UpmixConfig, args: argparse.Namespace, sample_rate_
         config.mastering_bass_excite = True
     if args.mastering_bass_lfe is not None:
         config.mastering_bass_lfe_gain_db = args.mastering_bass_lfe
-    # Mastering — EQ from reference
-    if args.mastering_eq_reference is not None:
-        config.mastering_eq_reference = args.mastering_eq_reference
-    if args.mastering_eq_match_strength is not None:
-        config.mastering_eq_match_strength = max(0.0, min(1.0, args.mastering_eq_match_strength))
+    # Mastering — reference matching
+    if args.match_reference is not None:
+        config.mastering_match_ref_path = args.match_reference
+    if args.match_reference_strength is not None:
+        config.mastering_match_ref_strength = max(0.0, min(1.0, args.match_reference_strength))
+    if args.no_match_reference_spectrum:
+        config.mastering_match_ref_spectrum = False
+    if args.no_match_reference_rms:
+        config.mastering_match_ref_rms = False
+    if args.match_reference_max_db is not None:
+        config.mastering_match_ref_max_db = args.match_reference_max_db
     # Mixing — stem rebalance
     if args.stem_rebalance is not None:
         config.stem_rebalance = _parse_key_value_pairs(args.stem_rebalance, float)
@@ -543,45 +549,41 @@ def main() -> None:
     parser.add_argument("--mastering-bass-excite",       action="store_true",                    help="Enable bass harmonic exciter (tanh waveshaping on sub-bass band).")
     parser.add_argument("--mastering-bass-lfe",          type=float, default=None, metavar="DB", help="LFE channel gain trim in dB.")
 
-    # ── Mastering: EQ from reference (Match EQ) ───────────────────────────────
+    # ── Mastering: reference matching ─────────────────────────────────────────
     parser.add_argument(
-        "--mastering-eq-reference",
+        "--match-reference",
         default=None,
         metavar="FILE",
         help=(
-            "Derive a per-channel EQ profile from a reference audio file and "
-            "apply it to the master bus (overrides --mastering-eq). "
-            "The reference may be mono through 7.1.4; missing channels are "
-            "estimated from available ones. "
-            "For best results use a reference with the same channel count as "
-            "the target format."
+            "Apply spectral envelope + RMS level matching against a reference "
+            "audio file (mono through 7.1.4). Runs as mastering step 0, before "
+            "preset EQ. For best results use a reference matching the target "
+            "channel count."
         ),
     )
     parser.add_argument(
-        "--mastering-eq-reference-save",
-        default=None,
-        metavar="PATH",
-        help="Save the generated EQ profile to a YAML or JSON file for reuse.",
-    )
-    parser.add_argument(
-        "--mastering-eq-match-strength",
+        "--match-reference-strength",
         type=float,
         default=None,
         metavar="S",
-        help=(
-            "EQ match curve intensity: scales gain_dB values before FIR design "
-            "(0.0 = flat, 1.0 = full reference curve). Default: 0.5. "
-            "Semantically different from --mastering-eq-strength (wet/dry blend) — "
-            "gain scaling is more predictable for broad spectral shapes."
-        ),
+        help="Spectral FIR wet/dry blend for reference matching (0.0–1.0, default 0.7).",
     )
     parser.add_argument(
-        "--generate-eq-profile",
+        "--no-match-reference-spectrum",
         action="store_true",
-        help=(
-            "Analyse --mastering-eq-reference, save the EQ profile to "
-            "--mastering-eq-reference-save, then exit (no upmix performed)."
-        ),
+        help="Disable per-channel spectral correction (keep RMS matching only).",
+    )
+    parser.add_argument(
+        "--no-match-reference-rms",
+        action="store_true",
+        help="Disable global RMS level matching (keep spectral correction only).",
+    )
+    parser.add_argument(
+        "--match-reference-max-db",
+        type=float,
+        default=None,
+        metavar="DB",
+        help="Maximum spectral correction magnitude in dB (default 12.0).",
     )
 
     # ── Mixing: stem rebalance ────────────────────────────────────────────────
@@ -699,38 +701,6 @@ def main() -> None:
     # ── 2. Apply CLI flags (override manifest) ────────────────────────────────
     _apply_cli_flags(config, args, sample_rate_set)
 
-    # ── 3a. --generate-eq-profile standalone tool ─────────────────────────────
-    if getattr(args, "generate_eq_profile", False):
-        ref_path = getattr(args, "mastering_eq_reference", None)
-        save_path = getattr(args, "mastering_eq_reference_save", None)
-        if not ref_path:
-            parser.error(
-                "--generate-eq-profile requires --mastering-eq-reference FILE"
-            )
-        if not save_path:
-            parser.error(
-                "--generate-eq-profile requires --mastering-eq-reference-save PATH"
-            )
-        from upmixer.mastering.eq_match import EQMatcher
-        import soundfile as _sf  # type: ignore[import-untyped]
-        _info = _sf.info(ref_path)
-        sr = _info.samplerate
-        from upmixer.formats import FORMAT_MAP, detect_input_format
-        import numpy as _np
-        _data, _sr = _sf.read(ref_path, dtype="float64", always_2d=True)
-        n_ch = _data.shape[1]
-        # Derive channel names from standard layout or use generic names
-        _std = {1: ["M"], 2: ["FL","FR"], 6: ["FL","FR","C","LFE","SL","SR"],
-                8: ["FL","FR","C","LFE","BL","BR","SL","SR"],
-                10: ["FL","FR","C","LFE","SL","SR","BL","BR","TFL","TFR"],
-                12: ["FL","FR","C","LFE","SL","SR","BL","BR","TFL","TFR","TBL","TBR"]}
-        chs = _std.get(n_ch, [f"CH{i}" for i in range(n_ch)])
-        matcher = EQMatcher(sr)
-        bps = matcher.analyze(ref_path, chs)
-        matcher.save_profile(bps, save_path)
-        print(f"EQ profile saved to: {save_path}")
-        sys.exit(0)
-
     # ── 4. Resolve mode and stem params (CLI only; manifest path returns early) ─
     mode = args.mode or "realtime"
     stem_model     = args.stem_model     or DEFAULT_MODEL
@@ -826,22 +796,6 @@ def main() -> None:
                 input_path, output_path,
                 input_format_override=input_format,
             )
-
-        # ── Optional: save EQ reference profile after single-file run ─────────
-        ref_save = getattr(args, "mastering_eq_reference_save", None)
-        if ref_save and config.mastering_eq_reference is not None:
-            from upmixer.mastering.eq_match import EQMatcher
-            from upmixer.formats import FORMAT_MAP
-            fmt = FORMAT_MAP.get(config.output_format)
-            ch_names = list(fmt.channels) if fmt else []
-            if ch_names:
-                matcher = EQMatcher(
-                    result.sample_rate if hasattr(result, "sample_rate")
-                    else (config.output_sample_rate or 48000)
-                )
-                bps = matcher.analyze(config.mastering_eq_reference, ch_names)
-                matcher.save_profile(bps, ref_save)
-                print(f"EQ profile saved to: {ref_save}", file=sys.stderr)
 
         if args.json:
             print(result.to_json())

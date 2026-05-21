@@ -15,6 +15,7 @@ Every manifest must declare a ``version`` and an ``assets`` list::
     # Global pipeline blocks (inherited by every asset unless overridden)
     engine:
       mode: stem          # or realtime
+      stem_cache_dir: /tmp/upmixer_stems
     mixing:
       channel_layout: 7.1.4
       stem_rebalance:
@@ -135,6 +136,7 @@ _BLOCK_REGISTRY: dict[str, BlockMapping] = {
         "stem_model":     ("engine", "stem_model"),
         "stem_model_dir": ("engine", "stem_model_dir"),
         "input_format":   ("engine", "input_format"),
+        "stem_cache_dir": ("config", "stem_cache_dir"),
     },
 
     # ── format: ───────────────────────────────────────────────────────────────
@@ -152,7 +154,6 @@ _BLOCK_REGISTRY: dict[str, BlockMapping] = {
         "channel_layout": ("config", "format"),
         "stem_rebalance": ("config", "stem_rebalance"),
         "stem_eq":        ("config", "stem_eq_profiles"),
-        "stem_cache_dir": ("config", "stem_cache_dir"),
     },
 
     # ── processing: ───────────────────────────────────────────────────────────
@@ -424,11 +425,11 @@ def parse_manifest(data: dict) -> tuple[ManifestMeta | None, list[AssetJob]]:
             if k in all_block_keys and isinstance(v, dict)
         }
 
-        # Asset-level shortcut: stem_cache_dir → mixing.stem_cache_dir
+        # Asset-level shortcut: stem_cache_dir → engine.stem_cache_dir
         if asset.get("stem_cache_dir") is not None:
-            mixing_ov = dict(asset_blocks.get("mixing", {}))
-            mixing_ov.setdefault("stem_cache_dir", asset["stem_cache_dir"])
-            asset_blocks["mixing"] = mixing_ov
+            engine_ov = dict(asset_blocks.get("engine", {}))
+            engine_ov.setdefault("stem_cache_dir", asset["stem_cache_dir"])
+            asset_blocks["engine"] = engine_ov
 
         # Deep-merge: global ← asset overrides
         effective = _deep_merge(global_blocks, asset_blocks)

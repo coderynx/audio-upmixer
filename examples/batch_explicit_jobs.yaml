@@ -60,4 +60,4 @@ assets:
 
   - input:  /bonus/hidden_track.flac
     output: /masters/bonus_hidden_atmos.wav
-    stem_cache_dir: /tmp/stems/bonus   # per-asset stem cache override
+    stem_cache_dir: /tmp/stems/bonus   # per-asset shortcut → engine.stem_cache_dir

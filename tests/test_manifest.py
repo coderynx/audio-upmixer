@@ -12,7 +12,7 @@ import upmixer.mastering.eq          # noqa: F401
 import upmixer.mastering.compressor  # noqa: F401
 import upmixer.mastering.bass        # noqa: F401
 import upmixer.mastering.chain       # noqa: F401
-import upmixer.mastering.eq_match    # noqa: F401
+import upmixer.mastering.match_reference  # noqa: F401
 import upmixer.routing.channel_router  # noqa: F401
 
 from upmixer.config import UpmixConfig
@@ -374,7 +374,7 @@ class TestBatchAssetsWithOverrides:
         assert jobs[0].engine.get("mode") == "stem"
         assert jobs[1].engine.get("mode") == "realtime"
 
-    def test_stem_cache_dir_shortcut_does_not_override_mixing_block(self):
+    def test_stem_cache_dir_shortcut_does_not_override_other_blocks(self):
         data = {
             "version": "1.0",
             "mixing": {"stem_rebalance": {"Vocals": 1.0}},
@@ -470,8 +470,8 @@ class TestParseAndApplyIntegration:
         assert cfg.mastering_bass_profile == "enhance"
         assert cfg.mastering_bass_excite is True
 
-    def test_eq_match_section(self):
-        data = _minimal(mastering={"eq_match": {"reference": "ref.wav", "strength": 0.5}})
+    def test_match_reference_section(self):
+        data = _minimal(mastering={"match_reference": {"path": "ref.wav", "strength": 0.5}})
         _, jobs = parse_manifest(data)
         cfg = UpmixConfig()
         apply_asset_job(cfg, jobs[0])
@@ -554,7 +554,7 @@ class TestBlockRegistry:
     def test_mastering_registered_by_modules(self):
         assert "mastering" in _BLOCK_REGISTRY
         m = _BLOCK_REGISTRY["mastering"]
-        for sub in ("eq", "compressor", "bass", "loudness", "eq_match"):
+        for sub in ("eq", "compressor", "bass", "loudness", "match_reference"):
             assert sub in m, f"mastering.{sub} not registered"
 
     def test_register_block_adds_new_section(self):

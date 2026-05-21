@@ -96,6 +96,7 @@ metadata:             # optional — informational only, not inherited by assets
 
 engine:
   mode: stem          # or realtime
+  stem_cache_dir: /tmp/upmixer_stems
 
 mixing:
   channel_layout: 7.1.4
@@ -182,10 +183,10 @@ version: "1.0"
 
 engine:
   mode: stem
+  stem_cache_dir: /tmp/upmixer_stems
 
 mixing:
   channel_layout: 7.1.4
-  stem_cache_dir: /tmp/upmixer_stems
 
 mastering:
   loudness:

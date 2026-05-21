@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-import upmixer.mastering.eq_match  # noqa: F401 — triggers register_block_keys for mastering.eq_match
+import upmixer.mastering.match_reference  # noqa: F401 — triggers register_block_keys for mastering.match_reference
 
 from upmixer.config import UpmixConfig
 from upmixer.manifest import _BLOCK_REGISTRY, _FIELD_MAP, apply_asset_job, AssetJob, parse_manifest
@@ -416,8 +416,8 @@ class TestConfigFields:
 # ── manifest integration ──────────────────────────────────────────────────────
 
 class TestManifestMatchReferenceIntegration:
-    def test_eq_match_in_registry(self):
-        assert "eq_match" in _BLOCK_REGISTRY.get("mastering", {})
+    def test_match_reference_in_registry(self):
+        assert "match_reference" in _BLOCK_REGISTRY.get("mastering", {})
 
     def test_flat_key_path_applies(self):
         job = AssetJob(input="x", output="y",
@@ -447,12 +447,12 @@ class TestManifestMatchReferenceIntegration:
         apply_asset_job(cfg, job)
         assert cfg.mastering_match_ref_rms is False
 
-    def test_nested_eq_match_section(self):
+    def test_nested_match_reference_section(self):
         data = {
             "version": "1.0.0",
             "mastering": {
-                "eq_match": {
-                    "reference": "ref.wav",
+                "match_reference": {
+                    "path": "ref.wav",
                     "strength": 0.5,
                     "spectrum": True,
                     "rms": False,

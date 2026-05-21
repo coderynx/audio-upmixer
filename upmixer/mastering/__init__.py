@@ -9,7 +9,6 @@ Sub-modules:
     chain            — MasteringChain orchestrator
     match_reference  — ReferenceMatchProcessor (spectral + RMS reference matching)
     eq               — SpectralShaper + EQ_PROFILES
-    eq_match         — EQMatcher + scale_breakpoints (standalone utility)
     compressor       — BusCompressor + COMP_PROFILES
     bass             — BassController + BASS_PROFILES
 """

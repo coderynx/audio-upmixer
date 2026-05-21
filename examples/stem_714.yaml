@@ -13,6 +13,7 @@ engine:
   mode: stem
   # stem_model: htdemucs_6s.yaml               # 6-stem model
   # stem_model: BS-Roformer-Viperx-1297.ckpt   # high-quality RoFormer
+  # stem_cache_dir: /tmp/upmixer_stems         # skip re-separation on repeated test runs
 
 # ── Mixing (stem mode only) ───────────────────────────────────────────────────
 mixing:
@@ -27,17 +28,15 @@ mixing:
   #   Vocals: vocal-presence
   #   Bass:   bass-warmth
   #   Drums:  drums-punch
-  # Stem cache — skip re-separation on repeated test runs
-  # stem_cache_dir: /tmp/upmixer_stems
 
 # ── Mastering ─────────────────────────────────────────────────────────────────
 mastering:
   eq:
     profile: spatial-present  # adds presence and definition to instruments
     strength: 0.8
-  # EQ Match — independent reference-based spectral matching
-  # eq_match:
-  #   reference: reference_714.wav
+  # Reference matching — spectral + RMS matching to a reference track (independent of eq)
+  # match_reference:
+  #   path: reference_714.wav
   #   strength: 0.5
   compressor:
     profile: transparent      # very gentle — preserves studio dynamics

@@ -28,9 +28,9 @@ mastering:
   eq:
     profile: spatial-warm   # adds body to streaming-mastered stereo sources
     strength: 0.7
-  # EQ Match — independent reference-based spectral matching
-  # eq_match:
-  #   reference: reference_51.wav
+  # Reference matching — spectral + RMS matching to a reference track (independent of eq)
+  # match_reference:
+  #   path: reference_51.wav
   #   strength: 0.5
   # Bus compression — omitted by default for realtime (preserve dynamics)
   # compressor:
