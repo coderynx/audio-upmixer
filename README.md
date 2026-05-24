@@ -421,16 +421,9 @@ ADM-BWF output (`--output-type adm-bwf`) embeds ITU-R BS.2076-2 metadata for DAW
 
 ---
 
-## References and credits
+## References
 
 - [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) by nomadkaraoke — stem separation via Demucs and RoFormer models
-- [SoundFile](https://github.com/bastibe/python-soundfile) — audio I/O
-- [SciPy](https://scipy.org/) — filtering, STFT, resampling
-- [NumPy](https://numpy.org/) — array processing
-- ITU-R BS.1770-4 — integrated loudness measurement and gating algorithm
-- ITU-R BS.2076-2 — Audio Definition Model (ADM) for broadcast WAV
-- Dolby Atmos Music Master Delivery Specification v2022.07 — loudness, container, and LFE requirements for streaming delivery
-- Dolby Atmos Music mixing practice — spatial routing philosophy for the stem engine
 
 ---
 
