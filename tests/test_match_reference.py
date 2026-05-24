@@ -1,6 +1,5 @@
 """Tests for upmixer.mastering.match_reference.ReferenceMatchProcessor."""
 import numpy as np
-import pytest
 
 import upmixer.mastering.match_reference  # noqa: F401 — triggers register_block_keys for mastering.match_reference
 
@@ -9,7 +8,6 @@ from upmixer.manifest import _BLOCK_REGISTRY, _FIELD_MAP, apply_asset_job, Asset
 from upmixer.mastering.match_reference import (
     ReferenceMatchProcessor,
     _CHANNEL_PROXIES,
-    _resolve_proxy,
     _gaussian_smooth_log,
 )
 

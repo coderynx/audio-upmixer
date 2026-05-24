@@ -12,31 +12,21 @@ import soundfile as sf
 _log = logging.getLogger("upmixer")
 
 
-# Default model — BS-Roformer-SW: high-quality vocal/instrument separation
 DEFAULT_MODEL = "BS-Roformer-SW.ckpt"
 
-# All stem names audio-separator may produce, mapped to canonical routing names.
-# Keys = substring that appears in the (StemName) tag in output filenames.
-# Values = canonical name used in DEFAULT_ROUTING in stem_router.py.
 STEM_NAME_MAP: dict[str, str] = {
-    # 4-stem Demucs / BS-Roformer primary stems
     "Vocals": "Vocals",
     "Drums": "Drums",
     "Bass": "Bass",
     "Other": "Other",
-    # 6-stem extended primary stems
     "Guitar": "Guitar",
     "Piano": "Piano",
-    # RoFormer 2-stem
     "Instrumental": "Instrumental",
-    # Karaoke / vocal splitter variants
     "Lead Vocals": "Lead Vocals",
     "Backing Vocals": "Backing Vocals",
     "No Vocals": "Instrumental",
-    # De-verb / denoise outputs
     "Reverb": "Other",
     "No Reverb": "Vocals",
-    # DrumSep model outputs (MDX23C-DrumSep-aufr33-jarredou)
     # NOTE: verify exact tag strings if model output filenames differ
     "Kick":   "Kick",
     "Snare":  "Snare",
@@ -45,24 +35,13 @@ STEM_NAME_MAP: dict[str, str] = {
     "Hi-Hat": "Hi-Hat",
     "Ride":   "Ride",
     "Crash":  "Crash",
-    # Crowd isolation model outputs (mel_band_roformer_crowd_aufr33_viperx)
     # NOTE: this model tags its residual as "(other)" — same tag as the primary
-    # model's catch-all stem.  The disambiguation is handled via MODEL_STEM_OVERRIDES
-    # below, which remaps "(other)" → "_crowd_other" when this specific model runs.
     "Crowd":    "Crowd",
     "No Crowd": "_crowd_other",   # kept as fallback in case model config changes
 }
 
 
-# Per-model stem tag overrides.
-# Some models reuse generic tags (e.g. "(other)") for stems that have a
-# specific role in the multi-stage pipeline.  Entries here take precedence
-# over STEM_NAME_MAP when the named model is running.
 MODEL_STEM_OVERRIDES: dict[str, dict[str, str]] = {
-    # Crowd isolation model: its residual output is tagged "(other)" — the same
-    # tag that the primary 6-stem model uses for its catch-all stem.  Without
-    # this override the residual would be mapped to "Other" (primary meaning)
-    # and discarded rather than kept on disk as "_crowd_other" for Stage 1.
     "mel_band_roformer_crowd_aufr33_viperx_sdr_8.7144.ckpt": {
         "other": "_crowd_other",
     },
@@ -134,8 +113,8 @@ class StemSeparator:
         )
         self._sample_rate = sample_rate
         self._log_level = log_level
-        self._loaded_sep = None   # loaded lazily, reused across all separate() calls
-        self._tmp_dir: str | None = None  # persistent output dir for this instance
+        self._loaded_sep = None
+        self._tmp_dir: str | None = None
 
     def _ensure_tmp_dir(self) -> str:
         """Return (creating if needed) the persistent temp directory."""
@@ -157,7 +136,6 @@ class StemSeparator:
         if self._loaded_sep is None:
             _check_import()
 
-            # Route audio-separator's internal logger through ours (idempotent).
             _as_log = logging.getLogger("audio_separator.separator.separator")
             if not any(isinstance(h, _ForwardHandler) for h in _as_log.handlers):
                 _as_log.addHandler(_ForwardHandler(_log))
@@ -199,7 +177,6 @@ class StemSeparator:
         _overrides = MODEL_STEM_OVERRIDES.get(self._model)
         stems: dict[str, np.ndarray] = {}
         for path in output_paths:
-            # audio-separator may return basenames or absolute paths
             full_path = path if os.path.isabs(path) else os.path.join(tmp_dir, path)
             stem_name = _parse_stem_name(full_path, _overrides)
             if stem_name is None:
@@ -211,8 +188,6 @@ class StemSeparator:
             try:
                 audio, _ = sf.read(full_path, dtype="float32", always_2d=True)
             except Exception as exc:
-                # Separator may write an empty or corrupt file for silent stems
-                # (e.g. a "drums" stem from a piano-only track).  Log and skip.
                 _log.warning(
                     "Skipping stem '%s' — could not read '%s': %s",
                     stem_name, os.path.basename(full_path), exc,
@@ -222,11 +197,9 @@ class StemSeparator:
                 except OSError:
                     pass
                 continue
-            # Ensure stereo — mono models may write single-channel
             if audio.shape[1] == 1:
                 audio = np.concatenate([audio, audio], axis=1)
-            stems[stem_name] = audio  # (n_samples, 2)
-            # Remove stem file immediately after reading to keep disk usage bounded
+            stems[stem_name] = audio
             try:
                 os.unlink(full_path)
             except OSError:
@@ -295,7 +268,7 @@ class StemSeparator:
                 continue
 
             if stem_name in keep_on_disk:
-                on_disk[stem_name] = full  # caller manages lifecycle
+                on_disk[stem_name] = full
                 continue
 
             try:
@@ -372,7 +345,6 @@ def _parse_stem_name(
     best_pos: int = -1
     best_canonical: str | None = None
 
-    # Model-specific overrides — checked at their position (keys already lowercase)
     if model_overrides:
         for tag, canonical in model_overrides.items():
             pos = name.rfind(f"({tag})")
@@ -380,7 +352,6 @@ def _parse_stem_name(
                 best_pos = pos
                 best_canonical = canonical
 
-    # General map — rightmost occurrence wins over intermediate-stage tags
     for tag, canonical in STEM_NAME_MAP.items():
         pos = name.rfind(f"({tag.lower()})")
         if pos > best_pos:

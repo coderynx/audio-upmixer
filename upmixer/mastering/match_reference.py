@@ -51,12 +51,6 @@ _rbk("mastering", {
 })
 del _rbk
 
-# ── Channel proxy table ───────────────────────────────────────────────────────
-# Maps (n_reference_channels) → {target_channel: reference_index | proxy_name}
-# Special proxy names:
-#   "mid"    = (ch0 + ch1) / 2
-#   "mid_lp" = lowpass of mid (≤ 80 Hz)  — LFE proxy for stereo refs
-#   "mid46"  = mean of channels 4 and 5
 _CHANNEL_PROXIES: dict[int, dict[str, Any]] = {
     1: {
         "FL": 0, "FR": 0, "C": 0, "LFE": 0,
@@ -244,7 +238,6 @@ class ReferenceMatchProcessor:
         self._ref_data: np.ndarray | None = None
         self._proxy_table: dict[str, Any] | None = None
 
-    # ── internal ────────────────────────────────────────────────────────────
 
     def _load_if_needed(self) -> None:
         if self._ref_data is not None:
@@ -300,7 +293,7 @@ class ReferenceMatchProcessor:
         bp_freqs = np.logspace(
             np.log10(_MIN_FREQ_HZ), np.log10(nyquist), num=_N_BREAKPOINTS
         )
-        bp_freqs[-1] = nyquist  # prevent floating-point drift past Nyquist
+        bp_freqs[-1] = nyquist
         bp_gains = np.interp(bp_freqs, freqs, correction_db)
 
         return [(float(f), float(g)) for f, g in zip(bp_freqs, bp_gains)]
@@ -347,7 +340,6 @@ class ReferenceMatchProcessor:
         gain_db = 20.0 * np.log10((rms_ref + _EPS) / (rms_tgt + _EPS))
         return float(np.clip(gain_db, -_RMS_CLAMP_DB, _RMS_CLAMP_DB))
 
-    # ── public ──────────────────────────────────────────────────────────────
 
     def process(
         self,
@@ -374,7 +366,6 @@ class ReferenceMatchProcessor:
 
         out: dict[str, np.ndarray] = {}
 
-        # ── RMS matching (global scalar, applied first) ───────────────────────
         if self._match_rms:
             rms_gain_db = self._compute_rms_gain_db(
                 ref_data, proxy_table, channels, lfe_key
@@ -386,7 +377,6 @@ class ReferenceMatchProcessor:
         else:
             out = dict(channels)
 
-        # ── Spectral matching (per-channel FIR) ──────────────────────────────
         if self._match_spectrum and self._strength > 0.0:
             _log.info(
                 "  Match reference: spectral correction  strength=%.2f  max=%.1f dB",

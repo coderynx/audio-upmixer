@@ -48,7 +48,6 @@ _rbk("mastering", {
 })
 del _rbk
 
-# ── Predefined bass profiles ──────────────────────────────────────────────────
 
 BASS_PROFILES: dict[str, dict] = {
     "boost": dict(
@@ -71,7 +70,6 @@ BASS_PROFILES: dict[str, dict] = {
 
 BASS_PROFILE_NAMES: tuple[str, ...] = tuple(sorted(BASS_PROFILES.keys()))
 
-# Stereo pairs addressed by the bass mono-maker (both channels must exist)
 _STEREO_PAIRS: list[tuple[str, str]] = [
     ("FL", "FR"),
     ("SL", "SR"),
@@ -80,11 +78,9 @@ _STEREO_PAIRS: list[tuple[str, str]] = [
     ("TBL", "TBR"),
 ]
 
-# Sub-bass / mid-bass crossover frequencies
 _SUB_CUTOFF_HZ: float = 80.0
 _MID_CUTOFF_HZ: float = 200.0
 
-# Harmonic exciter blend amount (fraction of harmonics mixed back in)
 _EXCITE_BLEND: float = 0.15
 _EXCITE_DRIVE: float = 3.0
 
@@ -124,17 +120,13 @@ class BassController:
         self._lfe_db = float(lfe_gain_db)
         self._sr = sample_rate
 
-        # Pre-compute SOS filters
         nyq = sample_rate / 2.0
 
-        # Sub-bass: LP at 80 Hz
         self._sos_sub_lp = butter(2, _SUB_CUTOFF_HZ / nyq, btype="low", output="sos")
 
-        # Mid-bass: BP 80–200 Hz via cascade of HP + LP
         self._sos_mid_lp = butter(2, _MID_CUTOFF_HZ / nyq, btype="low", output="sos")
         self._sos_mid_hp = butter(2, _SUB_CUTOFF_HZ / nyq, btype="high", output="sos")
 
-        # Mono-maker LP / HP
         if self._mono_hz is not None:
             mono_norm = float(np.clip(self._mono_hz / nyq, 1e-4, 0.999))
             self._sos_mono_lp = butter(2, mono_norm, btype="low",  output="sos")
@@ -143,7 +135,6 @@ class BassController:
             self._sos_mono_lp = None
             self._sos_mono_hp = None
 
-    # ── helpers ───────────────────────────────────────────────────────────────
 
     def _apply_band_gain(
         self, ch: np.ndarray,
@@ -161,7 +152,6 @@ class BassController:
             band = sosfilt(sos_hp, band)
         return (ch - band) + band * band_lin
 
-    # ── public API ────────────────────────────────────────────────────────────
 
     def process(
         self,
@@ -181,9 +171,8 @@ class BassController:
         sub_lin = 10.0 ** (self._sub_db / 20.0)
         mid_lin = 10.0 ** (self._mid_db / 20.0)
 
-        out: dict[str, np.ndarray] = dict(channels)  # shallow copy
+        out: dict[str, np.ndarray] = dict(channels)
 
-        # ── Stage 1: low-end EQ on non-LFE channels ───────────────────────────
         if self._sub_db != 0.0 or self._mid_db != 0.0:
             for name, ch in channels.items():
                 if name == lfe_key:
@@ -201,7 +190,6 @@ class BassController:
                 self._sub_db, self._mid_db,
             )
 
-        # ── Stage 2: bass mono-maker ──────────────────────────────────────────
         if self._sos_mono_lp is not None:
             for l_key, r_key in _STEREO_PAIRS:
                 if l_key not in out or r_key not in out:
@@ -220,7 +208,6 @@ class BassController:
                 "  BassController: bass-mono at %.0f Hz", self._mono_hz
             )
 
-        # ── Stage 3: harmonic exciter ─────────────────────────────────────────
         if self._excite:
             for name, ch in out.items():
                 if name == lfe_key:
@@ -231,7 +218,6 @@ class BassController:
                 out[name] = arr + harmonics
             _log.debug("  BassController: harmonic exciter enabled")
 
-        # ── Stage 4: LFE gain trim ────────────────────────────────────────────
         if self._lfe_db != 0.0 and lfe_key in out:
             lfe_lin = 10.0 ** (self._lfe_db / 20.0)
             out[lfe_key] = out[lfe_key].astype(np.float64) * lfe_lin

@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 import os
-import tempfile
-from dataclasses import asdict
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 import soundfile as sf
 
-from upmixer.batch import BatchJob, BatchProcessor, BatchResult, resolve_batch_jobs
+from upmixer.batch import BatchProcessor, BatchResult, resolve_batch_jobs
 from upmixer.config import UpmixConfig
 from upmixer.result import UpmixResult
 

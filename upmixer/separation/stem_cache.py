@@ -47,7 +47,7 @@ import numpy as np
 _log = logging.getLogger("upmixer")
 
 _METADATA_FILE = "metadata.json"
-_MTIME_TOLERANCE = 2.0  # seconds — FAT32 / network FS mtime granularity
+_MTIME_TOLERANCE = 2.0
 
 
 def _preview_tag(
@@ -59,7 +59,7 @@ def _preview_tag(
     if not is_preview:
         return "full"
     dur = preview_duration if preview_duration is not None else 30.0
-    start = preview_start if preview_start is not None else -1.0  # -1 = auto-center
+    start = preview_start if preview_start is not None else -1.0
     return f"preview:{dur:.3f}@{start:.3f}"
 
 
@@ -109,7 +109,6 @@ class StemCache:
         self._root = Path(cache_dir)
         self._root.mkdir(parents=True, exist_ok=True)
 
-    # ── load ──────────────────────────────────────────────────────────────────
 
     def load(
         self,
@@ -151,11 +150,10 @@ class StemCache:
             _log.debug("  StemCache: corrupt metadata (%s), ignoring", exc)
             return None
 
-        # Validate mtime with tolerance (FAT32, NFS, samba can drift ±2 s)
         try:
             current_mtime = os.path.getmtime(str(Path(input_path).resolve()))
         except OSError:
-            return None  # input file gone
+            return None
         stored_mtime = float(meta.get("mtime", 0.0))
         if abs(current_mtime - stored_mtime) > _MTIME_TOLERANCE:
             _log.debug(
@@ -164,7 +162,6 @@ class StemCache:
             )
             return None
 
-        # Load stem WAV files
         try:
             import soundfile as sf  # type: ignore[import-untyped]
         except ImportError:
@@ -179,7 +176,7 @@ class StemCache:
                 _log.debug(
                     "  StemCache: missing file %s for key %s", wav_path.name, key
                 )
-                return None  # partial cache → cold miss
+                return None
             data, _ = sf.read(str(wav_path), dtype="float64", always_2d=True)
             stems[stem_key] = data
 
@@ -192,7 +189,6 @@ class StemCache:
         )
         return stems, sep_sr
 
-    # ── save ──────────────────────────────────────────────────────────────────
 
     def save(
         self,
@@ -236,14 +232,11 @@ class StemCache:
         entry_dir = self._root / key
         entry_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write stems
         for stem_key, audio in stems.items():
             wav_path = entry_dir / _stem_filename(stem_key)
-            # Ensure 2-D for soundfile
             arr = audio if audio.ndim == 2 else audio[:, np.newaxis]
             sf.write(str(wav_path), arr.astype(np.float32), sample_rate, subtype="PCM_24")
 
-        # Write metadata
         meta = {
             "input_path": abs_path,
             "mtime": round(mtime, 6),

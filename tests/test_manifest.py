@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -21,7 +20,6 @@ from upmixer.manifest import (
     _FIELD_MAP,
     AssetJob,
     ManifestError,
-    ManifestMeta,
     apply_asset_job,
     list_manifest_keys,
     load_manifest,

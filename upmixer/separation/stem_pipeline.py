@@ -62,8 +62,6 @@ from upmixer.utils import preview_slice, itu_downmix_stereo
 
 _log = logging.getLogger("upmixer")
 
-# Ordered list of (zone_name, left_channel, right_channel) pairs.
-# Only zones whose both channels exist in the input are extracted.
 _ZONE_PAIRS: list[tuple[str, ChannelLabel, ChannelLabel]] = [
     ("front",        ChannelLabel.FL,  ChannelLabel.FR),
     ("surround",     ChannelLabel.SL,  ChannelLabel.SR),
@@ -72,7 +70,6 @@ _ZONE_PAIRS: list[tuple[str, ChannelLabel, ChannelLabel]] = [
     ("height_back",  ChannelLabel.TBL, ChannelLabel.TBR),
 ]
 
-# Channels passed through directly without stem separation.
 _PASSTHROUGH_LABELS: list[ChannelLabel] = [ChannelLabel.C, ChannelLabel.LFE]
 
 
@@ -108,9 +105,6 @@ class StemUpmixPipeline:
         self.config = config or UpmixConfig()
         self._model_dir = model_dir
         self._custom_routing = custom_routing
-        # Per-model separator cache: model_filename → StemSeparator.
-        # Models are loaded once and reused across files that share the same
-        # sample rate — the dominant cost saving in batch mode.
         self._separators: dict[str, StemSeparator] = {}
         self._separator_sr: int | None = None
 
@@ -123,7 +117,6 @@ class StemUpmixPipeline:
         """
         sep_log_level = logging.DEBUG if _log.isEnabledFor(logging.DEBUG) else logging.WARNING
         if self._separator_sr != sep_sr:
-            # Sample rate changed: close all cached separators and start fresh
             if self._separators:
                 _log.info(
                     "  Separator: sample rate changed %d→%d, re-creating.",
@@ -172,10 +165,8 @@ class StemUpmixPipeline:
         Returns a dict of canonical_name → ndarray for all requested stems.
         """
         all_loaded: dict[str, np.ndarray] = {}
-        # Accumulates canonical_name → absolute WAV path for on-disk intermediates
         all_disk: dict[str, str] = {}
 
-        # Pre-compute all input_source values used by later stages (excluding "original")
         later_inputs: frozenset[str] = frozenset(
             t.input_source for t in plan.tasks if t.input_source != "original"
         )
@@ -209,8 +200,6 @@ class StemUpmixPipeline:
                 else all_disk[task.input_source]
             )
 
-            # Determine which output stems from this task need to remain on disk
-            # because a later task will read them as its input.
             keep_on_disk = task.output_stems & later_inputs
 
             sep = self._get_or_create_separator(task.model, sep_sr)
@@ -224,15 +213,12 @@ class StemUpmixPipeline:
                 sorted(on_disk.keys()) or "(none)",
             )
 
-            # Collect loaded stems that are final requested outputs
             for name, audio in loaded.items():
                 if name in plan.requested_stems:
                     all_loaded[name] = audio
 
             all_disk.update(on_disk)
 
-        # Load on-disk stems that are also requested as final outputs
-        # (e.g. "Drums" was kept on disk for Stage 2 but user also wants it)
         for name, path in all_disk.items():
             if name in plan.requested_stems and name not in all_loaded:
                 audio, _ = sf.read(path, dtype="float32", always_2d=True)
@@ -240,7 +226,6 @@ class StemUpmixPipeline:
                     audio = np.concatenate([audio, audio], axis=1)
                 all_loaded[name] = audio
 
-        # Clean up on-disk intermediates not needed in the final result
         for name, path in all_disk.items():
             if name not in plan.requested_stems:
                 try:
@@ -304,17 +289,12 @@ class StemUpmixPipeline:
         _log.info("  Sample rate:   %d Hz", sr)
         _log.info("  Duration:      %.2fs", audio_full.shape[0] / sr)
         _log.info("  Output format: %s (%dch)", output_fmt.name, output_fmt.n_channels)
-        # Resolve the stem execution plan from config.stems (or default 6-stem set)
         _raw_stems = cfg.stems or []
         _canonical = normalize_stems(_raw_stems) if _raw_stems else list(DEFAULT_STEMS)
         plan = resolve_separation_plan(_canonical)
         _log.info("  Stems:         %s", sorted(plan.requested_stems))
         _log.info("  Models:        %s", [t.model for t in plan.tasks])
 
-        # Preview: slice audio_full to the requested window before any processing.
-        # Stereo mode normally passes the original file path to the separator;
-        # after slicing we must pass a numpy array so the temp-file path below
-        # applies — forcing a write of the sliced audio for the separator.
         _preview_stereo_forced_array: bool = False
         if cfg.preview:
             audio_full, t0_preview, t1_preview = preview_slice(
@@ -324,25 +304,15 @@ class StemUpmixPipeline:
                 "  Preview:       %.2fs–%.2fs (%.2fs window)",
                 t0_preview, t1_preview, audio_full.shape[0] / sr,
             )
-            _preview_stereo_forced_array = True  # force numpy path even for stereo
+            _preview_stereo_forced_array = True
 
-        # Resolve the final output sample rate BEFORE creating the separator so
-        # audio-separator resamples internally during stem extraction.  All
-        # downstream processing (routing, LN, resampling) then runs at out_sr
-        # instead of the input sample rate.
-        #
         # Why this matters: a 192 kHz / 408 s input with ADM-BWF output produces
-        # ~7.5 GB of float64 channel data at 192 kHz before the final 48 kHz
-        # resample.  By resolving the target rate early and passing it to the
-        # separator, every post-separation step works at 48 kHz (~1.9 GB).
         out_sr: int = cfg.output_sample_rate or sr
         if cfg.output_type == "adm-bwf" and cfg.output_sample_rate is None and out_sr != 48_000:
             out_sr = 48_000
             _log.info("  ADM-BWF: output forced to 48 kHz (Dolby spec)")
-        sep_sr = out_sr  # separate at final output rate; separator handles resample
+        sep_sr = out_sr
 
-        # ── Stem cache: try to load pre-separated stems ───────────────────────
-        # Check before building the separator (avoids loading the model).
         _stem_cache = None
         _cache_hit_stems: dict[str, np.ndarray] | None = None
         if cfg.stem_cache_dir:
@@ -357,12 +327,7 @@ class StemUpmixPipeline:
             if _cache_result is not None:
                 _cache_hit_stems, _ = _cache_result
 
-        # Build zone pairs and passthrough channels
         if input_fmt.n_channels <= 2:
-            # Stereo / mono: single zone, untagged stems → DEFAULT_ROUTING
-            # (full 3D spread including SL/SR/BL/BR/height/LFE).
-            # In preview mode use numpy array (forces temp-file write below)
-            # so the separator sees only the sliced window.
             if _preview_stereo_forced_array:
                 n_ch = audio_full.shape[1] if audio_full.ndim > 1 else 1
                 front_arr = (
@@ -385,11 +350,9 @@ class StemUpmixPipeline:
 
         _progress("  Separating stems...", 0.1)
 
-        # Separate each zone (skip if cache hit)
         all_stems: dict[str, np.ndarray] = {}
 
         if _cache_hit_stems is not None:
-            # Cache hit — skip separation entirely
             all_stems = _cache_hit_stems
             _log.info("  Stem cache: using cached stems (separation skipped)")
         else:
@@ -415,8 +378,6 @@ class StemUpmixPipeline:
 
                     zone_stems = self._execute_plan(plan, sep_path, sep_sr)
                     for stem_name, stem_audio in zone_stems.items():
-                        # Stereo: unzoned keys → DEFAULT_ROUTING (full 3D + LFE).
-                        # Multichannel: zone-tagged keys → ZONE_ROUTING.
                         key = stem_name if stereo_mode else f"{stem_name}@{zone_name}"
                         all_stems[key] = stem_audio
 
@@ -425,7 +386,6 @@ class StemUpmixPipeline:
                     if os.path.exists(tmp):
                         os.unlink(tmp)
 
-            # Save to cache for next run
             if _stem_cache is not None and all_stems:
                 _stem_cache.save(
                     input_path, plan.stems_hash, sep_sr, all_stems, sep_sr,
@@ -446,7 +406,6 @@ class StemUpmixPipeline:
             stem_summary, n_samples / sep_sr, sep_sr,
         )
 
-        # Resample passthrough channels to sep_sr for consistent mixing
         passthrough_resampled: dict[str, np.ndarray] = {}
         if passthrough:
             if sr != sep_sr:
@@ -459,19 +418,13 @@ class StemUpmixPipeline:
             else:
                 passthrough_resampled = {k: v.astype(np.float64) for k, v in passthrough.items()}
 
-        # ── Optional: stem rebalance (pre-routing) ───────────────────────────────
-        # Applied after all_stems is fully built and resampled, before routing.
-        # When disabled the existing content-aware routing runs unchanged.
         if cfg.stem_rebalance:
             from upmixer.separation.stem_rebalance import StemRebalancer
             _log.info("  Applying stem rebalance: %s", cfg.stem_rebalance)
             rebalancer = StemRebalancer(cfg.stem_rebalance, sep_sr)
             all_stems = rebalancer.process(all_stems)
-            # Recompute n_samples in case any array changed shape (shouldn't happen,
-            # but guards against accidental truncation in custom rebalancers).
             n_samples = max(len(s) for s in all_stems.values())
 
-        # ── Optional: per-stem EQ (pre-routing) ──────────────────────────────
         if cfg.stem_eq_profiles:
             from upmixer.separation.stem_eq import StemEQ
             _log.info("  Applying per-stem EQ: %s", cfg.stem_eq_profiles)
@@ -479,9 +432,7 @@ class StemUpmixPipeline:
             all_stems = stem_eq.process(all_stems)
 
         router = StemRouter(cfg, output_fmt, sep_sr, self._custom_routing)
-        # out_sr already resolved above (before separator creation)
 
-        # Content-aware analysis: per-stem features drive spatial gain scaling
         _progress("  Analyzing stem content...", 0.75)
         stem_features = analyze_stems(all_stems, sep_sr)
         for stem_key, feat in sorted(stem_features.items()):
@@ -494,7 +445,6 @@ class StemUpmixPipeline:
                 feat.low_freq_ratio, feat.transient_ratio,
             )
 
-        # Route all stems to a mixed multichannel bed
         _progress("  Routing stems to channels...", 0.80)
         channels = router.route(
             all_stems,
@@ -503,16 +453,6 @@ class StemUpmixPipeline:
             stem_features=stem_features,
         )
 
-        # Normalize stem-derived channel energy BEFORE injecting passthrough.
-        #
-        # Why order matters: passthrough channels (C, LFE) carry the original
-        # center vocals and bass at their original amplitude. If we inject them
-        # first and then normalize, the large C energy causes total_output >> total_input
-        # which drives scale < 1, silently attenuating the vocals.
-        #
-        # By normalizing stems-only first, we balance the routing spread without
-        # touching the passthrough signal. C and LFE are then added at their original
-        # level; the subsequent BS.1770-4 pass handles the final loudness target.
         if cfg.normalize_output:
             stem_input_energy = sum(
                 float(np.sum(s ** 2)) for s in all_stems.values()
@@ -521,22 +461,14 @@ class StemUpmixPipeline:
                 float(np.sum(ch ** 2)) for ch in channels.values()
             )
             if stem_output_energy > 1e-20:
-                # Cap at 1.0: never amplify derived channels above source energy.
-                # Upward scaling (scale > 1) inflates FL/FR relative to the
-                # passthrough C (vocals), causing perceived low vocal level on
-                # mixes where routing gains lose energy vs. input.
                 scale = min(1.0, np.sqrt(stem_input_energy / stem_output_energy))
                 channels = {k: v * scale for k, v in channels.items()}
 
-        # Inject passthrough channels at their original level (not scaled above)
         for ch_name, ch_audio in passthrough_resampled.items():
             if ch_name in channels:
                 n = min(len(ch_audio), n_samples)
                 channels[ch_name][:n] += ch_audio[:n]
 
-        # Mastering phase — BS.1770-4 loudness normalization + True Peak + soft-limiting.
-        # Separated from the routing/mixing phase above so both pipelines share
-        # identical mastering behaviour via MasteringChain.
         _progress("  Mastering...", 0.90)
         mastering = MasteringChain(cfg)
         channels, mastering_result = mastering.process(channels, sep_sr, output_fmt)

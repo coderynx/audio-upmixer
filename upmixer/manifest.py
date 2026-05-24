@@ -82,17 +82,12 @@ from upmixer.config import UpmixConfig
 
 _log = logging.getLogger("upmixer")
 
-# ── Version validation ─────────────────────────────────────────────────────────
 _SEMVER_RE = re.compile(r"^\d+\.\d+(\.\d+)?$")
-
-# ── Exceptions ────────────────────────────────────────────────────────────────
 
 
 class ManifestError(ValueError):
     """Raised when a manifest fails structural or version validation."""
 
-
-# ── Data classes ──────────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -122,45 +117,31 @@ class AssetJob:
     engine: dict = field(default_factory=dict)
 
 
-# ── Block registry ─────────────────────────────────────────────────────────────
-# Leaf entry:   ('config'|'engine', flat_key_str)
-# Sub-section:  dict[str, leaf | sub-section]
-#
-# 'config' entries are applied to UpmixConfig via _FIELD_MAP coercion.
-# 'engine' entries are stored on AssetJob.engine for __main__ to consume.
-
 BlockMapping = dict[str, Any]
 
 _BLOCK_REGISTRY: dict[str, BlockMapping] = {
-    # ── engine: ───────────────────────────────────────────────────────────────
     "engine": {
         "mode":           ("engine", "mode"),
         # stem_model removed — model selection is now automatic based on stems
         "stem_model_dir": ("engine", "stem_model_dir"),
         "input_format":   ("engine", "input_format"),
         "stem_cache_dir": ("config", "stem_cache_dir"),
-        "stems":          ("engine", "stems"),  # list[str] — normalized at runtime
+        "stems":          ("engine", "stems"),
     },
 
-    # ── format: ───────────────────────────────────────────────────────────────
     "format": {
         "type":        ("config", "output_type"),
         "subtype":     ("config", "output_subtype"),
         "sample_rate": ("config", "output_sample_rate"),
     },
 
-    # ── mixing: ───────────────────────────────────────────────────────────────
-    # channel_layout and stem params live here.
-    # routing gains are registered by routing/channel_router.py.
-    # mastering sub-blocks are registered by their respective modules.
     "mixing": {
         "channel_layout": ("config", "format"),
         "stem_rebalance": ("config", "stem_rebalance"),
         "stem_eq":        ("config", "stem_eq_profiles"),
-        "stems":          ("engine", "stems"),  # per-asset override of engine.stems
+        "stems":          ("engine", "stems"),
     },
 
-    # ── processing: ───────────────────────────────────────────────────────────
     "processing": {
         "preview":          ("config", "preview"),
         "preview_duration": ("config", "preview_duration"),
@@ -170,9 +151,7 @@ _BLOCK_REGISTRY: dict[str, BlockMapping] = {
         "normalize_output": ("config", "normalize_output"),
     },
 
-    # routing: and mastering: blocks are populated at import time by the
-    # respective domain modules (channel_router.py, eq.py, compressor.py, etc.)
-    # via register_block / register_block_keys calls.
+    # routing: and mastering: blocks are populated at import time by domain modules
 }
 
 
@@ -220,45 +199,30 @@ def register_block_keys(section: str, keys: BlockMapping) -> None:
     _BLOCK_REGISTRY.setdefault(section, {}).update(keys)
 
 
-# ── Field map ──────────────────────────────────────────────────────────────────
-# manifest flat key → (UpmixConfig attribute, Python coercion type)
-# Used by apply_asset_job() to set config fields from AssetJob.config dicts.
-
 _FIELD_MAP: dict[str, tuple[str, type]] = {
-    # Output format / layout
     "format":                     ("output_format",            str),
     "output_type":                ("output_type",              str),
     "output_subtype":             ("output_subtype",           str),
     "output_sample_rate":         ("output_sample_rate",       int),
-    # Channel routing gains
     "center_gain":                ("center_gain",              float),
     "surround_gain":              ("surround_gain",            float),
     "back_gain":                  ("back_gain",                float),
     "height_gain":                ("height_gain",              float),
     "lfe_gain":                   ("lfe_gain",                 float),
-    # LFE
     "lfe_cutoff":                 ("lfe_cutoff_hz",            float),
-    # Center extraction (realtime mode)
     "center_extraction_gain":     ("center_extraction_gain",   float),
     "center_attenuation":         ("center_attenuation",       float),
-    # Content-aware mixing
     "content_mix_strength":       ("content_mix_strength",     float),
-    # Height EQ
     "height_low_rolloff_gain":    ("height_low_rolloff_gain",  float),
     "height_high_shelf_gain":     ("height_high_shelf_gain",   float),
-    # STFT / processing
     "fft_size":                   ("fft_size",                 int),
     "block_size":                 ("block_size",               int),
-    # Energy normalization
     "normalize_output":           ("normalize_output",         bool),
-    # Mastering — loudness
     "loudness_normalize":         ("loudness_normalize",       bool),
     "loudness_target":            ("loudness_target_lkfs",     float),
     "loudness_max_tp":            ("loudness_max_tp",          float),
-    # Mastering — preset EQ
     "mastering_eq_profile":       ("mastering_eq_profile",     str),
     "mastering_eq_strength":      ("mastering_eq_strength",    float),
-    # Mastering — bus compressor
     "mastering_comp_profile":     ("mastering_comp_profile",      str),
     "mastering_comp_threshold_db":("mastering_comp_threshold_db", float),
     "mastering_comp_ratio":       ("mastering_comp_ratio",        float),
@@ -266,35 +230,27 @@ _FIELD_MAP: dict[str, tuple[str, type]] = {
     "mastering_comp_release_ms":  ("mastering_comp_release_ms",   float),
     "mastering_comp_knee_db":     ("mastering_comp_knee_db",      float),
     "mastering_comp_makeup_db":   ("mastering_comp_makeup_db",    float),
-    # Mastering — bass control
     "mastering_bass_profile":        ("mastering_bass_profile",        str),
     "mastering_bass_sub_gain_db":    ("mastering_bass_sub_gain_db",    float),
     "mastering_bass_mid_gain_db":    ("mastering_bass_mid_gain_db",    float),
     "mastering_bass_mono_cutoff_hz": ("mastering_bass_mono_cutoff_hz", float),
     "mastering_bass_excite":         ("mastering_bass_excite",         bool),
     "mastering_bass_lfe_gain_db":    ("mastering_bass_lfe_gain_db",    float),
-    # Mastering — reference matching
     "mastering_match_ref_path":     ("mastering_match_ref_path",     str),
     "mastering_match_ref_strength": ("mastering_match_ref_strength",  float),
     "mastering_match_ref_spectrum": ("mastering_match_ref_spectrum",  bool),
     "mastering_match_ref_rms":      ("mastering_match_ref_rms",       bool),
     "mastering_match_ref_max_db":   ("mastering_match_ref_max_db",    float),
-    # Mixing — stem rebalance / EQ / cache / selection
     "stem_rebalance":              ("stem_rebalance",   dict),
     "stem_eq_profiles":            ("stem_eq_profiles", dict),
     "stem_cache_dir":              ("stem_cache_dir",   str),
     "stems":                       ("stems",            list),
-    # Downmix
     "downmix_output":              ("downmix_output_path",    str),
     "downmix_surround_coeff":      ("surround_downmix_coeff", float),
-    # Preview
     "preview":          ("preview",           bool),
     "preview_duration": ("preview_duration_s", float),
     "preview_start":    ("preview_start_s",    float),
 }
-
-
-# ── Deep merge ─────────────────────────────────────────────────────────────────
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -306,9 +262,6 @@ def _deep_merge(base: dict, override: dict) -> dict:
         else:
             result[k] = v
     return result
-
-
-# ── Block expansion ────────────────────────────────────────────────────────────
 
 
 def _expand_mapping(
@@ -349,9 +302,6 @@ def _expand_blocks(blocks: dict) -> tuple[dict, dict]:
     return config_out, engine_out
 
 
-# ── Validation ─────────────────────────────────────────────────────────────────
-
-
 def validate_manifest(data: dict) -> None:
     """Validate the top-level manifest structure.
 
@@ -385,7 +335,6 @@ def validate_manifest(data: dict) -> None:
                 f"assets[{i}] needs 'input'+'output' or 'input_dir'+'output_dir'."
             )
 
-    # Deprecation: stem_model no longer supported
     if isinstance(data.get("engine"), dict) and "stem_model" in data["engine"]:
         import warnings
         warnings.warn(
@@ -395,11 +344,9 @@ def validate_manifest(data: dict) -> None:
             stacklevel=2,
         )
 
-    # Validate stems lists wherever they appear
     _VALID_STEM_NAMES = {
         "vocals", "bass", "drums", "guitar", "piano", "other",
         "kick", "snare", "hi-hat", "ride", "crash", "crowd",
-        # canonical title-case also accepted
         "Vocals", "Bass", "Drums", "Guitar", "Piano", "Other",
         "Kick", "Snare", "Hi-Hat", "Ride", "Crash", "Crowd",
     }
@@ -429,9 +376,6 @@ def validate_manifest(data: dict) -> None:
                 )
 
 
-# ── Parsing ────────────────────────────────────────────────────────────────────
-
-# Keys in an asset entry that are NOT block names and NOT input/output/shortcuts.
 _ASSET_NON_BLOCK_KEYS: frozenset[str] = frozenset({
     "input", "output", "stem_cache_dir",
     "input_dir", "output_dir", "glob",
@@ -451,7 +395,6 @@ def parse_manifest(data: dict) -> tuple[ManifestMeta | None, list[AssetJob]]:
     Returns:
         Tuple of optional :class:`ManifestMeta` and list of :class:`AssetJob`.
     """
-    # ── Metadata ──────────────────────────────────────────────────────────────
     meta: ManifestMeta | None = None
     meta_raw = data.get("metadata")
     if isinstance(meta_raw, dict):
@@ -461,17 +404,14 @@ def parse_manifest(data: dict) -> tuple[ManifestMeta | None, list[AssetJob]]:
             description=meta_raw.get("description"),
         )
 
-    # ── Global config blocks ──────────────────────────────────────────────────
     all_block_keys = set(_BLOCK_REGISTRY.keys())
     global_blocks: dict[str, dict] = {
         k: v for k, v in data.items()
         if k in all_block_keys and isinstance(v, dict)
     }
 
-    # ── Build per-asset jobs ──────────────────────────────────────────────────
     jobs: list[AssetJob] = []
     for asset in data.get("assets", []):
-        # Asset-level block overrides (registered block keys only)
         asset_blocks: dict[str, dict] = {
             k: v for k, v in asset.items()
             if k in all_block_keys and isinstance(v, dict)
@@ -483,7 +423,6 @@ def parse_manifest(data: dict) -> tuple[ManifestMeta | None, list[AssetJob]]:
             engine_ov.setdefault("stem_cache_dir", asset["stem_cache_dir"])
             asset_blocks["engine"] = engine_ov
 
-        # Deep-merge: global ← asset overrides
         effective = _deep_merge(global_blocks, asset_blocks)
 
         config_flat, engine_params = _expand_blocks(effective)
@@ -521,9 +460,6 @@ def parse_manifest(data: dict) -> tuple[ManifestMeta | None, list[AssetJob]]:
     return meta, jobs
 
 
-# ── Application ────────────────────────────────────────────────────────────────
-
-
 def apply_asset_job(config: UpmixConfig, job: AssetJob) -> None:
     """Apply an :class:`AssetJob`'s config dict to a :class:`UpmixConfig` in-place.
 
@@ -550,9 +486,6 @@ def apply_asset_job(config: UpmixConfig, job: AssetJob) -> None:
                 f"{coerce.__name__}: {exc}"
             ) from exc
         setattr(config, config_attr, coerced)
-
-
-# ── Loader ─────────────────────────────────────────────────────────────────────
 
 
 def load_manifest(path: str | Path) -> dict[str, Any]:
@@ -595,9 +528,6 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
         )
 
     return data or {}
-
-
-# ── Key listing ────────────────────────────────────────────────────────────────
 
 
 def list_manifest_keys() -> dict[str, str]:

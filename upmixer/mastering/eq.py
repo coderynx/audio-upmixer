@@ -37,7 +37,6 @@ from scipy.signal import fftconvolve, firwin2, minimum_phase
 
 _log = logging.getLogger("upmixer")
 
-# Register this module's manifest keys so parse_manifest() can expand them.
 from upmixer.manifest import register_block_keys as _rbk
 _rbk("mastering", {
     "eq": {
@@ -47,8 +46,6 @@ _rbk("mastering", {
 })
 del _rbk
 
-# ── Per-channel FIR cache (EQ-match mode) ────────────────────────────────────
-# Key: (breakpoints_hash, sample_rate, n_taps) → minimum-phase IR
 _PC_FIR_CACHE: dict[tuple[str, int, int], np.ndarray] = {}
 
 
@@ -104,10 +101,6 @@ def _build_fir_from_breakpoints(
     return h_mp
 
 
-# ── Predefined tonal profiles ─────────────────────────────────────────────────
-# Each entry is a list of (freq_hz, gain_dB) breakpoints.
-# Frequencies must be in ascending order; 0 Hz and Nyquist are added
-# automatically.  Gains are in dB — 0.0 = unity, positive = boost.
 
 EQ_PROFILES: dict[str, list[tuple[float, float]]] = {
     "spatial-transparent": [
@@ -132,7 +125,6 @@ EQ_PROFILES: dict[str, list[tuple[float, float]]] = {
 
 EQ_PROFILE_NAMES: tuple[str, ...] = tuple(sorted(EQ_PROFILES.keys()))
 
-# ── Filter cache ──────────────────────────────────────────────────────────────
 _FIR_CACHE: dict[tuple[str, int, int], np.ndarray] = {}
 
 
@@ -158,25 +150,19 @@ def _build_fir(profile: str, sample_rate: int, n_taps: int) -> np.ndarray:
     freqs_hz = [f for f, _ in breakpoints]
     gains_db = [g for _, g in breakpoints]
 
-    # Normalize frequencies to [0, 1] (0 = DC, 1 = Nyquist)
     freqs_norm: list[float] = [f / nyquist for f in freqs_hz]
     gains_lin: list[float] = [10.0 ** (g / 20.0) for g in gains_db]
 
-    # firwin2 requires the grid to span [0.0, 1.0]
-    # Add DC with the same gain as the lowest defined frequency.
     if freqs_norm[0] > 0.0:
         freqs_norm = [0.0] + freqs_norm
         gains_lin = [gains_lin[0]] + gains_lin
 
-    # Clamp all normalized frequencies to [0, 1] (handles 48 kHz → 20 kHz edge)
     freqs_norm = [min(f, 1.0) for f in freqs_norm]
 
-    # Ensure Nyquist (1.0) is present; extend with last gain if missing.
     if freqs_norm[-1] < 1.0:
         freqs_norm.append(1.0)
         gains_lin.append(gains_lin[-1])
 
-    # Remove exact duplicates (can occur if a profile point lands on Nyquist).
     seen: set[float] = set()
     pairs: list[tuple[float, float]] = []
     for f, g in zip(freqs_norm, gains_lin):
@@ -187,17 +173,14 @@ def _build_fir(profile: str, sample_rate: int, n_taps: int) -> np.ndarray:
     freqs_norm = [p[0] for p in pairs]
     gains_lin = [p[1] for p in pairs]
 
-    # Design symmetric (linear-phase) FIR.
     h_lp = firwin2(n_taps, freqs_norm, gains_lin)
 
-    # Convert to minimum-phase (no pre-ringing, causal).
     h_mp = minimum_phase(h_lp)
 
     _FIR_CACHE[cache_key] = h_mp
     return h_mp
 
 
-# ── Shared FIR application helper ────────────────────────────────────────────
 
 def _apply_fir(ch: np.ndarray, ir: np.ndarray, strength: float) -> np.ndarray:
     """Apply *ir* to *ch* with wet/dry *strength* blend."""
@@ -209,7 +192,6 @@ def _apply_fir(ch: np.ndarray, ir: np.ndarray, strength: float) -> np.ndarray:
     return blended.astype(ch.dtype)
 
 
-# ── SpectralShaper — preset profile EQ ───────────────────────────────────────
 
 class SpectralShaper:
     """Preset profile EQ for the multichannel mastering bus.

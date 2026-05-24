@@ -119,7 +119,6 @@ class MasteringChain:
         cfg = self._cfg
         result = MasteringResult()
 
-        # ── Step 0: spectral + RMS reference matching ─────────────────────────
         if cfg.mastering_match_ref_path is not None:
             from .match_reference import ReferenceMatchProcessor
             _log.info(
@@ -135,7 +134,6 @@ class MasteringChain:
             )
             channels = proc.process(channels)
 
-        # ── Step 1a: preset EQ profile ────────────────────────────────────────
         if cfg.mastering_eq_profile is not None:
             from .eq import SpectralShaper
             shaper = SpectralShaper(
@@ -145,7 +143,6 @@ class MasteringChain:
             )
             channels = shaper.process(channels)
 
-        # ── Step 2: bus compression ────────────────────────────────────────────
         if cfg.mastering_comp_profile is not None:
             from .compressor import BusCompressor, COMP_PROFILES
 
@@ -181,7 +178,6 @@ class MasteringChain:
                 )
                 channels = comp.process(channels)
 
-        # ── Step 2.5: bass control ────────────────────────────────────────────
         _bass_active = (
             cfg.mastering_bass_profile is not None
             or cfg.mastering_bass_sub_gain_db is not None
@@ -213,7 +209,6 @@ class MasteringChain:
             )
             channels = bass.process(channels)
 
-        # ── Step 3 + 4: BS.1770-4 loudness normalization + True Peak ceiling ──
         if cfg.loudness_normalize:
             _log.info("  Normalizing loudness (BS.1770-4)...")
             from upmixer.loudness import normalize_loudness
@@ -241,7 +236,6 @@ class MasteringChain:
                 "  [TP limited]" if result.tp_limited else "",
             )
 
-        # ── Step 5: tanh soft-limiter ──────────────────────────────────────────
         channels = {
             name: soft_limit(ch, cfg.peak_limit_threshold)
             for name, ch in channels.items()

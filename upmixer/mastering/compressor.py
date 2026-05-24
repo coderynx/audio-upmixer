@@ -57,7 +57,6 @@ _rbk("mastering", {
 })
 del _rbk
 
-# ── Predefined compressor profiles ───────────────────────────────────────────
 
 COMP_PROFILES: dict[str, dict[str, float]] = {
     "transparent": dict(
@@ -89,7 +88,6 @@ COMP_PROFILES: dict[str, dict[str, float]] = {
 COMP_PROFILE_NAMES: tuple[str, ...] = tuple(sorted(COMP_PROFILES.keys()))
 
 
-# ── BusCompressor ─────────────────────────────────────────────────────────────
 
 class BusCompressor:
     """Linked-sidechain RMS bus compressor for spatial audio beds.
@@ -125,12 +123,10 @@ class BusCompressor:
         self._makeup = float(makeup_db)
         self._sr = int(sample_rate)
 
-        # Exponential IIR coefficients
         dt = 1.0 / sample_rate
         self._alpha_a = float(1.0 - np.exp(-dt / (max(attack_ms, 0.01) / 1000.0)))
         self._alpha_r = float(1.0 - np.exp(-dt / (max(release_ms, 0.01) / 1000.0)))
 
-    # ── Gain computer ─────────────────────────────────────────────────────────
 
     def _gain_computer(self, env_db: np.ndarray) -> np.ndarray:
         """Soft-knee gain computer (vectorized).
@@ -149,26 +145,23 @@ class BusCompressor:
 
             output_db = np.where(
                 below,
-                env_db,  # below threshold: unity
+                env_db,
                 np.where(
                     above,
-                    T + (env_db - T) / R,  # full compression
-                    # Soft-knee (parabolic blend)
+                    T + (env_db - T) / R,
                     env_db + ((1.0 / R - 1.0) * (env_db - knee_lo) ** 2)
                     / (2.0 * W),
                 ),
             )
         else:
-            # Hard knee
             output_db = np.where(
                 env_db <= T,
                 env_db,
                 T + (env_db - T) / R,
             )
 
-        return output_db - env_db  # gain reduction dB ≤ 0
+        return output_db - env_db
 
-    # ── Process ───────────────────────────────────────────────────────────────
 
     def process(
         self,
@@ -192,28 +185,22 @@ class BusCompressor:
         n = max(len(v) for v in bed_chs.values())
         n_ch = len(bed_chs)
 
-        # ── Step 1: linked RMS sidechain ──────────────────────────────────────
         x_sq = np.zeros(n, dtype=np.float64)
         for ch in bed_chs.values():
             ch64 = ch.astype(np.float64)
             length = min(len(ch64), n)
             x_sq[:length] += ch64[:length] ** 2
-        # Per-channel RMS approximation (linked across all bed channels)
         x_rms = np.sqrt(x_sq / n_ch + 1e-20)
 
-        # ── Step 2: max-envelope attack/release follower ──────────────────────
         b_a = np.array([self._alpha_a], dtype=np.float64)
         a_a = np.array([1.0, -(1.0 - self._alpha_a)], dtype=np.float64)
         b_r = np.array([self._alpha_r], dtype=np.float64)
         a_r = np.array([1.0, -(1.0 - self._alpha_r)], dtype=np.float64)
 
-        level_fast = lfilter(b_a, a_a, x_rms)   # fast IIR (attack)
-        level_slow = lfilter(b_r, a_r, x_rms)   # slow IIR (release)
-        # Fast attack: when signal rises, level_fast > level_slow → max = fast
-        # Slow release: when signal falls, level_slow > level_fast → max = slow
+        level_fast = lfilter(b_a, a_a, x_rms)
+        level_slow = lfilter(b_r, a_r, x_rms)
         envelope = np.maximum(level_fast, level_slow)
 
-        # ── Step 3: gain computer + makeup ────────────────────────────────────
         envelope_db = 20.0 * np.log10(np.maximum(envelope, 1e-20))
         gain_db = self._gain_computer(envelope_db) + self._makeup
         gain_linear = np.power(10.0, gain_db / 20.0)
@@ -226,8 +213,7 @@ class BusCompressor:
             self._threshold, self._ratio, max_gr, avg_gr,
         )
 
-        # ── Step 4: apply gain to all bed channels ────────────────────────────
-        out = dict(channels)  # shallow copy; LFE preserved as-is
+        out = dict(channels)
         for name, ch in bed_chs.items():
             ch64 = ch.astype(np.float64)
             gl = gain_linear[: len(ch64)]

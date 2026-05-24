@@ -104,7 +104,6 @@ def resolve_batch_jobs(
         stem = os.path.splitext(os.path.basename(input_path))[0]
         return os.path.join(output_dir, stem + output_ext)
 
-    # Priority 1: explicit {input, output?} pairs from manifest batch.jobs
     if explicit_jobs:
         jobs: list[BatchJob] = []
         for entry in explicit_jobs:
@@ -119,7 +118,6 @@ def resolve_batch_jobs(
             ))
         return jobs
 
-    # Priority 2: manifest batch.inputs (cross-directory file list)
     file_list: list[str] | None = batch_inputs or input_paths
 
     if file_list:
@@ -128,9 +126,8 @@ def resolve_batch_jobs(
             for p in file_list
         ]
 
-    # Priority 3: directory scan
     if batch_dir:
-        safe_dir = glob.escape(batch_dir)  # handle [ ] ? * in directory names
+        safe_dir = glob.escape(batch_dir)
         wav_files = sorted(glob.glob(os.path.join(safe_dir, "*.wav")))
         flac_files = sorted(glob.glob(os.path.join(safe_dir, "*.flac")))
         all_files = sorted(wav_files + flac_files, key=os.path.basename)
@@ -145,7 +142,6 @@ def resolve_batch_jobs(
 def _realtime_worker(args: tuple) -> UpmixResult:
     """Top-level function for ProcessPoolExecutor workers (must be picklable)."""
     input_path, output_path, input_fmt, config_dict = args
-    import json as _json
     from upmixer.config import UpmixConfig
     from upmixer.pipeline import UpmixPipeline
     cfg = UpmixConfig(**config_dict)
@@ -205,8 +201,6 @@ class BatchProcessor:
         result.wall_time_s = time.monotonic() - t0
         return result
 
-    # Default stem cache directory used when the caller has not explicitly set
-    # config.stem_cache_dir.  Mirrors the model cache convention.
     _DEFAULT_STEM_CACHE_DIR: str = os.path.join(
         os.path.expanduser("~"), ".cache", "upmixer-stems"
     )
@@ -214,10 +208,6 @@ class BatchProcessor:
     def _process_stem(self, jobs: list[BatchJob], total: int) -> BatchResult:
         from upmixer.separation.stem_pipeline import StemUpmixPipeline
 
-        # Auto-enable stem cache for batch runs: separating each track in an
-        # album takes minutes; caching lets re-runs (e.g. tweaking loudness)
-        # skip the separation step entirely.  Use config value if set; fall
-        # back to the per-user default otherwise.
         if self._config.stem_cache_dir:
             effective_config = self._config
         else:

@@ -11,10 +11,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-# ── Stem vocabulary ────────────────────────────────────────────────────────────
 
-# Maps lowercase manifest names → canonical internal title-case names.
-# Both forms are accepted anywhere a stem name is expected.
 MANIFEST_TO_CANONICAL: dict[str, str] = {
     "vocals":  "Vocals",
     "bass":    "Bass",
@@ -30,32 +27,20 @@ MANIFEST_TO_CANONICAL: dict[str, str] = {
     "crowd":   "Crowd",
 }
 
-# All valid canonical names (used internally throughout the pipeline)
 CANONICAL_STEMS: frozenset[str] = frozenset(MANIFEST_TO_CANONICAL.values())
 
-# Default output when no stems key is present in the manifest
 DEFAULT_STEMS: list[str] = ["Vocals", "Bass", "Drums", "Guitar", "Piano", "Other"]
 
-# ── Model registry ─────────────────────────────────────────────────────────────
-# Three-tier pipeline.  Users never specify model names directly; the resolver
-# selects the right model(s) based on the requested stems.
 
-# Stage 0: crowd pre-isolation.  Run FIRST when "Crowd" is requested so that
-# audience noise does not bleed into instrument stems from the primary model.
 MODEL_CROWD = "mel_band_roformer_crowd_aufr33_viperx_sdr_8.7144.ckpt"
 
-# Stage 1: primary 6-stem separation — the main model for all tracks.
 MODEL_PRIMARY = "BS-Roformer-SW.ckpt"
 
-# Stage 2: drum sub-separation.  Reads the Drums stem produced by Stage 1 and
-# decomposes it into individual drum components.
 MODEL_DRUMS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
 
-# Stems each model tier can produce (canonical title-case)
 PRIMARY_OUTPUT_STEMS: frozenset[str] = frozenset({"Vocals", "Bass", "Drums", "Guitar", "Piano", "Other"})
 DRUM_SUB_STEMS: frozenset[str] = frozenset({"Kick", "Snare", "Toms", "Hi-Hat", "Ride", "Crash"})
 
-# ── Plan dataclasses ───────────────────────────────────────────────────────────
 
 
 @dataclass
@@ -95,7 +80,6 @@ class SeparationPlan:
     stems_hash: str
 
 
-# ── Public API ─────────────────────────────────────────────────────────────────
 
 
 def normalize_stems(stems: list[str]) -> list[str]:
@@ -117,7 +101,6 @@ def normalize_stems(stems: list[str]) -> list[str]:
     result: list[str] = []
     for s in stems:
         canonical = MANIFEST_TO_CANONICAL.get(s) or MANIFEST_TO_CANONICAL.get(s.lower())
-        # Also accept names that are already in canonical form (title-case)
         if canonical is None and s in CANONICAL_STEMS:
             canonical = s
         if canonical is None:
@@ -152,9 +135,6 @@ def resolve_separation_plan(canonical: list[str]) -> SeparationPlan:
 
     tasks: list[SeparationTask] = []
 
-    # Stage 0 — Crowd isolation
-    # Must run before primary separation so crowd noise doesn't contaminate
-    # the instrument stems.  The residual ("_crowd_other") feeds Stage 1.
     crowd_needed = "Crowd" in requested
     if crowd_needed:
         tasks.append(SeparationTask(
@@ -164,15 +144,11 @@ def resolve_separation_plan(canonical: list[str]) -> SeparationPlan:
             keep_stems=frozenset({"Crowd"}),
         ))
 
-    # Stage 1 — Primary 6-stem separation
     primary_needed = bool(requested & PRIMARY_OUTPUT_STEMS)
     drum_sub_needed = bool(requested & DRUM_SUB_STEMS)
 
     if primary_needed or drum_sub_needed:
         stage1_input = "_crowd_other" if crowd_needed else "original"
-        # Only keep primary stems the user explicitly requested.
-        # "Drums" is kept on disk as an intermediate for Stage 2 even when the
-        # user did not request it directly — handled in _execute_plan().
         stage1_keep = requested & PRIMARY_OUTPUT_STEMS
         tasks.append(SeparationTask(
             model=MODEL_PRIMARY,
@@ -181,8 +157,6 @@ def resolve_separation_plan(canonical: list[str]) -> SeparationPlan:
             keep_stems=stage1_keep,
         ))
 
-    # Stage 2 — Drum sub-separation
-    # Reads the Drums stem from Stage 1 and produces individual components.
     if drum_sub_needed:
         tasks.append(SeparationTask(
             model=MODEL_DRUMS,
