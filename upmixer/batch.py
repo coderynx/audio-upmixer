@@ -32,7 +32,7 @@ import os
 import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 from upmixer.config import UpmixConfig

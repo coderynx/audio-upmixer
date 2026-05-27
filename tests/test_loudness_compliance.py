@@ -14,7 +14,6 @@ import math
 from unittest.mock import patch
 
 import numpy as np
-import pytest
 
 from upmixer.formats import ChannelLabel, FORMAT_MAP
 from upmixer.loudness import (

@@ -38,8 +38,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import butter, sosfilt
 
-from upmixer.formats import ChannelLabel, OutputFormat
 from upmixer.config import UpmixConfig
+from upmixer.formats import ChannelLabel, OutputFormat
 from upmixer.separation.stem_analyzer import StemFeatures
 
 _LEFT_CHANNELS  = {ChannelLabel.FL, ChannelLabel.SL, ChannelLabel.BL, ChannelLabel.TFL, ChannelLabel.TBL}

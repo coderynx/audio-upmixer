@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import math
 import os
-from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 
 import numpy as np
 from scipy.signal import sosfilt

@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from typing import Any
 
 import numpy as np
 from scipy.signal import fftconvolve, firwin2, minimum_phase

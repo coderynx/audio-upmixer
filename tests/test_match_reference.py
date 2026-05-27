@@ -2,7 +2,6 @@
 import numpy as np
 
 import upmixer.mastering.match_reference  # noqa: F401 — triggers register_block_keys for mastering.match_reference
-
 from upmixer.config import UpmixConfig
 from upmixer.manifest import _BLOCK_REGISTRY, _FIELD_MAP, apply_asset_job, AssetJob, parse_manifest
 from upmixer.mastering.match_reference import (

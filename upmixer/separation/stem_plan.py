@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-
 MANIFEST_TO_CANONICAL: dict[str, str] = {
     "vocals":  "Vocals",
     "bass":    "Bass",

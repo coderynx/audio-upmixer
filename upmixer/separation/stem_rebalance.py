@@ -27,7 +27,6 @@ balanced        All stems 0 dB (identity — useful as manifest placeholder)
 from __future__ import annotations
 
 import logging
-from math import gcd
 
 import numpy as np
 

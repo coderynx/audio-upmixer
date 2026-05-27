@@ -47,17 +47,17 @@ from upmixer.formats import ChannelLabel, FORMAT_MAP, INPUT_FORMAT_MAP, detect_i
 from upmixer.io.adm_writer import AdmBwfWriter
 from upmixer.io.reader import AudioReader
 from upmixer.io.writer import AudioWriter
+from upmixer.mastering import MasteringChain
 from upmixer.result import UpmixResult
 from upmixer.separation.separator import StemSeparator
+from upmixer.separation.stem_analyzer import analyze_stems
 from upmixer.separation.stem_plan import (
     DEFAULT_STEMS,
     SeparationPlan,
     normalize_stems,
     resolve_separation_plan,
 )
-from upmixer.separation.stem_analyzer import analyze_stems
 from upmixer.separation.stem_router import StemRouter
-from upmixer.mastering import MasteringChain
 from upmixer.utils import preview_slice, itu_downmix_stereo
 
 _log = logging.getLogger("upmixer")

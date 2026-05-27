@@ -3,8 +3,8 @@ import numpy as np
 from upmixer.config import UpmixConfig
 from upmixer.decomposition.direct_ambient import SoftMatrixBatchResult, SoftMatrixResult
 from upmixer.formats import FORMAT_MAP
-from upmixer.routing.lfe import LFEExtractor
 from upmixer.manifest import register_block as _rb
+from upmixer.routing.lfe import LFEExtractor
 
 _rb("routing", {
     "center_gain":            ("config", "center_gain"),
