@@ -45,6 +45,12 @@ MODEL_STEM_OVERRIDES: dict[str, dict[str, str]] = {
     "mel_band_roformer_crowd_aufr33_viperx_sdr_8.7144.ckpt": {
         "other": "_crowd_other",
     },
+    # Fed the isolated Vocals stem, this karaoke model's instrumental track is the
+    # backing vocals. NOTE: verify exact secondary tag with -v; adjust key if model
+    # emits a different tag (e.g. "karaoke"/"other").
+    "mel_band_roformer_karaoke_gabox_v2.ckpt": {
+        "instrumental": "Backing Vocals",
+    },
 }
 
 

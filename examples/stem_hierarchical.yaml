@@ -21,6 +21,12 @@
 #   The intermediate Drums stem is deleted after extraction (unless also
 #   present in the stems list as an explicit output).
 #
+# Stage 3 — Vocal sub-separation (only when "backing-vocals" is requested):
+#   mel_band_roformer_karaoke_gabox_v2.ckpt
+#   Input: Vocals stem produced by Stage 1.
+#   Outputs: Vocals (refined lead), Backing Vocals (the model's instrumental track).
+#   When "vocals" is also requested, the refined lead replaces the Stage 1 Vocals.
+#
 # Requires: pip install "upmixer[separation-cpu]"
 # Usage:    upmixer --manifest examples/stem_hierarchical.yaml --preview
 
@@ -88,6 +94,7 @@ assets:
     mixing:
       stems:
         - vocals
+        - backing-vocals  # triggers Stage 3 (karaoke) — refines vocals, adds backing vocals
         - drums       # whole drums stem (Stage 1 only, no Stage 2)
         - bass
 

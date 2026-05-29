@@ -7,6 +7,7 @@ from upmixer.separation.stem_plan import (
     DEFAULT_STEMS,
     MODEL_CROWD,
     MODEL_DRUMS,
+    MODEL_KARAOKE,
     MODEL_PRIMARY,
     SeparationPlan,
     normalize_stems,
@@ -31,13 +32,15 @@ class TestNormalizeStems:
         manifest_names = [
             "vocals", "bass", "drums", "guitar", "piano", "other",
             "kick", "snare", "toms", "hi-hat", "ride", "crash", "crowd",
+            "backing-vocals",
         ]
         canonical = normalize_stems(manifest_names)
-        assert len(canonical) == 13
+        assert len(canonical) == 14
         assert "Vocals" in canonical
         assert "Toms" in canonical
         assert "Hi-Hat" in canonical
         assert "Crowd" in canonical
+        assert "Backing Vocals" in canonical
 
     def test_deduplication_preserves_order(self):
         result = normalize_stems(["vocals", "vocals", "bass"])
@@ -123,6 +126,47 @@ class TestResolveSeparationPlan:
         assert "Drums" in plan.requested_stems  # user asked for it
 
         assert stage2.keep_stems == frozenset({"Kick"})
+
+    def test_backing_vocals_only_two_stages(self):
+        """backing-vocals alone → Stage 1 (primary) + karaoke; Vocals is an
+        intermediate fed to the karaoke stage, not a final output."""
+        canonical = normalize_stems(["backing-vocals"])
+        plan = resolve_separation_plan(canonical)
+        assert len(plan.tasks) == 2
+
+        stage1, stage2 = plan.tasks
+        assert stage1.model == MODEL_PRIMARY
+        assert stage1.input_source == "original"
+
+        assert stage2.model == MODEL_KARAOKE
+        assert stage2.input_source == "Vocals"
+        assert stage2.keep_stems == frozenset({"Backing Vocals"})
+        assert "Vocals" not in plan.requested_stems
+
+    def test_vocals_plus_backing_vocals_keeps_both(self):
+        """When both are requested the karaoke stage keeps Vocals (refined) and
+        Backing Vocals as final outputs."""
+        canonical = normalize_stems(["vocals", "backing-vocals"])
+        plan = resolve_separation_plan(canonical)
+        assert len(plan.tasks) == 2
+
+        karaoke = plan.tasks[-1]
+        assert karaoke.model == MODEL_KARAOKE
+        assert karaoke.input_source == "Vocals"
+        assert karaoke.keep_stems == frozenset({"Vocals", "Backing Vocals"})
+
+    def test_crowd_plus_backing_vocals_three_stages(self):
+        """Stage 0 (crowd) → Stage 1 (primary on residual) → karaoke."""
+        canonical = normalize_stems(["crowd", "backing-vocals"])
+        plan = resolve_separation_plan(canonical)
+        assert len(plan.tasks) == 3
+
+        stage0, stage1, stage2 = plan.tasks
+        assert stage0.model == MODEL_CROWD
+        assert stage1.model == MODEL_PRIMARY
+        assert stage1.input_source == "_crowd_other"
+        assert stage2.model == MODEL_KARAOKE
+        assert stage2.input_source == "Vocals"
 
     def test_crowd_only_single_stage(self):
         """Only Crowd requested → Stage 0 only; no primary or drumsep."""

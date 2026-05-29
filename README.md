@@ -432,6 +432,13 @@ position based on routing tables derived from Dolby Atmos Music mixing practice:
 For multichannel inputs (5.1, 7.1, etc.), each stereo zone (front, surround, back, height) is separated independently.
 Stems are tagged with their zone and routed to preserve spatial intent of the original mix.
 
+The set of stems to extract is driven by the `stems` key (manifest) or `--stems` (CLI); the engine
+resolves which models to run automatically. The default set is `vocals, bass, drums, guitar, piano,
+other`. Additional opt-in stems: `crowd` (isolated before instruments), the drum sub-stems
+`kick, snare, toms, hi-hat, ride, crash` (extracted from `drums`), and `backing-vocals`. Requesting
+`backing-vocals` runs a second-stage karaoke model on the isolated Vocals stem: its instrumental
+track becomes the backing vocals, and the lead Vocals stem is refined as a side effect.
+
 ### Processing pipeline
 
 The pipeline is split into two stages:

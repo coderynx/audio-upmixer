@@ -25,6 +25,7 @@ MANIFEST_TO_CANONICAL: dict[str, str] = {
     "ride":    "Ride",
     "crash":   "Crash",
     "crowd":   "Crowd",
+    "backing-vocals": "Backing Vocals",
 }
 
 CANONICAL_STEMS: frozenset[str] = frozenset(MANIFEST_TO_CANONICAL.values())
@@ -37,6 +38,8 @@ MODEL_CROWD = "mel_band_roformer_crowd_aufr33_viperx_sdr_8.7144.ckpt"
 MODEL_PRIMARY = "BS-Roformer-SW.ckpt"
 
 MODEL_DRUMS = "MDX23C-DrumSep-aufr33-jarredou.ckpt"
+
+MODEL_KARAOKE = "mel_band_roformer_karaoke_gabox_v2.ckpt"
 
 PRIMARY_OUTPUT_STEMS: frozenset[str] = frozenset({"Vocals", "Bass", "Drums", "Guitar", "Piano", "Other"})
 DRUM_SUB_STEMS: frozenset[str] = frozenset({"Kick", "Snare", "Toms", "Hi-Hat", "Ride", "Crash"})
@@ -146,8 +149,9 @@ def resolve_separation_plan(canonical: list[str]) -> SeparationPlan:
 
     primary_needed = bool(requested & PRIMARY_OUTPUT_STEMS)
     drum_sub_needed = bool(requested & DRUM_SUB_STEMS)
+    backing_needed = "Backing Vocals" in requested
 
-    if primary_needed or drum_sub_needed:
+    if primary_needed or drum_sub_needed or backing_needed:
         stage1_input = "_crowd_other" if crowd_needed else "original"
         stage1_keep = requested & PRIMARY_OUTPUT_STEMS
         tasks.append(SeparationTask(
@@ -163,6 +167,14 @@ def resolve_separation_plan(canonical: list[str]) -> SeparationPlan:
             input_source="Drums",
             output_stems=DRUM_SUB_STEMS,
             keep_stems=requested & DRUM_SUB_STEMS,
+        ))
+
+    if backing_needed:
+        tasks.append(SeparationTask(
+            model=MODEL_KARAOKE,
+            input_source="Vocals",
+            output_stems=frozenset({"Vocals", "Backing Vocals"}),
+            keep_stems=requested & frozenset({"Vocals", "Backing Vocals"}),
         ))
 
     stems_hash = hashlib.sha256("|".join(sorted(requested)).encode()).hexdigest()[:20]
