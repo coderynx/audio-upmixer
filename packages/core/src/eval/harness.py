@@ -39,7 +39,8 @@ class RunSettings:
 
     Scores without settings are noise: a model swap, segment-size change, or
     ensemble config change all alter output, so every EvalReport carries the
-    exact settings used to produce it.
+    requested controls and the observed model metadata. Optional controls stay
+    ``None`` when this single-model boundary cannot resolve them.
     """
 
     model: str
@@ -49,6 +50,13 @@ class RunSettings:
     batch_size: int | None = None
     ensemble_algorithm: str | None = None
     ensemble_models: tuple[str, ...] | None = None
+    chunk_duration_s: float | None = None
+    tta: bool = False
+    pitch_shift: float | None = None
+    backend: str | None = None
+    model_arch: str | None = None
+    model_config_name: str | None = None
+    model_native_sample_rate: int | None = None
 
 
 def separate_for_eval(
@@ -60,6 +68,8 @@ def separate_for_eval(
     chunk_duration_s: float | None = None,
     overlap: int | None = None,
     stem_ensemble: bool = False,
+    tta: bool = False,
+    pitch_shift: float | None = None,
 ) -> tuple[dict[str, np.ndarray], RunSettings]:
     """Separate a mixture with the real ``StemSeparator`` and record settings.
 
@@ -69,14 +79,21 @@ def separate_for_eval(
         model:        Model filename (registry name), defaults to the
                       package's default model.
         batch_size, segment_size, chunk_duration_s, overlap: Forwarded to
-            ``StemSeparator``; ``None`` selects its backend-aware defaults.
+            ``StemSeparator``; ``None`` selects its backend-aware defaults and
+            remains recorded as an unresolved request.
         stem_ensemble: Run the production fixed BS-Roformer-SW + SCNet
             primary-stem ensemble.
+        tta: Forward test-time augmentation to the selected separator.
+        pitch_shift: Forward the optional pitch-register rescue ratio.
 
     Returns:
         (stems, settings) — canonical stem name -> (n_samples, 2) float32
-        array, and the RunSettings actually used.
+        array, and the requested controls plus observed model metadata.
     """
+    model_arch = None
+    model_config_name = None
+    model_native_sample_rate = None
+    backend = None
     if stem_ensemble:
         if model != DEFAULT_MODEL:
             raise ValueError(
@@ -91,6 +108,8 @@ def separate_for_eval(
             stem_segment_size=segment_size,
             stem_chunk_duration_s=chunk_duration_s,
             stem_overlap=overlap,
+            stem_tta=tta,
+            stem_pitch_shift=pitch_shift,
             stem_ensemble=True,
         ))
         try:
@@ -107,11 +126,22 @@ def separate_for_eval(
             segment_size=segment_size,
             chunk_duration_s=chunk_duration_s,
             overlap=overlap,
+            tta=tta,
+            pitch_shift=pitch_shift,
         )
         try:
             stems = separator.separate(mixture_path)
+            backend = separator.backend
         finally:
             separator.close()
+        from upmixer.separation.inference.config import load_model_config
+        from upmixer.separation.inference.registry import get_model_spec
+
+        spec = get_model_spec(model)
+        config = load_model_config(spec.config_name)
+        model_arch = spec.arch
+        model_config_name = spec.config_name
+        model_native_sample_rate = config.sample_rate
     settings = RunSettings(
         model=model,
         sample_rate=sample_rate,
@@ -120,6 +150,13 @@ def separate_for_eval(
         overlap=overlap,
         ensemble_algorithm=ENSEMBLE_ALGORITHM if stem_ensemble else None,
         ensemble_models=(model, MODEL_ENSEMBLE) if stem_ensemble else None,
+        chunk_duration_s=chunk_duration_s,
+        tta=tta,
+        pitch_shift=pitch_shift,
+        backend=backend,
+        model_arch=model_arch,
+        model_config_name=model_config_name,
+        model_native_sample_rate=model_native_sample_rate,
     )
     return stems, settings
 

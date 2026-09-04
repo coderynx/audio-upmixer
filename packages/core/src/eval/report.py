@@ -57,12 +57,27 @@ def format_report(report: EvalReport) -> str:
     """Render a report as a per-stem, per-category text table.
 
     Always reports SDR, fullness, and bleedless together (never SDR alone),
-    and prefixes the table with the exact settings that produced it.
+    and prefixes the table with the recorded controls and model metadata.
     """
+    settings = report.settings
     lines = [
-        "Settings: model={model} sample_rate={sample_rate} segment_size={segment_size} "
-        "overlap={overlap} batch_size={batch_size} ensemble_algorithm={ensemble_algorithm} "
-        "ensemble_models={ensemble_models}".format(**vars(report.settings)),
+        (
+            f"Settings: model={getattr(settings, 'model', None)} "
+            f"sample_rate={getattr(settings, 'sample_rate', None)} "
+            f"segment_size={getattr(settings, 'segment_size', None)} "
+            f"overlap={getattr(settings, 'overlap', None)} "
+            f"batch_size={getattr(settings, 'batch_size', None)} "
+            f"chunk_duration_s={getattr(settings, 'chunk_duration_s', None)} "
+            f"tta={getattr(settings, 'tta', None)} "
+            f"pitch_shift={getattr(settings, 'pitch_shift', None)} "
+            f"backend={getattr(settings, 'backend', None)} "
+            f"model_arch={getattr(settings, 'model_arch', None)} "
+            f"model_config_name={getattr(settings, 'model_config_name', None)} "
+            "model_native_sample_rate="
+            f"{getattr(settings, 'model_native_sample_rate', None)} "
+            f"ensemble_algorithm={getattr(settings, 'ensemble_algorithm', None)} "
+            f"ensemble_models={getattr(settings, 'ensemble_models', None)}"
+        ),
         "",
         "Per-stem (mean SDR dB / fullness / bleedless):",
     ]
