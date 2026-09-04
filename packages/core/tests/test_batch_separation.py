@@ -11,6 +11,7 @@ import soundfile as sf
 from upmixer.batch import BatchProcessor, resolve_batch_jobs
 from upmixer.config import UpmixConfig
 from upmixer.result import UpmixResult
+from upmixer.separation.separator import SeparationSettings
 from upmixer.separation.stem_pipeline_exec import execute_plan
 
 
@@ -201,6 +202,76 @@ class TestSeparatorReuse:
 
         assert p._separators == {}
         assert p._separator_sr is None
+
+    def test_pipeline_tracks_completed_settings_across_eviction_and_new_runs(self):
+        from upmixer.separation.stem_pipeline import StemUpmixPipeline
+
+        class FakeSeparator:
+            instances = []
+
+            def __init__(self, model, **_):
+                self.model = model
+                self.backend = "cpu"
+                self.run_settings = None
+                self.closed = False
+                self.__class__.instances.append(self)
+
+            def close(self):
+                self.closed = True
+
+        def settings_for(model):
+            return SeparationSettings(
+                model=model,
+                sample_rate=48000,
+                batch_size=1,
+                segment_size=64,
+                chunk_duration_s=120.0,
+                overlap=2,
+                tta=False,
+                pitch_shift=None,
+                backend="cpu",
+            )
+
+        def completed_run(get_separator, *_):
+            first = get_separator("first.ckpt", 48000)
+            first.run_settings = settings_for(first.model)
+            second = get_separator("second.ckpt", 48000)
+            second.run_settings = settings_for(second.model)
+            return object()
+
+        def incomplete_run(get_separator, *_):
+            get_separator("third.ckpt", 48000)
+            raise RuntimeError("incomplete separation")
+
+        runs = iter((completed_run, incomplete_run))
+
+        def run_separate(*args):
+            return next(runs)(*args)
+
+        with (
+            patch("upmixer.separation.stem_pipeline.StemSeparator", FakeSeparator),
+            patch(
+                "upmixer.separation.stem_pipeline.separate",
+                side_effect=run_separate,
+            ),
+        ):
+            pipeline = StemUpmixPipeline(UpmixConfig(stem_model_cache_size=1))
+            assert pipeline.last_separation_settings == ()
+
+            assert pipeline._separate("source.wav", None, lambda *_: None) is not None
+            first_settings = pipeline.last_separation_settings
+            assert [settings.model for settings in first_settings] == [
+                "first.ckpt", "second.ckpt",
+            ]
+            assert FakeSeparator.instances[0].closed
+
+            pipeline.close()
+            assert pipeline.last_separation_settings == first_settings
+
+            with pytest.raises(RuntimeError, match="incomplete separation"):
+                pipeline._separate("source.wav", None, lambda *_: None)
+            assert pipeline.last_separation_settings == ()
+            pipeline.close()
 
 
 class TestBatchStemCache:

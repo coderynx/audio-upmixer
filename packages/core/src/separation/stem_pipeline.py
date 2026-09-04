@@ -57,7 +57,7 @@ from upmixer.io.adm_writer import AdmBwfWriter, AdmObject, render_adm_programme
 from upmixer.io.writer import AudioWriter, write_audio
 from upmixer.mastering import MasteringChain, MasteringResult
 from upmixer.result import UpmixResult
-from upmixer.separation.separator import StemSeparator
+from upmixer.separation.separator import SeparationSettings, StemSeparator
 from upmixer.separation.source_anchor import apply_source_anchor
 from upmixer.separation.stem_pipeline_separate import SeparationResult, separate
 from upmixer.separation.stem_router import StemRouter
@@ -111,6 +111,12 @@ class StemUpmixPipeline:
         self._separators: dict[str, StemSeparator] = {}
         self._separator_sr: int | None = None
         self._separator_settings: tuple[object, ...] | None = None
+        self._last_separation_settings: tuple[SeparationSettings, ...] = ()
+
+    @property
+    def last_separation_settings(self) -> tuple[SeparationSettings, ...]:
+        """Settings from each separator that completed the latest run."""
+        return self._last_separation_settings
 
     def _validated_separator_settings(self) -> tuple[object, ...]:
         cfg = self.config
@@ -205,13 +211,29 @@ class StemUpmixPipeline:
         _progress: Callable[[str, float], None],
     ) -> SeparationResult:
         """Read, zone-split, separate, and cache stems — no routing or mastering."""
-        return separate(
-            self._get_or_create_separator,
-            self.config,
-            input_path,
-            input_format_override,
-            _progress,
-        )
+        self._last_separation_settings = ()
+        requested: list[StemSeparator] = []
+
+        def _tracked_get_or_create(model: str, sep_sr: int) -> StemSeparator:
+            separator = self._get_or_create_separator(model, sep_sr)
+            if not any(separator is existing for existing in requested):
+                requested.append(separator)
+            return separator
+
+        try:
+            return separate(
+                _tracked_get_or_create,
+                self.config,
+                input_path,
+                input_format_override,
+                _progress,
+            )
+        finally:
+            self._last_separation_settings = tuple(
+                snapshot
+                for separator in requested
+                if (snapshot := getattr(separator, "run_settings", None)) is not None
+            )
 
     def _post_process_stems(
         self, sep: SeparationResult, _progress: Callable[[str, float], None]
