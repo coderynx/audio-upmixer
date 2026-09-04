@@ -418,7 +418,7 @@ def _validate_bootstrap_args(n_resamples: int, confidence: float, seed: int) -> 
 
 
 def format_report(report: EvalReport) -> str:
-    """Render a report as a per-stem, per-category text table.
+    """Render a report as metric tables followed by coverage counts.
 
     Always reports SDR, fullness, and bleedless together (never SDR alone),
     and prefixes the table with the recorded controls and model metadata.
@@ -452,5 +452,14 @@ def format_report(report: EvalReport) -> str:
     lines.append("Per-category (mean SDR dB / fullness / bleedless):")
     for category, (mean_sdr, mean_fullness, mean_bleedless) in sorted(report.by_category().items()):
         lines.append(f"  {category:<16} SDR={mean_sdr:7.2f}  fullness={mean_fullness:.3f}  bleedless={mean_bleedless:.3f}")
+
+    status_counts: dict[str, int] = defaultdict(int)
+    for row in report.coverage:
+        status_counts[row.status] += 1
+    lines.append("")
+    lines.append(f"Coverage: total={len(report.coverage)}")
+    lines.extend(
+        f"  {status}: {count}" for status, count in sorted(status_counts.items())
+    )
 
     return "\n".join(lines)

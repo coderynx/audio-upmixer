@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from upmixer.eval.report import CoverageRow, EvalReport, StemScore
+from upmixer.eval.report import CoverageRow, EvalReport, StemScore, format_report
 
 
 def _score(
@@ -422,6 +422,32 @@ def test_report_serialization_rejects_non_finite_optional_output_before_write(tm
     with pytest.raises(ValueError, match="Out of range|finite"):
         report.write_json(path, paired_bootstrap={"sdr": float("inf")})
     assert not path.exists()
+
+
+def test_format_report_summarizes_all_present_coverage_statuses():
+    report = _report(
+        _score(None, None, 1.0),
+        coverage=[
+            CoverageRow(stem="Vocals", category="default", status=status)
+            for status in ("scored", "unavailable", "failed", "absent", "skipped")
+        ],
+    )
+
+    text = format_report(report)
+
+    assert "Per-stem (mean SDR dB / fullness / bleedless):" in text
+    assert "Per-category (mean SDR dB / fullness / bleedless):" in text
+    assert "Coverage: total=5" in text
+    for status in ("scored", "unavailable", "failed", "absent", "skipped"):
+        assert f"  {status}: 1" in text
+
+
+def test_format_report_summarizes_empty_coverage():
+    text = format_report(_report(_score(None, None, 1.0), coverage=[]))
+
+    assert "Coverage: total=0" in text
+    assert "Per-stem (mean SDR dB / fullness / bleedless):" in text
+    assert "Per-category (mean SDR dB / fullness / bleedless):" in text
 
 
 @pytest.mark.parametrize(
