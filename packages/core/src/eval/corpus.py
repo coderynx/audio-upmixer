@@ -27,11 +27,17 @@ class CorpusItem:
         stems:   Canonical stem name -> path to the reference stem audio.
         category: Regression-probe category label (e.g. "dense_synth",
             "choir_cluster"); "default" for ordinary material.
+        recording_id: Stable original recording-group identity, when available.
+        item_id: Stable item or excerpt identity, when available.
+        split: Tuning/holdout split identity, when available.
     """
 
     mixture: str
     stems: dict[str, str]
     category: str = "default"
+    recording_id: str | None = None
+    item_id: str | None = None
+    split: str | None = None
 
 
 @dataclass
@@ -62,7 +68,16 @@ class ReferenceCorpus:
         for raw in manifest["items"]:
             mixture = str(base / raw["mixture"])
             stems = {name: str(base / rel) for name, rel in raw["stems"].items()}
-            items.append(CorpusItem(mixture=mixture, stems=stems, category=raw.get("category", "default")))
+            items.append(
+                CorpusItem(
+                    mixture=mixture,
+                    stems=stems,
+                    category=raw.get("category", "default"),
+                    recording_id=raw.get("recording_id"),
+                    item_id=raw.get("item_id"),
+                    split=raw.get("split"),
+                )
+            )
         return cls(items=items)
 
 
@@ -120,7 +135,16 @@ def synthetic_corpus(sample_rate: int, out_dir: str) -> ReferenceCorpus:
         stem_paths[name] = str(p)
     mix_path = base / "default" / "mix.wav"
     _write_wav(mix_path, stereo(default_mix), sample_rate)
-    items.append(CorpusItem(mixture=str(mix_path), stems=stem_paths, category="default"))
+    items.append(
+        CorpusItem(
+            mixture=str(mix_path),
+            stems=stem_paths,
+            category="default",
+            recording_id="synthetic-default",
+            item_id="default",
+            split="synthetic",
+        )
+    )
 
     # "dense_synth": many overlapping partials — a known model-killer texture.
     synth_partials = sum(
@@ -137,7 +161,16 @@ def synthetic_corpus(sample_rate: int, out_dir: str) -> ReferenceCorpus:
         stem_paths[name] = str(p)
     mix_path = base / "dense_synth" / "mix.wav"
     _write_wav(mix_path, stereo(dense_mix), sample_rate)
-    items.append(CorpusItem(mixture=str(mix_path), stems=stem_paths, category="dense_synth"))
+    items.append(
+        CorpusItem(
+            mixture=str(mix_path),
+            stems=stem_paths,
+            category="dense_synth",
+            recording_id="synthetic-dense-synth",
+            item_id="dense_synth",
+            split="synthetic",
+        )
+    )
 
     # "choir_cluster": several detuned unison voices — another known killer.
     detunes = [-6, -2, 0, 3, 7]
@@ -154,6 +187,15 @@ def synthetic_corpus(sample_rate: int, out_dir: str) -> ReferenceCorpus:
         stem_paths[name] = str(p)
     mix_path = base / "choir_cluster" / "mix.wav"
     _write_wav(mix_path, stereo(choir_mix), sample_rate)
-    items.append(CorpusItem(mixture=str(mix_path), stems=stem_paths, category="choir_cluster"))
+    items.append(
+        CorpusItem(
+            mixture=str(mix_path),
+            stems=stem_paths,
+            category="choir_cluster",
+            recording_id="synthetic-choir-cluster",
+            item_id="choir_cluster",
+            split="synthetic",
+        )
+    )
 
     return ReferenceCorpus(items=items)

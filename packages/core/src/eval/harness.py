@@ -24,6 +24,15 @@ from upmixer.separation.stem_plan import ENSEMBLE_ALGORITHM, MODEL_ENSEMBLE
 SeparateFn = Callable[[str], tuple[dict[str, np.ndarray], "RunSettings"]]
 
 
+def _validate_audio(array: np.ndarray, label: str) -> None:
+    if not isinstance(array, np.ndarray) or array.ndim != 2:
+        raise ValueError(f"{label} must be a 2D array (frames, channels)")
+    if not array.size or not array.shape[0] or not array.shape[1]:
+        raise ValueError(f"{label} must not be empty")
+    if not np.issubdtype(array.dtype, np.number) or not np.all(np.isfinite(array)):
+        raise ValueError(f"{label} must contain finite numeric values")
+
+
 @dataclass
 class RunSettings:
     """Inference configuration recorded alongside every score.
@@ -137,18 +146,53 @@ def evaluate_corpus(
 
     Returns:
         EvalReport with one StemScore per (item, shared stem) and the
-        RunSettings from the last item processed (settings are expected to
-        be constant across a single evaluation run).
+        consistent RunSettings used across the evaluation run.
     """
     scores: list[StemScore] = []
     settings: RunSettings | None = None
     for item in corpus.items:
-        estimate_stems, settings = separate_fn(item.mixture)
+        if not item.stems:
+            raise ValueError(f"item {item.item_id or item.mixture} has no reference stems")
+        estimate_stems, item_settings = separate_fn(item.mixture)
+        if not isinstance(estimate_stems, dict) or not estimate_stems:
+            raise ValueError(f"item {item.item_id or item.mixture} returned empty outputs")
+        missing = sorted(set(item.stems) - set(estimate_stems))
+        if missing:
+            raise ValueError(
+                f"item {item.item_id or item.mixture} missing required stem(s): "
+                f"{', '.join(missing)}"
+            )
+        if not isinstance(item_settings, RunSettings):
+            raise ValueError("separation returned invalid RunSettings")
+        if item_settings.sample_rate != sample_rate:
+            raise ValueError(
+                f"RunSettings sample rate {item_settings.sample_rate} does not "
+                f"match evaluation sample rate {sample_rate}"
+            )
+        if settings is None:
+            settings = item_settings
+        elif item_settings != settings:
+            raise ValueError("inconsistent RunSettings across corpus items")
         for stem_name, ref_path in item.stems.items():
-            if stem_name not in estimate_stems:
-                continue
-            reference, _ = sf.read(ref_path, dtype="float32", always_2d=True)
+            reference, reference_rate = sf.read(ref_path, dtype="float32", always_2d=True)
+            if reference_rate != sample_rate:
+                raise ValueError(
+                    f"reference {ref_path} sample rate {reference_rate} does not "
+                    f"match evaluation sample rate {sample_rate}"
+                )
+            _validate_audio(reference, f"reference {ref_path}")
             estimate = estimate_stems[stem_name]
+            _validate_audio(estimate, f"estimate {stem_name}")
+            if reference.shape[1] != estimate.shape[1]:
+                raise ValueError(
+                    f"channel count mismatch for {stem_name}: reference has "
+                    f"{reference.shape[1]}, estimate has {estimate.shape[1]}"
+                )
+            if reference.shape[0] != estimate.shape[0]:
+                raise ValueError(
+                    f"frame count mismatch for {stem_name}: reference has "
+                    f"{reference.shape[0]}, estimate has {estimate.shape[0]}"
+                )
             scores.append(
                 StemScore(
                     stem=stem_name,
@@ -156,6 +200,9 @@ def evaluate_corpus(
                     sdr=sdr(reference, estimate),
                     fullness=fullness(reference, estimate, sample_rate),
                     bleedless=bleedless(reference, estimate, sample_rate),
+                    recording_id=item.recording_id,
+                    item_id=item.item_id,
+                    split=item.split,
                 )
             )
     if settings is None:

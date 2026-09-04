@@ -18,6 +18,9 @@ class StemScore:
     sdr: float
     fullness: float
     bleedless: float
+    recording_id: str | None = None
+    item_id: str | None = None
+    split: str | None = None
 
 
 @dataclass
