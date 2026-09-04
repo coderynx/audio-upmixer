@@ -34,6 +34,10 @@ def _report(*scores: StemScore, coverage: list[CoverageRow] | None = None) -> Ev
     return EvalReport(settings=SimpleNamespace(), scores=list(scores), coverage=coverage or [])
 
 
+def _group(rows, field: str, value: str, split: str | None = None):
+    return next(row for row in rows if row[field] == value and row["split"] == split)
+
+
 def test_recording_means_names_metrics_and_preserves_existing_groupings():
     report = _report(
         _score("r1", "i1", 1.0, fullness=0.4, bleedless=0.7),
@@ -176,13 +180,14 @@ def test_paired_bootstrap_matches_exact_rows_and_exposes_unmatched_coverage():
     }
 
     intervals = result["confidence_intervals"]
+    stem = _group(intervals["by_stem"], "stem", "Vocals")
     assert intervals["seed"] == 7
     assert intervals["n_resamples"] == 100
     assert intervals["n_recordings"] == 2
-    assert intervals["by_stem"]["Vocals"]["status"] == "ok"
-    assert intervals["by_stem"]["Vocals"]["n_recordings"] == 2
-    assert intervals["by_stem"]["Vocals"]["sdr"]["estimate"] == 1.5
-    assert {"sdr", "fullness", "bleedless"} <= set(intervals["by_stem"]["Vocals"])
+    assert stem["status"] == "ok"
+    assert stem["n_recordings"] == 2
+    assert stem["sdr"]["estimate"] == 1.5
+    assert {"sdr", "fullness", "bleedless"} <= set(stem)
 
 
 def test_bootstrap_aggregates_excerpts_before_sampling_and_is_seeded():
@@ -204,7 +209,7 @@ def test_bootstrap_aggregates_excerpts_before_sampling_and_is_seeded():
 
     assert first == second
     assert first["confidence_intervals"]["n_recordings"] == 2
-    assert first["confidence_intervals"]["by_stem"]["Vocals"]["sdr"]["estimate"] == 2.0
+    assert _group(first["confidence_intervals"]["by_stem"], "stem", "Vocals")["sdr"]["estimate"] == 2.0
 
 
 def test_bootstrap_marks_single_recording_groups_without_blocking_valid_groups():
@@ -221,19 +226,23 @@ def test_bootstrap_marks_single_recording_groups_without_blocking_valid_groups()
 
     result = baseline.paired_bootstrap(candidate, n_resamples=100, seed=3)
     intervals = result["confidence_intervals"]
+    vocal = _group(intervals["by_stem"], "stem", "Vocals")
+    bass = _group(intervals["by_stem"], "stem", "Bass")
+    default = _group(intervals["by_category"], "category", "default")
+    rare = _group(intervals["by_category"], "category", "rare")
 
     assert intervals["n_recordings"] == 2
-    assert intervals["by_stem"]["Vocals"]["status"] == "ok"
-    assert intervals["by_stem"]["Vocals"]["n_recordings"] == 2
-    assert intervals["by_stem"]["Bass"]["status"] == "insufficient_recordings"
-    assert intervals["by_stem"]["Bass"]["n_recordings"] == 1
-    assert intervals["by_category"]["default"]["status"] == "ok"
-    assert intervals["by_category"]["rare"]["status"] == "insufficient_recordings"
-    assert intervals["by_category"]["rare"]["n_recordings"] == 1
+    assert vocal["status"] == "ok"
+    assert vocal["n_recordings"] == 2
+    assert bass["status"] == "insufficient_recordings"
+    assert bass["n_recordings"] == 1
+    assert default["status"] == "ok"
+    assert rare["status"] == "insufficient_recordings"
+    assert rare["n_recordings"] == 1
     for metric in ("sdr", "fullness", "bleedless"):
-        assert intervals["by_stem"]["Bass"][metric]["estimate"] == (4.0 if metric == "sdr" else 0.0)
-        assert intervals["by_stem"]["Bass"][metric]["low"] is None
-        assert intervals["by_stem"]["Bass"][metric]["high"] is None
+        assert bass[metric]["estimate"] == (4.0 if metric == "sdr" else 0.0)
+        assert bass[metric]["low"] is None
+        assert bass[metric]["high"] is None
 
 
 def test_paired_bootstrap_keeps_split_boundaries_through_pairs_and_sampling():
@@ -256,18 +265,36 @@ def test_paired_bootstrap_keeps_split_boundaries_through_pairs_and_sampling():
         ("tuning", 1.0),
         ("tuning", 2.0),
     ]
-    assert set(intervals["by_stem"]) == {"holdout:Vocals", "tuning:Vocals"}
-    assert intervals["by_stem"]["holdout:Vocals"]["split"] == "holdout"
-    assert intervals["by_stem"]["holdout:Vocals"]["n_recordings"] == 1
-    assert intervals["by_stem"]["holdout:Vocals"]["status"] == "insufficient_recordings"
-    assert intervals["by_stem"]["holdout:Vocals"]["sdr"] == {
+    holdout = _group(intervals["by_stem"], "stem", "Vocals", "holdout")
+    tuning = _group(intervals["by_stem"], "stem", "Vocals", "tuning")
+    assert len(intervals["by_stem"]) == 2
+    assert holdout["n_recordings"] == 1
+    assert holdout["status"] == "insufficient_recordings"
+    assert holdout["sdr"] == {
         "estimate": 5.0,
         "low": None,
         "high": None,
     }
-    assert intervals["by_stem"]["tuning:Vocals"]["n_recordings"] == 2
-    assert intervals["by_stem"]["tuning:Vocals"]["status"] == "ok"
-    assert intervals["by_stem"]["tuning:Vocals"]["sdr"]["estimate"] == 1.5
+    assert tuning["n_recordings"] == 2
+    assert tuning["status"] == "ok"
+    assert tuning["sdr"]["estimate"] == 1.5
+
+
+def test_bootstrap_group_rows_cannot_collide_on_split_or_name():
+    baseline = _report(
+        _score("r1", "i1", 1.0, stem="c", split="a:b"),
+        _score("r2", "i1", 2.0, stem="b:c", split="a"),
+    )
+    candidate = _report(
+        _score("r1", "i1", 2.0, stem="c", split="a:b"),
+        _score("r2", "i1", 4.0, stem="b:c", split="a"),
+    )
+
+    rows = baseline.paired_bootstrap(candidate)["confidence_intervals"]["by_stem"]
+
+    assert len(rows) == 2
+    assert _group(rows, "stem", "c", "a:b")["sdr"]["estimate"] == 1.0
+    assert _group(rows, "stem", "b:c", "a")["sdr"]["estimate"] == 2.0
 
 
 def test_paired_bootstrap_includes_unavailable_side_coverage():

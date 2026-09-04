@@ -303,19 +303,19 @@ def _bootstrap_groups(
     n_resamples: int,
     confidence: float,
     rng: np.random.Generator,
-) -> dict[str, dict[str, object]]:
+) -> list[dict[str, object]]:
     grouped = _paired_recording_deltas(left, right, matched_keys, group_index)
-    result: dict[str, dict[str, object]] = {}
+    result: list[dict[str, object]] = []
     tail = (1.0 - confidence) / 2.0
     for (split, group), recording_values in sorted(grouped.items(), key=lambda item: _sort_key(item[0])):
-        label = group if split is None else f"{split}:{group}"
         recording_ids = sorted(recording_values)
         values = np.asarray([recording_values[recording_id] for recording_id in recording_ids], dtype=float)
         estimate = values.mean(axis=0)
         group_result: dict[str, object] = {
+            "stem" if group_index == 3 else "category": group,
+            "split": split,
             "status": "ok" if len(recording_ids) >= 2 else "insufficient_recordings",
             "n_recordings": len(recording_ids),
-            "split": split,
         }
         if len(recording_ids) >= 2:
             sample_indices = rng.integers(0, len(recording_ids), size=(n_resamples, len(recording_ids)))
@@ -333,7 +333,7 @@ def _bootstrap_groups(
                 for index, metric in enumerate(_METRICS)
             }
         )
-        result[label] = group_result
+        result.append(group_result)
     return result
 
 
