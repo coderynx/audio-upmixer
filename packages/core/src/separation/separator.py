@@ -10,6 +10,7 @@ import tempfile
 import time
 import traceback
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -215,6 +216,25 @@ MODEL_STEM_OVERRIDES: dict[str, dict[str, str]] = {
 }
 
 
+@dataclass(frozen=True)
+class SeparationSettings:
+    """Observed settings from one completed separator run."""
+
+    model: str
+    sample_rate: int
+    batch_size: int
+    segment_size: int | None
+    chunk_duration_s: float | None
+    overlap: int | None
+    tta: bool
+    pitch_shift: float | None
+    backend: str
+    model_arch: str | None = None
+    model_config_name: str | None = None
+    model_native_sample_rate: int | None = None
+    device: str | None = None
+
+
 class StemSeparator:
     """Separates an audio file into instrument stems using the in-core engine.
 
@@ -311,11 +331,100 @@ class StemSeparator:
         self._engine: SeparationEngine | None = None
         self._scnet_worker: SCNetWorker | None = None
         self._tmp_dir: str | None = None
+        self._run_settings: SeparationSettings | None = None
 
     @property
     def backend(self) -> str:
         """Inference backend selected for this model (cuda/mps/mlx/cpu)."""
         return self._backend
+
+    @property
+    def run_settings(self) -> SeparationSettings | None:
+        """Return immutable settings observed by the latest completed run."""
+        return self._run_settings
+
+    def _registry_details(
+        self,
+    ) -> tuple[str | None, str | None, int | None, object | None]:
+        """Return registry metadata without loading checkpoint weights."""
+        try:
+            from .inference.registry import get_model_spec
+
+            spec = get_model_spec(self._model)
+        except (ImportError, KeyError):
+            return None, None, None, None
+
+        config = None
+        try:
+            from .inference.config import load_model_config
+
+            config = load_model_config(spec.config_name)
+            native_sample_rate = config.sample_rate
+        except (AttributeError, FileNotFoundError, KeyError, TypeError, ValueError):
+            native_sample_rate = None
+        return (
+            getattr(spec, "arch", None),
+            getattr(spec, "config_name", None),
+            native_sample_rate,
+            config,
+        )
+
+    def _settings_snapshot(self) -> SeparationSettings:
+        """Build a snapshot after inference, including resolved engine defaults."""
+        model_arch, config_name, native_sample_rate, registry_config = (
+            self._registry_details()
+        )
+        engine = self._engine
+        arch = getattr(engine, "_arch", None) or model_arch
+
+        segment_size = self._segment_size
+        overlap = self._overlap
+        if engine is not None:
+            try:
+                resolved_segment = engine._resolved_segment_size()
+            except (AttributeError, TypeError, ValueError):
+                resolved_segment = None
+            if resolved_segment is not None:
+                segment_size = int(resolved_segment)
+            elif registry_config is not None:
+                try:
+                    segment_size = int(registry_config.default_segment_size)
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    pass
+
+        if overlap is None:
+            if arch in {"bs_roformer", "mel_band_roformer"}:
+                overlap = 2
+            elif arch == "tfc_tdf_v3":
+                overlap = 8
+            elif registry_config is not None:
+                try:
+                    overlap = int(registry_config.num_overlap)
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    pass
+
+        device_name = None
+        if engine is not None:
+            try:
+                device_name = str(engine._model_device())
+            except (AttributeError, RuntimeError, StopIteration):
+                pass
+
+        return SeparationSettings(
+            model=self._model,
+            sample_rate=self._sample_rate,
+            batch_size=self._batch_size,
+            segment_size=segment_size,
+            chunk_duration_s=self._chunk_duration_s,
+            overlap=overlap,
+            tta=self._tta,
+            pitch_shift=self._pitch_shift,
+            backend=self._backend,
+            model_arch=model_arch,
+            model_config_name=config_name,
+            model_native_sample_rate=native_sample_rate,
+            device=device_name,
+        )
 
     def _ensure_tmp_dir(self) -> str:
         """Return (creating if needed) the persistent temp directory."""
@@ -395,6 +504,7 @@ class StemSeparator:
         progress_callback: Callable[[float], None] | None = None,
     ) -> list[str]:
         """Separate with progressively lower-memory retries after OOM."""
+        self._run_settings = None
         while True:
             engine = None
             try:
@@ -436,6 +546,7 @@ class StemSeparator:
                     self._model,
                     time.monotonic() - started,
                 )
+                self._run_settings = self._settings_snapshot()
                 return paths
             except Exception as exc:
                 if not _is_oom_error(exc):

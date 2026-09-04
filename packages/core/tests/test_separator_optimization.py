@@ -9,6 +9,7 @@ import pytest
 from upmixer.separation.inference.registry import ModelSpec
 from upmixer.separation.separator import (
     MODEL_STEM_OVERRIDES,
+    SeparationSettings,
     StemSeparator,
     _SUCCESSFUL_BATCHES,
     _automatic_batch_size,
@@ -210,6 +211,9 @@ def test_accelerator_oom_retries_with_smaller_batch():
 
     assert fake.calls == 2
     assert separator._batch_size == 2
+    assert separator.run_settings is not None
+    assert separator.run_settings.batch_size == 2
+    assert separator.run_settings.device is None
 
 
 def test_cpu_oom_retries_with_smaller_segment():
@@ -264,6 +268,85 @@ def test_cpu_oom_retries_with_quality_knobs_set():
     assert separator._overlap == 8
     assert separator._tta is True
     assert separator._pitch_shift == 0.75
+
+
+def test_completed_settings_snapshot_reports_effective_and_registry_values():
+    class FakeDevice:
+        type = "cpu"
+
+        def __str__(self):
+            return "cpu"
+
+    class FakeEngine:
+        _arch = "bs_roformer"
+
+        def separate(self, _audio_path):
+            return []
+
+        def _resolved_segment_size(self):
+            return 123
+
+        def _model_device(self):
+            return FakeDevice()
+
+    engine = FakeEngine()
+    separator = StemSeparator(
+        model="BS-Roformer-SW.ckpt",
+        sample_rate=48000,
+        batch_size=4,
+        segment_size=None,
+        chunk_duration_s=120.0,
+        overlap=None,
+        tta=True,
+        pitch_shift=0.75,
+    )
+    separator._engine = engine
+    with patch.object(separator, "_get_separator", return_value=engine):
+        assert separator._separate_paths("input.wav") == []
+
+    settings = separator.run_settings
+    assert isinstance(settings, SeparationSettings)
+    assert settings.model == "BS-Roformer-SW.ckpt"
+    assert settings.sample_rate == 48000
+    assert settings.backend == separator.backend
+    assert settings.batch_size == 4
+    assert settings.segment_size == 123
+    assert settings.chunk_duration_s == 120.0
+    assert settings.overlap == 2
+    assert settings.tta is True
+    assert settings.pitch_shift == 0.75
+    assert settings.model_arch == "bs_roformer"
+    assert settings.model_config_name == "BS-Roformer-SW"
+    assert settings.model_native_sample_rate == 44100
+    assert settings.device == "cpu"
+
+    with pytest.raises(AttributeError):
+        settings.batch_size = 2
+
+    separator.close()
+
+
+def test_run_settings_reset_before_a_new_failed_run():
+    separator = StemSeparator(model="model.ckpt", batch_size=1)
+
+    class FakeSeparator:
+        calls = 0
+
+        def separate(self, _):
+            self.calls += 1
+            if self.calls == 2:
+                raise ValueError("invalid test input")
+            return []
+
+    fake = FakeSeparator()
+    with patch.object(separator, "_get_separator", return_value=fake):
+        assert separator._separate_paths("input.wav") == []
+        assert separator.run_settings is not None
+        with pytest.raises(ValueError, match="invalid test input"):
+            separator._separate_paths("input.wav")
+
+    assert separator.run_settings is None
+    separator.close()
 
 
 def test_cpu_oom_propagates_after_minimum_settings():
