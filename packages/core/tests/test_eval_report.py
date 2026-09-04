@@ -2,6 +2,7 @@
 import json
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from upmixer.eval.report import CoverageRow, EvalReport, StemScore
@@ -30,8 +31,16 @@ def _score(
     )
 
 
-def _report(*scores: StemScore, coverage: list[CoverageRow] | None = None) -> EvalReport:
-    return EvalReport(settings=SimpleNamespace(), scores=list(scores), coverage=coverage or [])
+def _report(
+    *scores: StemScore,
+    coverage: list[CoverageRow] | None = None,
+    settings: object | None = None,
+) -> EvalReport:
+    return EvalReport(
+        settings=settings or SimpleNamespace(),
+        scores=list(scores),
+        coverage=coverage or [],
+    )
 
 
 def _group(rows, field: str, value: str, split: str | None = None):
@@ -351,6 +360,68 @@ def test_paired_bootstrap_includes_unavailable_side_coverage():
             "split": "holdout",
         },
     ]
+
+
+def test_report_serialization_preserves_rows_settings_aggregates_and_paired_output(tmp_path):
+    settings = SimpleNamespace(
+        model="demo",
+        sample_rate=48000,
+        ensemble_models=("baseline", "candidate"),
+        observed_gain=np.float64(1.25),
+    )
+    report = _report(
+        _score("r1", "i1", 1.0, fullness=0.4, bleedless=0.7),
+        _score("r1", "i2", 3.0, fullness=0.6, bleedless=0.9),
+        coverage=[
+            CoverageRow(
+                stem="Crowd",
+                category="default",
+                status="unavailable",
+                recording_id="r1",
+                item_id="i1",
+                split="holdout",
+            )
+        ],
+        settings=settings,
+    )
+    paired = {"precomputed": {"sdr": np.float64(0.5)}}
+
+    payload = report.to_dict(paired_bootstrap=paired)
+
+    assert payload["schema_version"] == 1
+    assert payload["settings"] == {
+        "model": "demo",
+        "sample_rate": 48000,
+        "ensemble_models": ["baseline", "candidate"],
+        "observed_gain": 1.25,
+    }
+    assert len(payload["scores"]) == 2
+    assert payload["coverage"][0]["status"] == "unavailable"
+    assert payload["by_stem"] == {
+        "Vocals": {"sdr": 2.0, "fullness": 0.5, "bleedless": 0.8}
+    }
+    assert payload["by_category"] == {
+        "default": {"sdr": 2.0, "fullness": 0.5, "bleedless": 0.8}
+    }
+    assert payload["by_recording"][0]["recording_id"] == "r1"
+    assert payload["by_recording"][0]["n_items"] == 2
+    assert payload["paired_bootstrap"] == {"precomputed": {"sdr": 0.5}}
+    assert json.loads(report.to_json(paired_bootstrap=paired)) == payload
+
+    path = tmp_path / "nested" / "report.json"
+    report.write_json(path, paired_bootstrap=paired)
+    assert json.loads(path.read_text(encoding="utf-8")) == payload
+
+
+def test_report_serialization_rejects_non_finite_optional_output_before_write(tmp_path):
+    report = _report(_score("r1", "i1", 1.0), _score("r2", "i1", 2.0))
+    path = tmp_path / "report.json"
+
+    with pytest.raises(ValueError, match="Out of range|finite"):
+        report.to_dict(paired_bootstrap={"sdr": float("nan")})
+    with pytest.raises(ValueError, match="Out of range|finite"):
+        report.write_json(path, paired_bootstrap={"sdr": float("inf")})
+    assert not path.exists()
 
 
 @pytest.mark.parametrize(

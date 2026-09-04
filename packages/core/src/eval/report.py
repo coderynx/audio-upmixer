@@ -1,11 +1,15 @@
 """Aggregation and formatting for evaluation harness results."""
 from __future__ import annotations
 
+import json
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+from upmixer.execution import write_report
 
 if TYPE_CHECKING:
     from upmixer.eval.harness import RunSettings
@@ -79,6 +83,44 @@ class EvalReport:
             )
         return rows
 
+    def to_dict(self, *, paired_bootstrap: dict[str, object] | None = None) -> dict[str, object]:
+        """Return a versioned, JSON-safe evaluation report."""
+        settings = asdict(self.settings) if is_dataclass(self.settings) else vars(self.settings)
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "settings": settings,
+            "scores": [asdict(score) for score in self.scores],
+            "coverage": [asdict(row) for row in self.coverage],
+            "by_stem": _named_means(self.by_stem()),
+            "by_category": _named_means(self.by_category()),
+            "by_recording": self.recording_means(),
+        }
+        if paired_bootstrap is not None:
+            payload["paired_bootstrap"] = paired_bootstrap
+        return _validated_json(_json_safe(payload))
+
+    def to_json(
+        self,
+        indent: int | None = 2,
+        *,
+        paired_bootstrap: dict[str, object] | None = None,
+    ) -> str:
+        """Return the versioned report as JSON."""
+        return json.dumps(
+            self.to_dict(paired_bootstrap=paired_bootstrap),
+            indent=indent,
+            allow_nan=False,
+        )
+
+    def write_json(
+        self,
+        path: str | Path,
+        *,
+        paired_bootstrap: dict[str, object] | None = None,
+    ) -> None:
+        """Write the versioned report atomically as JSON."""
+        write_report(path, self.to_dict(paired_bootstrap=paired_bootstrap))
+
     def paired_bootstrap(
         self,
         other: "EvalReport",
@@ -144,6 +186,35 @@ def _grouped_means(scores: list[StemScore], key) -> dict[str, tuple[float, float
 
 
 _METRICS = ("sdr", "fullness", "bleedless")
+
+
+def _named_means(grouped: dict[str, tuple[float, float, float]]) -> dict[str, dict[str, float]]:
+    return {
+        group: {
+            metric: float(values[index])
+            for index, metric in enumerate(_METRICS)
+        }
+        for group, values in grouped.items()
+    }
+
+
+def _json_safe(value):
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
+    if isinstance(value, np.ndarray):
+        return _json_safe(value.tolist())
+    if is_dataclass(value):
+        return _json_safe(asdict(value))
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _validated_json(payload: dict[str, object]) -> dict[str, object]:
+    json.dumps(payload, allow_nan=False)
+    return payload
 
 
 def _validated_score_map(scores: list[StemScore]) -> dict[_ScoreKey, StemScore]:
