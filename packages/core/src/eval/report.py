@@ -11,6 +11,9 @@ if TYPE_CHECKING:
     from upmixer.eval.harness import RunSettings
 
 
+_ScoreKey = tuple[str, str, str, str, str | None]
+
+
 @dataclass
 class StemScore:
     """Scores for one stem on one corpus item."""
@@ -54,20 +57,21 @@ class EvalReport:
         return _grouped_means(self.scores, key=lambda s: s.category)
 
     def recording_means(self) -> list[dict[str, object]]:
-        """Return one named-metric row per recording/category/stem group."""
+        """Return one named-metric row per recording/category/stem/split group."""
         score_map = _validated_score_map(self.scores)
-        groups: dict[tuple[str, str, str], list[StemScore]] = defaultdict(list)
+        groups: dict[tuple[str, str, str, str | None], list[StemScore]] = defaultdict(list)
         for score in score_map.values():
-            groups[(score.recording_id, score.category, score.stem)].append(score)
+            groups[(score.recording_id, score.category, score.stem, score.split)].append(score)
 
         rows: list[dict[str, object]] = []
-        for (recording_id, category, stem), scores in sorted(groups.items()):
+        for (recording_id, category, stem, split), scores in sorted(groups.items(), key=lambda item: _sort_key(item[0])):
             metrics = _mean_metrics(scores)
             rows.append(
                 {
                     "recording_id": recording_id,
                     "category": category,
                     "stem": stem,
+                    "split": split,
                     "item_ids": sorted(score.item_id for score in scores),
                     "n_items": len(scores),
                     **metrics,
@@ -87,20 +91,28 @@ class EvalReport:
 
         ``self`` is the left/baseline report and ``other`` is the right/candidate
         report, so each reported delta is ``other - self``. Exact
-        ``(recording_id, item_id, category, stem)`` identities are paired first;
+        ``(recording_id, item_id, category, stem, split)`` identities are paired first;
         repeated items from one recording are then averaged before resampling.
         """
         _validate_bootstrap_args(n_resamples, confidence, seed)
         left = _validated_score_map(self.scores)
         right = _validated_score_map(other.scores)
+        left_coverage = _validated_coverage_map(self.coverage)
+        right_coverage = _validated_coverage_map(other.coverage)
         left_keys = set(left)
         right_keys = set(right)
-        matched_keys = sorted(left_keys & right_keys)
+        matched_keys = sorted(left_keys & right_keys, key=_sort_key)
         if len({key[0] for key in matched_keys}) < 2:
             raise ValueError("paired bootstrap requires at least two matched recordings")
 
         pairs = _paired_rows(left, right, matched_keys)
-        coverage = _paired_coverage(left_keys, right_keys, matched_keys)
+        coverage = _paired_coverage(
+            left_keys,
+            right_keys,
+            matched_keys,
+            left_coverage,
+            right_coverage,
+        )
         rng = np.random.default_rng(seed)
         confidence_intervals = {
             "confidence": float(confidence),
@@ -134,8 +146,8 @@ def _grouped_means(scores: list[StemScore], key) -> dict[str, tuple[float, float
 _METRICS = ("sdr", "fullness", "bleedless")
 
 
-def _validated_score_map(scores: list[StemScore]) -> dict[tuple[str, str, str, str], StemScore]:
-    result: dict[tuple[str, str, str, str], StemScore] = {}
+def _validated_score_map(scores: list[StemScore]) -> dict[_ScoreKey, StemScore]:
+    result: dict[_ScoreKey, StemScore] = {}
     for score in scores:
         if not isinstance(score.recording_id, str) or not score.recording_id.strip() or not isinstance(score.item_id, str) or not score.item_id.strip():
             raise ValueError("paired comparison requires stable recording_id and item_id")
@@ -148,7 +160,7 @@ def _validated_score_map(scores: list[StemScore]) -> dict[tuple[str, str, str, s
             if not np.isfinite(value):
                 raise ValueError(f"{metric} scores must be finite numbers")
             values.append(value)
-        key = (score.recording_id, score.item_id, score.category, score.stem)
+        key = (score.recording_id, score.item_id, score.category, score.stem, score.split)
         if key in result:
             raise ValueError(f"duplicate score identity: {key!r}")
         result[key] = score
@@ -167,16 +179,16 @@ def _metric_values(score: StemScore) -> dict[str, float]:
 
 
 def _paired_rows(
-    left: dict[tuple[str, str, str, str], StemScore],
-    right: dict[tuple[str, str, str, str], StemScore],
-    matched_keys: list[tuple[str, str, str, str]],
+    left: dict[_ScoreKey, StemScore],
+    right: dict[_ScoreKey, StemScore],
+    matched_keys: list[_ScoreKey],
 ) -> list[dict[str, object]]:
-    groups: dict[tuple[str, str, str], list[tuple[StemScore, StemScore]]] = defaultdict(list)
+    groups: dict[tuple[str, str, str, str | None], list[tuple[StemScore, StemScore]]] = defaultdict(list)
     for key in matched_keys:
-        groups[(key[0], key[2], key[3])].append((left[key], right[key]))
+        groups[(key[0], key[2], key[3], key[4])].append((left[key], right[key]))
 
     rows: list[dict[str, object]] = []
-    for (recording_id, category, stem), score_pairs in sorted(groups.items()):
+    for (recording_id, category, stem, split), score_pairs in sorted(groups.items(), key=lambda item: _sort_key(item[0])):
         left_metrics = _mean_metrics([pair[0] for pair in score_pairs])
         right_metrics = _mean_metrics([pair[1] for pair in score_pairs])
         rows.append(
@@ -184,6 +196,7 @@ def _paired_rows(
                 "recording_id": recording_id,
                 "category": category,
                 "stem": stem,
+                "split": split,
                 "item_ids": sorted(pair[0].item_id for pair in score_pairs),
                 "n_items": len(score_pairs),
                 "left": left_metrics,
@@ -197,88 +210,130 @@ def _paired_rows(
     return rows
 
 
-def _identity(key: tuple[str, str, str, str]) -> dict[str, str]:
-    recording_id, item_id, category, stem = key
+def _identity(key: _ScoreKey) -> dict[str, object]:
+    recording_id, item_id, category, stem, split = key
     return {
         "recording_id": recording_id,
         "item_id": item_id,
         "category": category,
         "stem": stem,
+        "split": split,
     }
 
 
+def _sort_key(key: tuple[object, ...]) -> tuple[str, ...]:
+    return tuple("" if value is None else str(value) for value in key)
+
+
+def _validated_coverage_map(rows: list[CoverageRow]) -> dict[_ScoreKey, CoverageRow]:
+    result: dict[_ScoreKey, CoverageRow] = {}
+    for row in rows:
+        if not isinstance(row.recording_id, str) or not row.recording_id.strip() or not isinstance(row.item_id, str) or not row.item_id.strip():
+            raise ValueError("paired comparison requires stable recording_id and item_id")
+        key = (row.recording_id, row.item_id, row.category, row.stem, row.split)
+        if key in result:
+            raise ValueError(f"duplicate coverage identity: {key!r}")
+        result[key] = row
+    return result
+
+
 def _paired_coverage(
-    left_keys: set[tuple[str, str, str, str]],
-    right_keys: set[tuple[str, str, str, str]],
-    matched_keys: list[tuple[str, str, str, str]],
+    left_keys: set[_ScoreKey],
+    right_keys: set[_ScoreKey],
+    matched_keys: list[_ScoreKey],
+    left_coverage: dict[_ScoreKey, CoverageRow],
+    right_coverage: dict[_ScoreKey, CoverageRow],
 ) -> dict[str, object]:
-    left_recordings = {key[0] for key in left_keys}
-    right_recordings = {key[0] for key in right_keys}
+    left_all_keys = left_keys | set(left_coverage)
+    right_all_keys = right_keys | set(right_coverage)
     unmatched = [
         {"side": "left", **_identity(key)}
-        for key in sorted(left_keys - set(matched_keys))
+        for key in sorted(left_keys - set(matched_keys), key=_sort_key)
     ]
     unmatched.extend(
         {"side": "right", **_identity(key)}
-        for key in sorted(right_keys - set(matched_keys))
+        for key in sorted(right_keys - set(matched_keys), key=_sort_key)
+    )
+    unavailable = [
+        {"side": "left", "status": row.status, **_identity(key)}
+        for key, row in sorted(left_coverage.items(), key=lambda item: _sort_key(item[0]))
+        if row.status != "scored"
+    ]
+    unavailable.extend(
+        {"side": "right", "status": row.status, **_identity(key)}
+        for key, row in sorted(right_coverage.items(), key=lambda item: _sort_key(item[0]))
+        if row.status != "scored"
     )
     return {
         "matched_items": [_identity(key) for key in matched_keys],
         "unmatched_items": unmatched,
         "matched_recordings": sorted({key[0] for key in matched_keys}),
-        "left_only_recordings": sorted(left_recordings - right_recordings),
-        "right_only_recordings": sorted(right_recordings - left_recordings),
+        "left_only_recordings": sorted({key[0] for key in left_all_keys} - {key[0] for key in right_all_keys}),
+        "right_only_recordings": sorted({key[0] for key in right_all_keys} - {key[0] for key in left_all_keys}),
+        "unavailable_items": unavailable,
     }
 
 
 def _paired_recording_deltas(
-    left: dict[tuple[str, str, str, str], StemScore],
-    right: dict[tuple[str, str, str, str], StemScore],
-    matched_keys: list[tuple[str, str, str, str]],
+    left: dict[_ScoreKey, StemScore],
+    right: dict[_ScoreKey, StemScore],
+    matched_keys: list[_ScoreKey],
     group_index: int,
-) -> dict[str, dict[str, tuple[float, float, float]]]:
-    groups: dict[tuple[str, str], list[tuple[float, float, float]]] = defaultdict(list)
+) -> dict[tuple[str | None, str], dict[str, tuple[float, float, float]]]:
+    groups: dict[tuple[str, str | None, str], list[tuple[float, float, float]]] = defaultdict(list)
     for key in matched_keys:
         left_values = _metric_values(left[key])
         right_values = _metric_values(right[key])
-        groups[(key[0], key[group_index])].append(
+        groups[(key[0], key[4], key[group_index])].append(
             tuple(right_values[metric] - left_values[metric] for metric in _METRICS)
         )
 
-    by_group: dict[str, dict[str, tuple[float, float, float]]] = defaultdict(dict)
-    for (recording_id, group), deltas in groups.items():
+    by_group: dict[tuple[str | None, str], dict[str, tuple[float, float, float]]] = defaultdict(dict)
+    for (recording_id, split, group), deltas in groups.items():
         means = tuple(float(np.mean([delta[index] for delta in deltas])) for index in range(3))
-        by_group[group][recording_id] = means
+        by_group[(split, group)][recording_id] = means
     return by_group
 
 
 def _bootstrap_groups(
-    left: dict[tuple[str, str, str, str], StemScore],
-    right: dict[tuple[str, str, str, str], StemScore],
-    matched_keys: list[tuple[str, str, str, str]],
+    left: dict[_ScoreKey, StemScore],
+    right: dict[_ScoreKey, StemScore],
+    matched_keys: list[_ScoreKey],
     group_index: int,
     n_resamples: int,
     confidence: float,
     rng: np.random.Generator,
-) -> dict[str, dict[str, dict[str, float]]]:
+) -> dict[str, dict[str, object]]:
     grouped = _paired_recording_deltas(left, right, matched_keys, group_index)
-    result: dict[str, dict[str, dict[str, float]]] = {}
+    result: dict[str, dict[str, object]] = {}
     tail = (1.0 - confidence) / 2.0
-    for group, recording_values in sorted(grouped.items()):
+    for (split, group), recording_values in sorted(grouped.items(), key=lambda item: _sort_key(item[0])):
+        label = group if split is None else f"{split}:{group}"
         recording_ids = sorted(recording_values)
         values = np.asarray([recording_values[recording_id] for recording_id in recording_ids], dtype=float)
-        sample_indices = rng.integers(0, len(recording_ids), size=(n_resamples, len(recording_ids)))
-        sample_means = values[sample_indices].mean(axis=1)
-        bounds = np.quantile(sample_means, (tail, 1.0 - tail), axis=0, method="linear")
         estimate = values.mean(axis=0)
-        result[group] = {
-            metric: {
-                "estimate": float(estimate[index]),
-                "low": float(bounds[0, index]),
-                "high": float(bounds[1, index]),
-            }
-            for index, metric in enumerate(_METRICS)
+        group_result: dict[str, object] = {
+            "status": "ok" if len(recording_ids) >= 2 else "insufficient_recordings",
+            "n_recordings": len(recording_ids),
+            "split": split,
         }
+        if len(recording_ids) >= 2:
+            sample_indices = rng.integers(0, len(recording_ids), size=(n_resamples, len(recording_ids)))
+            sample_means = values[sample_indices].mean(axis=1)
+            bounds = np.quantile(sample_means, (tail, 1.0 - tail), axis=0, method="linear")
+        else:
+            bounds = None
+        group_result.update(
+            {
+                metric: {
+                    "estimate": float(estimate[index]),
+                    "low": None if bounds is None else float(bounds[0, index]),
+                    "high": None if bounds is None else float(bounds[1, index]),
+                }
+                for index, metric in enumerate(_METRICS)
+            }
+        )
+        result[label] = group_result
     return result
 
 
