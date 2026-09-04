@@ -13,15 +13,11 @@ This is the resumable implementation handoff for the frozen
 | Key | Value |
 | --- | --- |
 | Research baseline | `2877054` (`287705467f65a2bdc52b09ceffeccd4f17821548`) |
-| Current code revision | `6aadb85` (`6aadb850bc158c49ab8e33c55168db35e3ce7c83`) |
+| Current code revision | `ebb6ba8` (`ebb6ba8213886a1fb3a08bd566a6e912970d9684`) |
 | Protocol | `upmixer-separation-q00-v1` |
 | Synthetic corpus | `upmixer-synthetic-v1` |
 | Licensed split | unavailable; no real split is claimed |
 | Clean baseline | `1343 passed, 38 deselected` |
-
-The shared worktree may also carry uncommitted Q01d edits in
-`packages/core/src/eval/report.py` and `packages/core/tests/test_eval_report.py`;
-they are intentionally excluded from this ledger commit.
 
 The frozen synthetic corpus contains three four-second, stereo float32 items at
 the generator's 44.1 kHz rate: `default`, `dense_synth`, and `choir_cluster`.
@@ -72,7 +68,7 @@ Q01 remains evaluation plumbing only. The slices currently present are:
 | Q01a | `ed73831` | Stable recording/item/split identities; strict required-estimate, rate, shape, channel, length, finite-value, and settings validation; public metric-helper truncation preserved. |
 | Q01b | `55e4fa6` | Actual model metadata and TTA/pitch settings are recorded while legacy report formatting and public imports remain compatible. |
 | Q01c | `98ed432` | Explicit unavailable references and identity-bearing coverage rows; manifest parsing and unavailable-only items report coverage without fake metric rows; required/scored failures remain strict. |
-| Q01d | `6aadb85` | Recording means and fixed-seed paired bootstrap over recording groups. This is the current revision; later Q01 serialization, diagnostics, and runner work remains. |
+| Q01d | `6aadb85` + correctness follow-up `ebb6ba8` | Recording means and fixed-seed paired bootstrap over recording groups, with split-aware identities/groups, unavailable coverage, and per-group `n_recordings`, status, and `None` CI bounds. Later Q01 serialization, diagnostics, and runner work remains. |
 
 Q01 source and focused test files are
 `packages/core/src/eval/{__init__,corpus,harness,report}.py` and
@@ -83,11 +79,8 @@ The handoff evidence is:
   38 deselected`.
 - Through Q01c: eval slice `30 passed, 1 deselected`; full core
   `1210 passed, 38 deselected`; Ruff and `git diff --check` passed.
-- At revision `6aadb85`, the Q01d-focused check across the eval tests was
-  `37 passed, 1 deselected` in `0.60s`.
-- A follow-up check after the shared worktree's uncommitted Q01d edits reports
-  `38 passed, 1 deselected` in `0.64s`. Full core after Q01d has not been rerun
-  in this handoff.
+- Q01d-focused check after the correctness follow-up: `40 passed, 1 deselected`.
+  Full core after Q01d has not been rerun in this handoff.
 
 No production separation algorithm, default, cache, store, or cross-package
 API was changed. Existing constructors retain compatible defaults, and the
