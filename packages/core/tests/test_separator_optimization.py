@@ -309,7 +309,7 @@ def test_completed_settings_snapshot_reports_effective_and_registry_values():
     assert settings.model == "BS-Roformer-SW.ckpt"
     assert settings.sample_rate == 48000
     assert settings.backend == separator.backend
-    assert settings.batch_size == 4
+    assert settings.batch_size == 1
     assert settings.segment_size == 123
     assert settings.chunk_duration_s == 120.0
     assert settings.overlap == 2
@@ -323,6 +323,39 @@ def test_completed_settings_snapshot_reports_effective_and_registry_values():
     with pytest.raises(AttributeError):
         settings.batch_size = 2
 
+    separator.close()
+
+
+def test_scnet_snapshot_keeps_sample_chunk_segment_unresolved():
+    class FakeDevice:
+        type = "cpu"
+
+        def __str__(self):
+            return "cpu"
+
+    class FakeEngine:
+        _arch = "scnet"
+
+        def separate(self, _audio_path):
+            return []
+
+        def _resolved_segment_size(self):
+            return 475
+
+        def _model_device(self):
+            return FakeDevice()
+
+    separator = StemSeparator(model="model_scnet_ep_36_sdr_10.0891.ckpt")
+    separator._backend = "cpu"
+    separator._segment_size = None
+    separator._chunk_duration_s = None
+    separator._engine = FakeEngine()
+    with patch.object(separator, "_get_separator", return_value=separator._engine):
+        separator._separate_paths("input.wav")
+
+    assert separator.run_settings is not None
+    assert separator.run_settings.segment_size is None
+    assert separator.run_settings.overlap == 4
     separator.close()
 
 

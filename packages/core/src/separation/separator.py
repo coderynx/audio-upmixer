@@ -376,10 +376,19 @@ class StemSeparator:
         )
         engine = self._engine
         arch = getattr(engine, "_arch", None) or model_arch
+        device = None
+        device_name = None
+        if engine is not None:
+            try:
+                device = engine._model_device()
+                device_name = str(device)
+            except (AttributeError, RuntimeError, StopIteration):
+                pass
 
         segment_size = self._segment_size
         overlap = self._overlap
-        if engine is not None:
+        if engine is not None and arch != "scnet":
+            # SCNet's default is a sample-domain chunk, not a frame override.
             try:
                 resolved_segment = engine._resolved_segment_size()
             except (AttributeError, TypeError, ValueError):
@@ -403,17 +412,18 @@ class StemSeparator:
                 except (AttributeError, KeyError, TypeError, ValueError):
                     pass
 
-        device_name = None
-        if engine is not None:
-            try:
-                device_name = str(engine._model_device())
-            except (AttributeError, RuntimeError, StopIteration):
-                pass
+        batch_size = self._batch_size
+        if (
+            device is not None
+            and getattr(device, "type", None) != "cuda"
+            and arch in {"bs_roformer", "mel_band_roformer"}
+        ):
+            batch_size = 1
 
         return SeparationSettings(
             model=self._model,
             sample_rate=self._sample_rate,
-            batch_size=self._batch_size,
+            batch_size=batch_size,
             segment_size=segment_size,
             chunk_duration_s=self._chunk_duration_s,
             overlap=overlap,
