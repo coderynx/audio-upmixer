@@ -11,6 +11,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import math
 from functools import partial
 from pathlib import Path
 from typing import Callable, Sequence
@@ -34,6 +35,13 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _finite_positive(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise argparse.ArgumentTypeError("must be a finite positive number")
+    return parsed
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", required=True, metavar="PATH|synthetic")
@@ -47,11 +55,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default=None)
     parser.add_argument("--batch-size", type=_positive_int, default=None)
     parser.add_argument("--segment-size", type=_positive_int, default=None)
-    parser.add_argument("--chunk-duration-s", type=float, default=None)
+    parser.add_argument("--chunk-duration-s", type=_finite_positive, default=None)
     parser.add_argument("--overlap", type=_positive_int, default=None)
     parser.add_argument("--stem-ensemble", action="store_true")
     parser.add_argument("--tta", action="store_true")
-    parser.add_argument("--pitch-shift", type=float, default=None)
+    parser.add_argument("--pitch-shift", type=_finite_positive, default=None)
     return parser
 
 

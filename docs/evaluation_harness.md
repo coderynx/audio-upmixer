@@ -127,7 +127,21 @@ uv run pytest packages/core/tests/test_eval_metrics.py -q
 # Real separation on the synthetic corpus with the default model — downloads
 # weights on first run, prints the per-stem SDR/fullness/bleedless report.
 uv run pytest packages/core/tests -m perf -k eval -s
+
+# Deterministic synthetic-reference report — no model download.
+uv run python scripts/run_eval.py \
+  --corpus synthetic --variant synthetic-reference --sample-rate 44100 \
+  --output-dir /tmp/upmixer-q01-synthetic
+
+# Real-model report on the synthetic corpus — weights may download.
+uv run python scripts/run_eval.py \
+  --corpus synthetic --variant real-model --sample-rate 44100 \
+  --output-dir /tmp/upmixer-q01-real
 ```
+
+Synthetic results validate deterministic harness plumbing only; they are not
+musical-quality evidence. The real-model command is a smoke run, not a
+held-out quality result.
 
 ## What this unblocks
 

@@ -49,8 +49,22 @@ uv run pytest packages/core/tests -m perf -k eval -s
 
 The first command is offline metric and harness plumbing. The second is a
 separately marked real-model smoke run that may download weights; it is not a
-held-out music-quality gate. Until the Q01 runner exists, these tests are the
-shareable synthetic invocation; no real-corpus result is implied.
+held-out music-quality gate. The offline report runner reproduces the same
+synthetic-reference report without model downloads and can run a separately
+marked real-model smoke:
+
+```bash
+uv run python scripts/run_eval.py \
+  --corpus synthetic --variant synthetic-reference --sample-rate 44100 \
+  --output-dir /tmp/upmixer-q01-synthetic
+uv run python scripts/run_eval.py \
+  --corpus synthetic --variant real-model --sample-rate 44100 \
+  --output-dir /tmp/upmixer-q01-real
+```
+
+Synthetic results validate deterministic harness plumbing only; they are not
+musical-quality evidence. The real-model command may download weights and is a
+smoke run, not a held-out music-quality result.
 
 ## Future corpus, provenance, and splits
 
