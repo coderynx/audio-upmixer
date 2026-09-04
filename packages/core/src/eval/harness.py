@@ -17,7 +17,7 @@ import soundfile as sf
 
 from upmixer.eval.corpus import ReferenceCorpus
 from upmixer.eval.metrics import bleedless, fullness, sdr
-from upmixer.eval.report import EvalReport, StemScore
+from upmixer.eval.report import CoverageRow, EvalReport, StemScore
 from upmixer.separation.separator import DEFAULT_MODEL, StemSeparator
 from upmixer.separation.stem_plan import ENSEMBLE_ALGORITHM, MODEL_ENSEMBLE
 
@@ -186,12 +186,24 @@ def evaluate_corpus(
         consistent RunSettings used across the evaluation run.
     """
     scores: list[StemScore] = []
+    coverage: list[CoverageRow] = []
     settings: RunSettings | None = None
     for item in corpus.items:
-        if not item.stems:
+        unavailable_stems = tuple(item.unavailable_stems or ())
+        if not item.stems and not unavailable_stems:
             raise ValueError(f"item {item.item_id or item.mixture} has no reference stems")
+        if len(unavailable_stems) != len(set(unavailable_stems)):
+            raise ValueError(f"item {item.item_id or item.mixture} has duplicate unavailable stems")
+        overlap = set(item.stems) & set(unavailable_stems)
+        if overlap:
+            raise ValueError(
+                f"item {item.item_id or item.mixture} marks stems as both scored and unavailable: "
+                f"{', '.join(sorted(overlap))}"
+            )
         estimate_stems, item_settings = separate_fn(item.mixture)
-        if not isinstance(estimate_stems, dict) or not estimate_stems:
+        if not isinstance(estimate_stems, dict):
+            raise ValueError(f"item {item.item_id or item.mixture} returned invalid outputs")
+        if item.stems and not estimate_stems:
             raise ValueError(f"item {item.item_id or item.mixture} returned empty outputs")
         missing = sorted(set(item.stems) - set(estimate_stems))
         if missing:
@@ -210,6 +222,28 @@ def evaluate_corpus(
             settings = item_settings
         elif item_settings != settings:
             raise ValueError("inconsistent RunSettings across corpus items")
+        for stem_name in item.stems:
+            coverage.append(
+                CoverageRow(
+                    stem=stem_name,
+                    category=item.category,
+                    status="scored",
+                    recording_id=item.recording_id,
+                    item_id=item.item_id,
+                    split=item.split,
+                )
+            )
+        for stem_name in unavailable_stems:
+            coverage.append(
+                CoverageRow(
+                    stem=stem_name,
+                    category=item.category,
+                    status="unavailable",
+                    recording_id=item.recording_id,
+                    item_id=item.item_id,
+                    split=item.split,
+                )
+            )
         for stem_name, ref_path in item.stems.items():
             reference, reference_rate = sf.read(ref_path, dtype="float32", always_2d=True)
             if reference_rate != sample_rate:
@@ -244,4 +278,4 @@ def evaluate_corpus(
             )
     if settings is None:
         raise ValueError("corpus has no items to evaluate")
-    return EvalReport(settings=settings, scores=scores)
+    return EvalReport(settings=settings, scores=scores, coverage=coverage)

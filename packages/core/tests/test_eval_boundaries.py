@@ -58,6 +58,7 @@ def test_from_dir_loads_identity_fields(tmp_path):
             "recording_id": "rec-01",
             "item_id": "rec-01-full",
             "split": "holdout",
+            "unavailable_stems": ["Crowd"],
         }]
     }
     (tmp_path / "corpus.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -69,6 +70,27 @@ def test_from_dir_loads_identity_fields(tmp_path):
         "rec-01-full",
         "holdout",
     )
+    assert item.unavailable_stems == ("Crowd",)
+
+
+def test_from_dir_loads_item_with_only_unavailable_stems(tmp_path):
+    (tmp_path / "song").mkdir()
+    manifest = {
+        "items": [{
+            "mixture": "song/mix.wav",
+            "category": "live",
+            "recording_id": "rec-01",
+            "item_id": "rec-01-live",
+            "split": "holdout",
+            "unavailable_stems": ["Crowd", "Room"],
+        }]
+    }
+    (tmp_path / "corpus.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    item = ReferenceCorpus.from_dir(str(tmp_path)).items[0]
+
+    assert item.stems == {}
+    assert item.unavailable_stems == ("Crowd", "Room")
 
 
 def test_evaluate_corpus_propagates_identity_to_score(tmp_path):
@@ -88,6 +110,56 @@ def test_evaluate_corpus_propagates_identity_to_score(tmp_path):
         "rec-01-excerpt-01",
         "tuning",
     )
+
+
+def test_evaluate_corpus_reports_scored_and_unavailable_coverage(tmp_path):
+    corpus = _corpus(
+        tmp_path,
+        recording_id="rec-01",
+        item_id="rec-01-excerpt-01",
+        split="tuning",
+        unavailable_stems=("Crowd",),
+    )
+    settings = RunSettings(model="coverage-test", sample_rate=8000)
+
+    report = evaluate_corpus(corpus, _separate(corpus, settings), sample_rate=8000)
+
+    assert [(row.stem, row.status) for row in report.coverage] == [
+        ("Vocals", "scored"),
+        ("Crowd", "unavailable"),
+    ]
+    assert len(report.scores) == 1
+
+
+def test_evaluate_corpus_reports_item_with_only_unavailable_stems(tmp_path):
+    mixture = tmp_path / "mix.wav"
+    sf.write(mixture, np.ones((8, 2), dtype=np.float32), 8000, subtype="FLOAT")
+    corpus = ReferenceCorpus([
+        CorpusItem(
+            mixture=str(mixture),
+            stems={},
+            unavailable_stems=("Crowd",),
+            recording_id="rec-01",
+            item_id="rec-01-crowd",
+            split="holdout",
+        )
+    ])
+    settings = RunSettings(model="coverage-test", sample_rate=8000)
+
+    report = evaluate_corpus(corpus, _separate(corpus, settings), sample_rate=8000)
+
+    assert report.scores == []
+    assert len(report.coverage) == 1
+    assert report.coverage[0].status == "unavailable"
+    assert report.coverage[0].item_id == "rec-01-crowd"
+
+
+def test_evaluate_corpus_rejects_scored_and_unavailable_overlap(tmp_path):
+    corpus = _corpus(tmp_path, unavailable_stems=("Vocals",))
+    settings = RunSettings(model="coverage-test", sample_rate=8000)
+
+    with pytest.raises(ValueError, match="both scored and unavailable"):
+        evaluate_corpus(corpus, _separate(corpus, settings), sample_rate=8000)
 
 
 def test_evaluate_corpus_rejects_missing_required_estimate(tmp_path):

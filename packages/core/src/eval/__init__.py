@@ -13,7 +13,7 @@ measured here before shipping, per AGENTS.md's Knowledge Base section.
 from upmixer.eval.metrics import bleedless, fullness, sdr
 from upmixer.eval.corpus import CorpusItem, ReferenceCorpus, synthetic_corpus
 from upmixer.eval.harness import RunSettings, separate_for_eval, evaluate_corpus
-from upmixer.eval.report import EvalReport, StemScore, format_report
+from upmixer.eval.report import CoverageRow, EvalReport, StemScore, format_report
 
 __all__ = [
     "sdr",
@@ -27,5 +27,6 @@ __all__ = [
     "evaluate_corpus",
     "EvalReport",
     "StemScore",
+    "CoverageRow",
     "format_report",
 ]

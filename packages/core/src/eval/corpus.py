@@ -30,6 +30,8 @@ class CorpusItem:
         recording_id: Stable original recording-group identity, when available.
         item_id: Stable item or excerpt identity, when available.
         split: Tuning/holdout split identity, when available.
+        unavailable_stems: Reference stem names that are unavailable and must
+            not be scored.
     """
 
     mixture: str
@@ -38,6 +40,7 @@ class CorpusItem:
     recording_id: str | None = None
     item_id: str | None = None
     split: str | None = None
+    unavailable_stems: tuple[str, ...] = ()
 
 
 @dataclass
@@ -56,6 +59,7 @@ class ReferenceCorpus:
               "items": [
                 {"mixture": "song1/mix.wav",
                  "stems": {"Vocals": "song1/vocals.wav", "Bass": "song1/bass.wav"},
+                 "unavailable_stems": ["Crowd"],
                  "category": "default"}
               ]
             }
@@ -67,7 +71,9 @@ class ReferenceCorpus:
         items = []
         for raw in manifest["items"]:
             mixture = str(base / raw["mixture"])
-            stems = {name: str(base / rel) for name, rel in raw["stems"].items()}
+            stems = {
+                name: str(base / rel) for name, rel in (raw.get("stems") or {}).items()
+            }
             items.append(
                 CorpusItem(
                     mixture=mixture,
@@ -76,6 +82,7 @@ class ReferenceCorpus:
                     recording_id=raw.get("recording_id"),
                     item_id=raw.get("item_id"),
                     split=raw.get("split"),
+                    unavailable_stems=tuple(raw.get("unavailable_stems") or ()),
                 )
             )
         return cls(items=items)

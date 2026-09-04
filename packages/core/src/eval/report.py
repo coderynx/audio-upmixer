@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,11 +24,24 @@ class StemScore:
 
 
 @dataclass
+class CoverageRow:
+    """Coverage status for one stem on one corpus item."""
+
+    stem: str
+    category: str
+    status: str
+    recording_id: str | None = None
+    item_id: str | None = None
+    split: str | None = None
+
+
+@dataclass
 class EvalReport:
     """Full result of an evaluation run: settings plus per-item scores."""
 
     settings: "RunSettings"
     scores: list[StemScore]
+    coverage: list[CoverageRow] = field(default_factory=list)
 
     def by_stem(self) -> dict[str, tuple[float, float, float]]:
         """Mean (sdr, fullness, bleedless) grouped by canonical stem name."""
