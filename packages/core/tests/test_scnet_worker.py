@@ -184,6 +184,47 @@ def test_daemon_uses_in_process_worker(monkeypatch, tmp_path):
     assert not worker.is_alive
 
 
+def test_worker_forwards_all_request_settings_to_engine(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    def capture_engine(_state, settings, output_dir):
+        captured.update(settings)
+        return _FakeEngine(output_dir)
+
+    worker = scnet_worker.SCNetWorker(
+        "model.ckpt", str(tmp_path / "models"), force_in_process=True
+    )
+    monkeypatch.setattr(scnet_worker, "_build_worker_state", _fake_state)
+    monkeypatch.setattr(scnet_worker, "_new_engine", capture_engine)
+    try:
+        paths = worker.separate(
+            str(tmp_path / "input.wav"),
+            str(tmp_path / "outputs"),
+            sample_rate=48000,
+            batch_size=3,
+            segment_size=128,
+            chunk_duration_s=12.5,
+            overlap=4,
+            tta=True,
+            pitch_shift=0.75,
+        )
+    finally:
+        worker.close()
+
+    assert paths
+    assert captured == {
+        "model": "model.ckpt",
+        "model_dir": str(tmp_path / "models"),
+        "sample_rate": 48000,
+        "batch_size": 3,
+        "segment_size": 128,
+        "chunk_duration_s": 12.5,
+        "overlap": 4,
+        "tta": True,
+        "pitch_shift": 0.75,
+    }
+
+
 def test_worker_retains_parent_without_sending_array_over_pipe(monkeypatch, tmp_path):
     worker = _worker(monkeypatch, tmp_path)
     output_dir = tmp_path / "outputs"

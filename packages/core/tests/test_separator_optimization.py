@@ -270,6 +270,76 @@ def test_cpu_oom_retries_with_quality_knobs_set():
     assert separator._pitch_shift == 0.75
 
 
+def test_cpu_oom_retries_into_chunk_duration_and_snapshots_all_settings():
+    separator = StemSeparator(
+        model="BS-Roformer-SW.ckpt",
+        sample_rate=48000,
+        batch_size=1,
+        segment_size=64,
+        chunk_duration_s=240.0,
+        overlap=4,
+        tta=True,
+        pitch_shift=0.75,
+    )
+    separator._backend = "cpu"
+    attempts: list[tuple[int, int, float]] = []
+
+    class FakeDevice:
+        type = "cpu"
+
+        def __str__(self) -> str:
+            return "cpu"
+
+    class FakeEngine:
+        _arch = "bs_roformer"
+
+        def separate(self, _audio_path: str) -> list[str]:
+            if len(attempts) < 3:
+                raise MemoryError("out of memory")
+            return []
+
+        def _resolved_segment_size(self) -> int:
+            return separator._segment_size
+
+        def _model_device(self) -> FakeDevice:
+            return FakeDevice()
+
+    def get_engine() -> FakeEngine:
+        attempts.append(
+            (
+                separator._batch_size,
+                separator._segment_size,
+                separator._chunk_duration_s,
+            )
+        )
+        engine = FakeEngine()
+        separator._engine = engine
+        return engine
+
+    try:
+        with patch.object(separator, "_get_separator", side_effect=get_engine):
+            assert separator._separate_paths("input.wav") == []
+
+        assert attempts == [(1, 64, 240.0), (1, 64, 120.0), (1, 64, 60.0)]
+        assert separator.run_settings == SeparationSettings(
+            model="BS-Roformer-SW.ckpt",
+            sample_rate=48000,
+            batch_size=1,
+            segment_size=64,
+            chunk_duration_s=60.0,
+            overlap=4,
+            tta=True,
+            pitch_shift=0.75,
+            backend="cpu",
+            model_arch="bs_roformer",
+            model_config_name="BS-Roformer-SW",
+            model_native_sample_rate=44100,
+            device="cpu",
+        )
+    finally:
+        separator.close()
+
+
 def test_completed_settings_snapshot_reports_effective_and_registry_values():
     class FakeDevice:
         type = "cpu"
