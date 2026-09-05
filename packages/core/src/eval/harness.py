@@ -235,6 +235,8 @@ def separate_tree_for_eval(
                 f"evaluation stem store has no requested stems (requested: {requested})"
             )
 
+    observed_models = {setting.model for setting in stage_settings}
+    ensemble_observed = {MODEL_PRIMARY, MODEL_ENSEMBLE} <= observed_models
     return stems, RunSettings(
         model="production-tree",
         sample_rate=sample_rate,
@@ -242,9 +244,9 @@ def separate_tree_for_eval(
         segment_size=config.stem_segment_size,
         chunk_duration_s=config.stem_chunk_duration_s,
         overlap=config.stem_overlap,
-        ensemble_algorithm=ENSEMBLE_ALGORITHM if config.stem_ensemble else None,
+        ensemble_algorithm=ENSEMBLE_ALGORITHM if ensemble_observed else None,
         ensemble_models=(MODEL_PRIMARY, MODEL_ENSEMBLE)
-        if config.stem_ensemble
+        if ensemble_observed
         else None,
         tta=config.stem_tta,
         pitch_shift=config.stem_pitch_shift,

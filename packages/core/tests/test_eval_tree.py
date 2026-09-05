@@ -11,6 +11,7 @@ import pytest
 from upmixer.config import UpmixConfig
 from upmixer.eval import separate_tree_for_eval
 from upmixer.separation.separator import SeparationSettings
+from upmixer.separation.stem_plan import ENSEMBLE_ALGORITHM, MODEL_ENSEMBLE, MODEL_PRIMARY
 from upmixer.separation.stem_store import PlainStemStore
 
 
@@ -109,6 +110,42 @@ def test_tree_preserves_zone_keys_and_stage_order(tmp_path):
 
     assert list(stems) == ["Vocals@front", "Vocals@surround"]
     assert settings.stage_settings == stage_settings
+
+
+def test_tree_does_not_report_unrun_ensemble():
+    fake = _fake_pipeline(
+        _stems("Vocals"),
+        ["Vocals"],
+        stage_settings=(_settings("becruily_deux.ckpt"),),
+    )
+
+    with patch("upmixer.separation.stem_pipeline.StemUpmixPipeline", fake):
+        _, settings = separate_tree_for_eval(
+            "mix.wav",
+            44_100,
+            UpmixConfig(stems=["Vocals"], stem_ensemble=True),
+        )
+
+    assert settings.ensemble_algorithm is None
+    assert settings.ensemble_models is None
+
+
+def test_tree_reports_observed_ensemble_pair():
+    fake = _fake_pipeline(
+        _stems("Bass"),
+        ["Bass"],
+        stage_settings=(_settings(MODEL_PRIMARY), _settings(MODEL_ENSEMBLE)),
+    )
+
+    with patch("upmixer.separation.stem_pipeline.StemUpmixPipeline", fake):
+        _, settings = separate_tree_for_eval(
+            "mix.wav",
+            44_100,
+            UpmixConfig(stems=["Bass"], stem_ensemble=True),
+        )
+
+    assert settings.ensemble_algorithm == ENSEMBLE_ALGORITHM
+    assert settings.ensemble_models == (MODEL_PRIMARY, MODEL_ENSEMBLE)
 
 
 def test_tree_rejects_missing_store():
