@@ -236,7 +236,7 @@ def test_evaluate_corpus_rejects_reference_rate_mismatch(tmp_path):
         evaluate_corpus(corpus, _separate(corpus, settings), sample_rate=8000)
 
 
-def test_evaluate_corpus_rejects_inconsistent_settings(tmp_path):
+def test_evaluate_corpus_retains_inconsistent_settings_per_item(tmp_path):
     signal = np.ones((8, 2), dtype=np.float32)
     items = []
     for index in range(2):
@@ -252,5 +252,10 @@ def test_evaluate_corpus_rejects_inconsistent_settings(tmp_path):
         ref, _ = sf.read(corpus.items[index].stems["Vocals"], dtype="float32", always_2d=True)
         return {"Vocals": ref}, RunSettings(model=f"test-{index}", sample_rate=8000)
 
-    with pytest.raises(ValueError, match="inconsistent RunSettings"):
-        evaluate_corpus(corpus, separate, sample_rate=8000)
+    report = evaluate_corpus(corpus, separate, sample_rate=8000)
+
+    assert report.settings is None
+    assert [row.settings.model for row in report.item_settings] == [
+        "test-0",
+        "test-1",
+    ]

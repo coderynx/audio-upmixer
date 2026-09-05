@@ -12,7 +12,7 @@ import numpy as np
 from upmixer.execution import write_report
 
 if TYPE_CHECKING:
-    from upmixer.eval.harness import RunSettings
+    from upmixer.eval.harness import ItemRunSettings, RunSettings
 
 
 _ScoreKey = tuple[str, str, str, str, str | None]
@@ -48,9 +48,10 @@ class CoverageRow:
 class EvalReport:
     """Full result of an evaluation run: settings plus per-item scores."""
 
-    settings: "RunSettings"
+    settings: "RunSettings | None"
     scores: list[StemScore]
     coverage: list[CoverageRow] = field(default_factory=list)
+    item_settings: list["ItemRunSettings"] = field(default_factory=list)
 
     def by_stem(self) -> dict[str, tuple[float, float, float]]:
         """Mean (sdr, fullness, bleedless) grouped by canonical stem name."""
@@ -85,10 +86,14 @@ class EvalReport:
 
     def to_dict(self, *, paired_bootstrap: dict[str, object] | None = None) -> dict[str, object]:
         """Return a versioned, JSON-safe evaluation report."""
-        settings = asdict(self.settings) if is_dataclass(self.settings) else vars(self.settings)
+        if self.settings is None:
+            settings = None
+        else:
+            settings = asdict(self.settings) if is_dataclass(self.settings) else vars(self.settings)
         payload: dict[str, object] = {
             "schema_version": 1,
             "settings": settings,
+            "item_settings": [asdict(row) for row in self.item_settings],
             "scores": [asdict(score) for score in self.scores],
             "coverage": [asdict(row) for row in self.coverage],
             "by_stem": _named_means(self.by_stem()),
@@ -449,16 +454,39 @@ def format_report(report: EvalReport) -> str:
     and prefixes the table with the recorded controls and model metadata.
     """
     settings = report.settings
-    stage_settings = getattr(settings, "stage_settings", ()) or ()
-    lines = [
-        f"Settings: {_format_settings(settings, include_ensemble=True)}",
-        *(
-            f"Stage {index}: {_format_settings(stage)}"
-            for index, stage in enumerate(stage_settings, 1)
-        ),
-        "",
-        "Per-stem (mean SDR dB / fullness / bleedless):",
-    ]
+    if settings is None:
+        lines = ["Settings vary by item:"]
+        for row in report.item_settings:
+            row_settings = getattr(row, "settings", None)
+            lines.append(
+                "Item "
+                f"recording_id={getattr(row, 'recording_id', None)} "
+                f"item_id={getattr(row, 'item_id', None)} "
+                f"split={getattr(row, 'split', None)} "
+                f"category={getattr(row, 'category', None)} "
+                f"{_format_settings(row_settings, include_ensemble=True)}"
+            )
+            lines.extend(
+                f"  Stage {index}: {_format_settings(stage)}"
+                for index, stage in enumerate(
+                    getattr(row_settings, "stage_settings", ()) or (), 1
+                )
+            )
+    else:
+        stage_settings = getattr(settings, "stage_settings", ()) or ()
+        lines = [
+            f"Settings: {_format_settings(settings, include_ensemble=True)}",
+            *(
+                f"Stage {index}: {_format_settings(stage)}"
+                for index, stage in enumerate(stage_settings, 1)
+            ),
+        ]
+    lines.extend(
+        [
+            "",
+            "Per-stem (mean SDR dB / fullness / bleedless):",
+        ]
+    )
     for stem, (mean_sdr, mean_fullness, mean_bleedless) in sorted(report.by_stem().items()):
         lines.append(f"  {stem:<16} SDR={mean_sdr:7.2f}  fullness={mean_fullness:.3f}  bleedless={mean_bleedless:.3f}")
 

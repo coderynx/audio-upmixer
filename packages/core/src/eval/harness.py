@@ -71,6 +71,17 @@ class RunSettings:
     device: str | None = None
 
 
+@dataclass
+class ItemRunSettings:
+    """Effective settings recorded for one corpus item."""
+
+    recording_id: str | None
+    item_id: str | None
+    split: str | None
+    category: str
+    settings: RunSettings
+
+
 def separate_for_eval(
     mixture_path: str,
     sample_rate: int,
@@ -275,12 +286,14 @@ def evaluate_corpus(
             magnitude-STFT fullness/bleedless computation).
 
     Returns:
-        EvalReport with one StemScore per (item, shared stem) and the
-        consistent RunSettings used across the evaluation run.
+        EvalReport with one StemScore per (item, shared stem), one effective
+        settings row per item, and shared settings when every item agrees.
     """
     scores: list[StemScore] = []
     coverage: list[CoverageRow] = []
-    settings: RunSettings | None = None
+    settings_rows: list[ItemRunSettings] = []
+    shared_settings: RunSettings | None = None
+    settings_vary = False
     for item in corpus.items:
         unavailable_stems = tuple(item.unavailable_stems or ())
         if not item.stems and not unavailable_stems:
@@ -311,10 +324,19 @@ def evaluate_corpus(
                 f"RunSettings sample rate {item_settings.sample_rate} does not "
                 f"match evaluation sample rate {sample_rate}"
             )
-        if settings is None:
-            settings = item_settings
-        elif item_settings != settings:
-            raise ValueError("inconsistent RunSettings across corpus items")
+        settings_rows.append(
+            ItemRunSettings(
+                recording_id=item.recording_id,
+                item_id=item.item_id,
+                split=item.split,
+                category=item.category,
+                settings=item_settings,
+            )
+        )
+        if shared_settings is None:
+            shared_settings = item_settings
+        elif item_settings != shared_settings:
+            settings_vary = True
         for stem_name in item.stems:
             coverage.append(
                 CoverageRow(
@@ -369,6 +391,11 @@ def evaluate_corpus(
                     split=item.split,
                 )
             )
-    if settings is None:
+    if shared_settings is None:
         raise ValueError("corpus has no items to evaluate")
-    return EvalReport(settings=settings, scores=scores, coverage=coverage)
+    return EvalReport(
+        settings=None if settings_vary else shared_settings,
+        scores=scores,
+        coverage=coverage,
+        item_settings=settings_rows,
+    )
