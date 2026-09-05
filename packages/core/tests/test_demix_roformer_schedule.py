@@ -60,8 +60,12 @@ class _RecordingModel:
     def __init__(self, model: _InputSensitiveModel) -> None:
         self._model = model
         self.batches: list[torch.Tensor] = []
+        self.forward_calls = 0
+        self.evaluated_examples = 0
 
     def __call__(self, batch: torch.Tensor) -> torch.Tensor:
+        self.forward_calls += 1
+        self.evaluated_examples += batch.shape[0]
         self.batches.append(batch.detach().cpu())
         return self._model(batch)
 
@@ -97,10 +101,11 @@ _CASE_LENGTHS = {
 }
 
 
+@pytest.mark.parametrize("batch_size", _BATCH_SIZES)
 @pytest.mark.parametrize("case", _CASE_LENGTHS)
 @pytest.mark.parametrize("overlap", _OVERLAPS)
-def test_incumbent_start_schedule_includes_clamped_tail_repeats(
-    case: str, overlap: int
+def test_effective_windows_are_evaluated_once_but_tail_multiplicity_is_retained(
+    batch_size: int, case: str, overlap: int
 ) -> None:
     recorded = _RecordingModel(_InputSensitiveModel(n_targets=1))
     demix.demix_roformer(
@@ -110,7 +115,7 @@ def test_incumbent_start_schedule_includes_clamped_tail_repeats(
         torch.device("cpu"),
         segment_size=None,
         overlap=overlap,
-        batch_size=3,
+        batch_size=batch_size,
     )
 
     starts = tuple(
@@ -118,7 +123,59 @@ def test_incumbent_start_schedule_includes_clamped_tail_repeats(
         for batch in recorded.batches
         for sample in batch[:, 0, 0]
     )
-    assert starts == _EXPECTED_STARTS[case][overlap]
+    incumbent_starts = _EXPECTED_STARTS[case][overlap]
+    unique_starts = tuple(dict.fromkeys(incumbent_starts))
+    assert starts == unique_starts
+    assert len(incumbent_starts) > 0
+    assert recorded.evaluated_examples == len(unique_starts)
+    assert recorded.forward_calls == (
+        len(unique_starts) + batch_size - 1
+    ) // batch_size
+
+
+def _frozen_reference(
+    model: _InputSensitiveModel,
+    mix: np.ndarray,
+    config: ModelConfig,
+    overlap: int,
+    batch_size: int,
+) -> dict[str, np.ndarray]:
+    """Run the pre-optimization schedule, including repeated tail positions."""
+    mix_t = torch.tensor(mix, dtype=torch.float32)
+    original_length = mix_t.shape[1]
+    chunk_size = config.stft_hop_length * (config.default_segment_size - 1)
+    if original_length < chunk_size:
+        mix_t = torch.nn.functional.pad(mix_t, (0, chunk_size - original_length))
+    n_samples = mix_t.shape[1]
+    step = max(1, chunk_size // max(1, overlap))
+    starts = [
+        i if i + chunk_size <= n_samples else n_samples - chunk_size
+        for i in range(0, n_samples, step)
+    ]
+    window = torch.tensor(np.hamming(chunk_size), dtype=torch.float32)
+    num_stems = config.num_stems
+    acc_shape = mix_t.shape if num_stems == 1 else (num_stems, *mix_t.shape)
+    result = torch.zeros(acc_shape, dtype=torch.float32)
+    counter = torch.zeros(acc_shape, dtype=torch.float32)
+    for batch_start in range(0, len(starts), max(1, batch_size)):
+        batch_starts = starts[batch_start : batch_start + max(1, batch_size)]
+        batch = torch.stack([mix_t[:, s : s + chunk_size] for s in batch_starts])
+        outputs = model(batch)
+        for start, output in zip(batch_starts, outputs):
+            result[..., start : start + chunk_size] += output * window
+            counter[..., start : start + chunk_size] += window
+    inferenced = (result / counter.clamp(min=1e-10)).numpy()
+    if num_stems == 1:
+        primary = inferenced[..., :original_length]
+        secondary = next(
+            name for name in config.instruments if name != config.target_instrument
+        )
+        return {
+            config.target_instrument: primary,
+            secondary: mix - primary,
+        }
+    trimmed = inferenced[..., :original_length]
+    return dict(zip(config.instruments, trimmed))
 
 
 @pytest.mark.parametrize("n_targets", (1, 2))
@@ -128,6 +185,13 @@ def test_waveforms_are_invariant_to_batch_partition(
     n_targets: int, case: str, overlap: int
 ) -> None:
     mix = _make_mix(_CASE_LENGTHS[case])
+    reference = _frozen_reference(
+        _InputSensitiveModel(n_targets),
+        mix,
+        _make_config(n_targets),
+        overlap,
+        batch_size=1,
+    )
     results = {
         batch_size: demix.demix_roformer(
             _InputSensitiveModel(n_targets),
@@ -141,11 +205,13 @@ def test_waveforms_are_invariant_to_batch_partition(
         for batch_size in _BATCH_SIZES
     }
 
-    reference = results[1]
-    assert set(reference) == set(results[2]) == set(results[3])
+    assert set(reference) == set(results[1]) == set(results[2]) == set(results[3])
     for name, expected in reference.items():
+        np.testing.assert_allclose(
+            results[1][name], expected, atol=1e-6, rtol=1e-5
+        )
         assert expected.shape == (2, _CASE_LENGTHS[case])
-        for batch_size in _BATCH_SIZES[1:]:
+        for batch_size in _BATCH_SIZES:
             np.testing.assert_allclose(
                 results[batch_size][name],
                 expected,

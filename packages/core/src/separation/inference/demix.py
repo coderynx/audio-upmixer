@@ -382,11 +382,20 @@ def demix_roformer(
         i if i + chunk_size <= n_samples else n_samples - chunk_size
         for i in range(0, n_samples, step)
     ]
+    # Tail clamping makes only the final effective window repeat.
+    tail_start = starts[-1]
+    tail_first = len(starts) - 1
+    while tail_first > 0 and starts[tail_first - 1] == tail_start:
+        tail_first -= 1
+    unique_end = tail_first + 1
+    tail_repeats = len(starts) - unique_end
     max_safe_len = min(chunk_size, window.shape[0])
     step_size = max(1, batch_size)
+    tail_output = None
 
-    for batch_start in range(0, len(starts), step_size):
-        batch_starts = starts[batch_start : batch_start + step_size]
+    for batch_start in range(0, unique_end, step_size):
+        batch_end = min(batch_start + step_size, unique_end)
+        batch_starts = starts[batch_start:batch_end]
         batch = torch.stack([mix_t[:, s : s + chunk_size] for s in batch_starts], dim=0)
         outputs = model(batch.to(device, non_blocking=use_async_transfer))
 
@@ -396,8 +405,24 @@ def demix_roformer(
             if safe_len > 0:
                 result[..., s : s + safe_len] += out[..., :safe_len] * window[:safe_len]
                 counter[..., s : s + safe_len] += window[:safe_len]
+            if s == tail_start:
+                tail_output = out
+
+        completed = batch_end
+        if batch_end == unique_end and tail_repeats:
+            if tail_output is not None:
+                safe_len = min(max_safe_len, tail_output.shape[-1])
+                for _ in range(tail_repeats):
+                    if safe_len > 0:
+                        result[..., tail_start : tail_start + safe_len] += (
+                            tail_output[..., :safe_len] * window[:safe_len]
+                        )
+                        counter[..., tail_start : tail_start + safe_len] += window[
+                            :safe_len
+                        ]
+            completed += tail_repeats
         if progress_callback is not None:
-            progress_callback(min(1.0, (batch_start + len(batch_starts)) / len(starts)))
+            progress_callback(min(1.0, completed / len(starts)))
 
     inferenced = (result / counter.clamp(min=1e-10)).numpy()
 
