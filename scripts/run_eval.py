@@ -83,7 +83,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--rate-arm",
         choices=("delivery", "native"),
-        default="delivery",
+        default=None,
         help="Q20 experiment arm: infer at delivery or model-native rate.",
     )
     parser.add_argument("--model", default=None)
@@ -136,7 +136,7 @@ def _real_separator(args: argparse.Namespace) -> Callable:
             stem_tta=args.tta,
             stem_pitch_shift=args.pitch_shift,
         )
-        if args.rate_arm == "native":
+        if args.rate_arm is not None:
             return partial(
                 separate_tree_for_rate_experiment,
                 delivery_sample_rate=args.sample_rate,
@@ -160,7 +160,7 @@ def _real_separator(args: argparse.Namespace) -> Callable:
     }
     if args.model is not None:
         options["model"] = args.model
-    if args.rate_arm == "native":
+    if args.rate_arm is not None:
         return partial(
             separate_model_for_rate_experiment,
             delivery_sample_rate=args.sample_rate,
@@ -341,9 +341,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "production-tree does not accept --model; the plan owns model selection"
         )
-    if args.variant == "real-model" and args.rate_arm == "native" and args.stem_ensemble:
+    if args.variant == "real-model" and args.rate_arm is not None and args.stem_ensemble:
         parser.error(
-            "--rate-arm native with --stem-ensemble requires --variant production-tree"
+            "--rate-arm with --stem-ensemble requires --variant production-tree"
         )
     if args.stems is not None and args.variant != "production-tree":
         parser.error("--stems requires --variant production-tree")
@@ -360,8 +360,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         ) or args.stem_ensemble or args.tta:
             parser.error("model settings require --variant real-model")
-        if args.rate_arm != "delivery":
-            parser.error("--rate-arm native requires --variant real-model")
+        if args.rate_arm is not None:
+            parser.error("--rate-arm requires --variant real-model")
         if args.retain_stems:
             parser.error("--retain-stems requires --variant real-model or production-tree")
     if args.stems is not None:

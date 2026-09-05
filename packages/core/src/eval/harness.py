@@ -88,7 +88,11 @@ class RunSettings:
     stem_silence_min_duration_s: float | None = None
     stem_silence_crossfade_ms: float | None = None
     stem_silence_pad_ms: float | None = None
-    rate_arm: str = "delivery"
+    rate_arm: str | None = None
+    input_frame_count: int | None = None
+    separation_frame_count: int | None = None
+    output_frame_count: int | None = None
+    resampler: str | None = None
 
 
 @dataclass

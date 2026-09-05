@@ -7,7 +7,6 @@ delivery rate before scoring.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,7 +14,6 @@ from typing import Literal
 
 import numpy as np
 import soundfile as sf
-from scipy.signal import resample_poly
 
 from upmixer.config import UpmixConfig
 from upmixer.eval.harness import (
@@ -24,7 +22,9 @@ from upmixer.eval.harness import (
     separate_tree_for_eval,
 )
 from upmixer.separation.inference.config import load_model_config
+from upmixer.separation.inference.demix import match_length
 from upmixer.separation.inference.registry import get_model_spec
+from upmixer.resample import resample_channels
 from upmixer.separation.stem_plan import (
     DEFAULT_STEMS,
     normalize_stems,
@@ -32,6 +32,9 @@ from upmixer.separation.stem_plan import (
 )
 
 RateArm = Literal["delivery", "native"]
+_RESAMPLER_ID = "upmixer.resample.resample_channels:120dB-kaiser-fir"
+_INCUMBENT_RESAMPLER_ID = "incumbent:librosa.load"
+_NO_RESAMPLER = "none"
 
 
 def _validate_rate(value: int, name: str) -> int:
@@ -52,22 +55,38 @@ def _source_info(path: str) -> tuple[int, int]:
 
 
 def _target_frames(frames: int, source_rate: int, target_rate: int) -> int:
+    """Round the target frame count from the source duration in seconds."""
     return int(round(frames * target_rate / source_rate))
 
 
 def _resample(audio: np.ndarray, source_rate: int, target_rate: int, frames: int) -> np.ndarray:
     values = np.asarray(audio, dtype=np.float32)
     if source_rate != target_rate:
-        divisor = math.gcd(source_rate, target_rate)
-        values = resample_poly(
-            values,
-            target_rate // divisor,
-            source_rate // divisor,
-            axis=0,
-        ).astype(np.float32, copy=False)
-    if values.shape[0] < frames:
-        values = np.pad(values, ((0, frames - values.shape[0]), (0, 0)))
-    return np.asarray(values[:frames], dtype=np.float32)
+        values = resample_channels(
+            {"audio": values}, source_rate, target_rate
+        )["audio"]
+    return np.asarray(match_length(values.T, frames).T, dtype=np.float32)
+
+
+def _normalise_stems(
+    stems: dict[str, np.ndarray],
+    source_rate: int,
+    target_rate: int,
+    target_frames: int,
+) -> dict[str, np.ndarray]:
+    return {
+        name: _resample(audio, source_rate, target_rate, target_frames)
+        for name, audio in stems.items()
+    }
+
+
+def _common_frame_count(stems: dict[str, np.ndarray]) -> int:
+    counts = {audio.shape[0] for audio in stems.values()}
+    if len(counts) > 1:
+        raise ValueError(
+            "rate experiment separator returned stems with different frame counts"
+        )
+    return counts.pop() if counts else 0
 
 
 def _native_model_rate(model: str) -> int:
@@ -79,7 +98,14 @@ def _native_model_rate(model: str) -> int:
 def _native_tree_rate(config: UpmixConfig) -> int:
     canonical = normalize_stems(config.stems) if config.stems else list(DEFAULT_STEMS)
     plan = resolve_separation_plan(canonical, config.stem_ensemble)
-    rates = {_native_model_rate(task.model) for task in plan.tasks}
+    models = tuple(
+        dict.fromkeys(
+            model
+            for task in plan.tasks
+            for model in (task.model, *task.ensemble_models)
+        )
+    )
+    rates = {_native_model_rate(model) for model in models}
     if not rates:
         raise ValueError("native-rate tree experiment requires at least one model task")
     if len(rates) != 1:
@@ -97,6 +123,10 @@ def _normalise_settings(
     source_rate: int,
     separation_rate: int,
     delivery_rate: int,
+    input_frames: int,
+    separation_frames: int,
+    output_frames: int,
+    resampler: str,
 ) -> RunSettings:
     if not isinstance(settings, RunSettings):
         raise ValueError("rate experiment separator returned invalid RunSettings")
@@ -113,6 +143,10 @@ def _normalise_settings(
         separation_sample_rate=separation_rate,
         output_sample_rate=delivery_rate,
         scoring_sample_rate=delivery_rate,
+        input_frame_count=input_frames,
+        separation_frame_count=separation_frames,
+        output_frame_count=output_frames,
+        resampler=resampler,
     )
 
 
@@ -149,8 +183,9 @@ def separate_model_for_rate_experiment(
     delivery_rate = _validate_rate(delivery_sample_rate, "delivery sample rate")
     arm = _validate_arm(rate_arm)
     source_rate, source_frames = _source_info(mixture_path)
+    delivery_frames = _target_frames(source_frames, source_rate, delivery_rate)
     if arm == "delivery":
-        stems, settings = separate_for_eval(
+        raw_stems, settings = separate_for_eval(
             mixture_path,
             sample_rate=delivery_rate,
             model=model,
@@ -161,12 +196,24 @@ def separate_model_for_rate_experiment(
             tta=tta,
             pitch_shift=pitch_shift,
         )
+        raw_output_frames = _common_frame_count(raw_stems)
+        stems = _normalise_stems(
+            raw_stems, delivery_rate, delivery_rate, delivery_frames
+        )
         return stems, _normalise_settings(
             settings,
             rate_arm=arm,
             source_rate=source_rate,
             separation_rate=delivery_rate,
             delivery_rate=delivery_rate,
+            input_frames=source_frames,
+            separation_frames=raw_output_frames,
+            output_frames=delivery_frames,
+            resampler=(
+                _INCUMBENT_RESAMPLER_ID
+                if source_rate != delivery_rate
+                else _NO_RESAMPLER
+            ),
         )
 
     native_rate = _native_model_rate(model)
@@ -183,17 +230,24 @@ def separate_model_for_rate_experiment(
             tta=tta,
             pitch_shift=pitch_shift,
         )
-    delivery_frames = _target_frames(source_frames, source_rate, delivery_rate)
-    stems = {
-        name: _resample(audio, native_rate, delivery_rate, delivery_frames)
-        for name, audio in native_stems.items()
-    }
+    raw_output_frames = _common_frame_count(native_stems)
+    stems = _normalise_stems(
+        native_stems, native_rate, delivery_rate, delivery_frames
+    )
     return stems, _normalise_settings(
         settings,
         rate_arm=arm,
         source_rate=source_rate,
         separation_rate=native_rate,
         delivery_rate=delivery_rate,
+        input_frames=source_frames,
+        separation_frames=raw_output_frames,
+        output_frames=delivery_frames,
+        resampler=(
+            _RESAMPLER_ID
+            if source_rate != native_rate or native_rate != delivery_rate
+            else _NO_RESAMPLER
+        ),
     )
 
 
@@ -208,9 +262,14 @@ def separate_tree_for_rate_experiment(
     delivery_rate = _validate_rate(delivery_sample_rate, "delivery sample rate")
     arm = _validate_arm(rate_arm)
     source_rate, source_frames = _source_info(mixture_path)
+    delivery_frames = _target_frames(source_frames, source_rate, delivery_rate)
     if arm == "delivery":
-        stems, settings = separate_tree_for_eval(
+        raw_stems, settings = separate_tree_for_eval(
             mixture_path, delivery_rate, config
+        )
+        raw_output_frames = _common_frame_count(raw_stems)
+        stems = _normalise_stems(
+            raw_stems, delivery_rate, delivery_rate, delivery_frames
         )
         return stems, _normalise_settings(
             settings,
@@ -218,6 +277,14 @@ def separate_tree_for_rate_experiment(
             source_rate=source_rate,
             separation_rate=delivery_rate,
             delivery_rate=delivery_rate,
+            input_frames=source_frames,
+            separation_frames=raw_output_frames,
+            output_frames=delivery_frames,
+            resampler=(
+                _INCUMBENT_RESAMPLER_ID
+                if source_rate != delivery_rate
+                else _NO_RESAMPLER
+            ),
         )
 
     native_rate = _native_tree_rate(config)
@@ -227,15 +294,22 @@ def separate_tree_for_rate_experiment(
         native_stems, settings = separate_tree_for_eval(
             native_path, native_rate, native_config
         )
-    delivery_frames = _target_frames(source_frames, source_rate, delivery_rate)
-    stems = {
-        name: _resample(audio, native_rate, delivery_rate, delivery_frames)
-        for name, audio in native_stems.items()
-    }
+    raw_output_frames = _common_frame_count(native_stems)
+    stems = _normalise_stems(
+        native_stems, native_rate, delivery_rate, delivery_frames
+    )
     return stems, _normalise_settings(
         settings,
         rate_arm=arm,
         source_rate=source_rate,
         separation_rate=native_rate,
         delivery_rate=delivery_rate,
+        input_frames=source_frames,
+        separation_frames=raw_output_frames,
+        output_frames=delivery_frames,
+        resampler=(
+            _RESAMPLER_ID
+            if source_rate != native_rate or native_rate != delivery_rate
+            else _NO_RESAMPLER
+        ),
     )
