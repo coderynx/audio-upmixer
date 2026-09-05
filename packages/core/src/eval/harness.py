@@ -19,6 +19,13 @@ import soundfile as sf
 from upmixer.config import UpmixConfig
 from upmixer.eval.corpus import CorpusItem, ReferenceCorpus
 from upmixer.eval.metrics import bleedless, fullness, sdr
+from upmixer.eval.reference_targets import (
+    estimate_components as _estimate_components,
+    missing_estimates as _missing_estimates,
+    sum_estimate_components as _sum_estimate_components,
+    validate_audio as _validate_audio,
+    validate_mapping as _validate_mapping,
+)
 from upmixer.eval.report import CoverageRow, EvalReport, StemScore
 from upmixer.separation.separator import (
     DEFAULT_MODEL,
@@ -39,15 +46,6 @@ SeparateFn = Callable[[str], tuple[dict[str, np.ndarray], "RunSettings"]]
 
 class EvaluationSkipped(RuntimeError):
     """Signal that an evaluation item was skipped intentionally."""
-
-
-def _validate_audio(array: np.ndarray, label: str) -> None:
-    if not isinstance(array, np.ndarray) or array.ndim != 2:
-        raise ValueError(f"{label} must be a 2D array (frames, channels)")
-    if not array.size or not array.shape[0] or not array.shape[1]:
-        raise ValueError(f"{label} must not be empty")
-    if not np.issubdtype(array.dtype, np.number) or not np.all(np.isfinite(array)):
-        raise ValueError(f"{label} must contain finite numeric values")
 
 
 @dataclass
@@ -352,6 +350,7 @@ def _validate_item(item: CorpusItem) -> tuple[str, ...]:
             f"item {item.item_id or item.mixture} marks stems as both scored and "
             f"unavailable: {', '.join(sorted(overlap))}"
         )
+    _validate_mapping(item)
     return unavailable_stems
 
 
@@ -460,15 +459,29 @@ def evaluate_corpus(
                 raise ValueError(
                     f"item {item.item_id or item.mixture} returned empty outputs"
                 )
-            missing = sorted(set(item.stems) - set(estimate_stems))
+            missing, missing_components = _missing_estimates(item, estimate_stems)
             if missing and not report_failures:
+                if item.estimate_stems:
+                    missing_detail = "; ".join(
+                        f"{target}: {', '.join(missing_components[target])}"
+                        for target in missing
+                    )
+                    raise ValueError(
+                        f"item {item.item_id or item.mixture} missing required "
+                        f"output stem(s) for reference target(s): {missing_detail}"
+                    )
                 raise ValueError(
                     f"item {item.item_id or item.mixture} missing required stem(s): "
                     f"{', '.join(missing)}"
                 )
             for stem_name in missing:
                 statuses[stem_name] = "absent"
-                details[stem_name] = "missing from separator output"
+                details[stem_name] = (
+                    "missing from separator output"
+                    if not item.estimate_stems
+                    else "missing from separator output: "
+                    + ", ".join(missing_components[stem_name])
+                )
             if not isinstance(item_settings, RunSettings):
                 raise ValueError("separation returned invalid RunSettings")
             if item_settings.sample_rate != sample_rate:
@@ -493,11 +506,19 @@ def evaluate_corpus(
                 if stem_name in missing:
                     continue
                 try:
+                    if item.estimate_stems:
+                        estimate = _sum_estimate_components(
+                            stem_name,
+                            _estimate_components(item, stem_name),
+                            estimate_stems,
+                        )
+                    else:
+                        estimate = estimate_stems[stem_name]
                     score = _score_stem(
                         item,
                         stem_name,
                         ref_path,
-                        estimate_stems[stem_name],
+                        estimate,
                         sample_rate,
                     )
                 except EvaluationSkipped as exc:

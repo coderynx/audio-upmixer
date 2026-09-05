@@ -135,6 +135,112 @@ def test_reporting_mode_marks_per_stem_validation_error_and_continues(tmp_path):
     assert "frame count mismatch" in (report.coverage[1].detail or "")
 
 
+def test_reporting_mode_marks_missing_mapped_component_against_target(tmp_path):
+    signal = np.ones((8, 2), dtype=np.float32)
+    mixture = tmp_path / "mix.wav"
+    reference = tmp_path / "other.wav"
+    sf.write(mixture, signal, 8000, subtype="FLOAT")
+    sf.write(reference, signal, 8000, subtype="FLOAT")
+    corpus = ReferenceCorpus(
+        [
+            CorpusItem(
+                mixture=str(mixture),
+                stems={"Other": str(reference)},
+                estimate_stems={"Other": ("Guitar", "Piano", "Other")},
+                item_id="mapped",
+            )
+        ]
+    )
+
+    report = evaluate_corpus(
+        corpus,
+        lambda _mixture: (
+            {"Piano": signal, "Other": signal},
+            _settings(),
+        ),
+        sample_rate=8000,
+        report_failures=True,
+    )
+
+    assert report.scores == []
+    assert [(row.stem, row.status) for row in report.coverage] == [("Other", "absent")]
+    assert report.coverage[0].detail == "missing from separator output: Guitar"
+
+
+def test_reporting_mode_marks_invalid_mapped_component_against_target(tmp_path):
+    signal = np.ones((8, 2), dtype=np.float32)
+    mixture = tmp_path / "mix.wav"
+    reference = tmp_path / "other.wav"
+    sf.write(mixture, signal, 8000, subtype="FLOAT")
+    sf.write(reference, signal, 8000, subtype="FLOAT")
+    corpus = ReferenceCorpus(
+        [
+            CorpusItem(
+                mixture=str(mixture),
+                stems={"Other": str(reference)},
+                estimate_stems={"Other": ("Guitar", "Piano", "Other")},
+                item_id="mapped",
+            )
+        ]
+    )
+    estimates = {
+        "Guitar": np.full((8, 2), np.nan, dtype=np.float32),
+        "Piano": signal,
+        "Other": signal,
+    }
+
+    report = evaluate_corpus(
+        corpus,
+        lambda _mixture: (estimates, _settings()),
+        sample_rate=8000,
+        report_failures=True,
+    )
+
+    assert report.scores == []
+    assert report.coverage[0].status == "failed"
+    assert "estimate component Guitar" in (report.coverage[0].detail or "")
+
+
+@pytest.mark.parametrize(
+    "bad_component",
+    [
+        np.ones((7, 2), dtype=np.float32),
+        np.ones((8, 1), dtype=np.float32),
+    ],
+    ids=["wrong-frame-count", "wrong-channel-count"],
+)
+def test_reporting_mode_marks_mapped_shape_error_against_target(
+    tmp_path, bad_component
+):
+    signal = np.ones((8, 2), dtype=np.float32)
+    mixture = tmp_path / "mix.wav"
+    reference = tmp_path / "other.wav"
+    sf.write(mixture, signal, 8000, subtype="FLOAT")
+    sf.write(reference, signal, 8000, subtype="FLOAT")
+    corpus = ReferenceCorpus(
+        [
+            CorpusItem(
+                mixture=str(mixture),
+                stems={"Other": str(reference)},
+                estimate_stems={"Other": ("Guitar", "Piano", "Other")},
+                item_id="mapped",
+            )
+        ]
+    )
+    estimates = {"Guitar": bad_component, "Piano": signal, "Other": signal}
+
+    report = evaluate_corpus(
+        corpus,
+        lambda _mixture: (estimates, _settings()),
+        sample_rate=8000,
+        report_failures=True,
+    )
+
+    assert report.scores == []
+    assert report.coverage[0].status == "failed"
+    assert "mapped estimate Other" in (report.coverage[0].detail or "")
+
+
 def test_reporting_mode_marks_empty_outputs_absent(tmp_path):
     corpus = _corpus(tmp_path)
     report = evaluate_corpus(

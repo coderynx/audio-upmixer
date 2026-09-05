@@ -11,7 +11,7 @@ deterministic testing.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +32,8 @@ class CorpusItem:
         split: Tuning/holdout split identity, when available.
         unavailable_stems: Reference stem names that are unavailable and must
             not be scored.
+        estimate_stems: Reference target -> exact output stem names to sum;
+            absent targets use an output with the same name.
     """
 
     mixture: str
@@ -41,6 +43,7 @@ class CorpusItem:
     item_id: str | None = None
     split: str | None = None
     unavailable_stems: tuple[str, ...] = ()
+    estimate_stems: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass
@@ -62,6 +65,7 @@ class ReferenceCorpus:
                 {"mixture": "song1/mix.wav",
                  "stems": {"Vocals": "song1/vocals.wav", "Bass": "song1/bass.wav"},
                  "unavailable_stems": ["Crowd"],
+                 "estimate_stems": {"Other": ["Guitar", "Piano", "Other"]},
                  "category": "default"}
               ]
             }
@@ -76,6 +80,34 @@ class ReferenceCorpus:
             stems = {
                 name: str(base / rel) for name, rel in (raw.get("stems") or {}).items()
             }
+            raw_estimate_stems = raw.get("estimate_stems")
+            if raw_estimate_stems is None:
+                estimate_stems = {}
+            elif not isinstance(raw_estimate_stems, dict):
+                raise ValueError("estimate_stems must be an object")
+            else:
+                estimate_stems = {}
+                for target, components in raw_estimate_stems.items():
+                    if not isinstance(target, str) or not target.strip():
+                        raise ValueError(
+                            "estimate_stems targets must be nonempty strings"
+                        )
+                    if not isinstance(components, (list, tuple)) or not components:
+                        raise ValueError(
+                            f"estimate_stems[{target!r}] must be a nonempty list"
+                        )
+                    if not all(
+                        isinstance(component, str) and component.strip()
+                        for component in components
+                    ):
+                        raise ValueError(
+                            f"estimate_stems[{target!r}] must contain nonempty strings"
+                        )
+                    if len(set(components)) != len(components):
+                        raise ValueError(
+                            f"estimate_stems[{target!r}] contains duplicate outputs"
+                        )
+                    estimate_stems[target] = tuple(components)
             items.append(
                 CorpusItem(
                     mixture=mixture,
@@ -85,6 +117,7 @@ class ReferenceCorpus:
                     item_id=raw.get("item_id"),
                     split=raw.get("split"),
                     unavailable_stems=tuple(raw.get("unavailable_stems") or ()),
+                    estimate_stems=estimate_stems,
                 )
             )
         return cls(items=items, corpus_id=manifest.get("corpus_id"))

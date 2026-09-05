@@ -73,6 +73,26 @@ def test_from_dir_loads_identity_fields(tmp_path):
     assert item.unavailable_stems == ("Crowd",)
 
 
+def test_from_dir_loads_reference_target_output_mapping(tmp_path):
+    (tmp_path / "song").mkdir()
+    manifest = {
+        "items": [
+            {
+                "mixture": "song/mix.wav",
+                "stems": {"Other": "song/other.wav"},
+                "estimate_stems": {"Other": ["Guitar", "Piano", "Other"]},
+            }
+        ]
+    }
+    (tmp_path / "corpus.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    item = ReferenceCorpus.from_dir(str(tmp_path)).items[0]
+
+    assert item.estimate_stems == {
+        "Other": ("Guitar", "Piano", "Other"),
+    }
+
+
 def test_from_dir_loads_item_with_only_unavailable_stems(tmp_path):
     (tmp_path / "song").mkdir()
     manifest = {
@@ -110,6 +130,77 @@ def test_evaluate_corpus_propagates_identity_to_score(tmp_path):
         "rec-01-excerpt-01",
         "tuning",
     )
+
+
+def test_evaluate_corpus_sums_mapped_outputs_under_reference_target(tmp_path):
+    frames = 16
+    sample_rate = 8000
+    reference = np.full((frames, 2), 6.0, dtype=np.float32)
+    mixture = tmp_path / "mix.wav"
+    reference_path = tmp_path / "other.wav"
+    sf.write(mixture, reference, sample_rate, subtype="FLOAT")
+    sf.write(reference_path, reference, sample_rate, subtype="FLOAT")
+    corpus = ReferenceCorpus(
+        [
+            CorpusItem(
+                mixture=str(mixture),
+                stems={"Other": str(reference_path)},
+                estimate_stems={"Other": ("Guitar", "Piano", "Other")},
+            )
+        ]
+    )
+    estimates = {
+        "Guitar": np.full((frames, 2), 1.0, dtype=np.float64),
+        "Piano": np.full((frames, 2), 2.0, dtype=np.float64),
+        "Other": np.full((frames, 2), 3.0, dtype=np.float64),
+    }
+
+    report = evaluate_corpus(
+        corpus,
+        lambda _mixture: (
+            estimates,
+            RunSettings(model="mapped", sample_rate=sample_rate),
+        ),
+        sample_rate=sample_rate,
+    )
+
+    assert [
+        (score.stem, score.fullness, score.bleedless) for score in report.scores
+    ] == [("Other", pytest.approx(1.0), pytest.approx(1.0))]
+    assert [(row.stem, row.status) for row in report.coverage] == [("Other", "scored")]
+
+
+def test_evaluate_corpus_mapping_can_exclude_reference_target_name(tmp_path):
+    frames = 16
+    sample_rate = 8000
+    reference = np.full((frames, 2), 3.0, dtype=np.float32)
+    mixture = tmp_path / "mix.wav"
+    reference_path = tmp_path / "instrumental.wav"
+    sf.write(mixture, reference, sample_rate, subtype="FLOAT")
+    sf.write(reference_path, reference, sample_rate, subtype="FLOAT")
+    corpus = ReferenceCorpus(
+        [
+            CorpusItem(
+                mixture=str(mixture),
+                stems={"Instrumental": str(reference_path)},
+                estimate_stems={"Instrumental": ("Guitar", "Piano")},
+            )
+        ]
+    )
+
+    report = evaluate_corpus(
+        corpus,
+        lambda _mixture: (
+            {
+                "Guitar": np.ones((frames, 2), dtype=np.float32),
+                "Piano": np.full((frames, 2), 2.0, dtype=np.float32),
+            },
+            RunSettings(model="mapped", sample_rate=sample_rate),
+        ),
+        sample_rate=sample_rate,
+    )
+
+    assert [score.stem for score in report.scores] == ["Instrumental"]
 
 
 def test_evaluate_corpus_reports_scored_and_unavailable_coverage(tmp_path):

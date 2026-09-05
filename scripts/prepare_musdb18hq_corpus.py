@@ -37,6 +37,15 @@ REQUIRED_FILES = (
     ("Drums", "drums.wav"),
     ("Other", "other.wav"),
 )
+ESTIMATE_STEMS = {"Other": ("Guitar", "Piano", "Other")}
+
+
+def _estimate_stems_manifest() -> dict[str, list[str]]:
+    return {target: list(components) for target, components in ESTIMATE_STEMS.items()}
+
+
+def _estimate_stems_identity() -> str:
+    return json.dumps(_estimate_stems_manifest(), separators=(",", ":"), sort_keys=True)
 
 
 def _split_dir(dataset_root: Path, split: str) -> Path:
@@ -226,6 +235,7 @@ def _inspect_recording(
         "stems": {
             name: _relative(files[name], output_dir) for name, _ in REQUIRED_FILES[1:]
         },
+        "estimate_stems": _estimate_stems_manifest(),
         "category": CATEGORY,
         "recording_id": recording_id,
         "item_id": item_id,
@@ -245,6 +255,7 @@ def _inspect_recording(
         "overlap_with_pretrained_benchmarks": "unknown",
         "source_partition": "unknown",
         "available_references": [name for name, _ in REQUIRED_FILES[1:]],
+        "estimate_stems": _estimate_stems_manifest(),
         "files": {
             name: {
                 "path": _relative(files[name], output_dir),
@@ -327,7 +338,7 @@ def prepare_corpus(
     items = []
     recordings = []
     mixture_hashes: dict[str, str] = {}
-    content_parts = []
+    content_parts = [f"estimate_stems:{_estimate_stems_identity()}"]
     for split in SPLITS:
         for track in tracks[split]:
             item, provenance = _inspect_recording(split, track, output_dir)
@@ -361,6 +372,7 @@ def prepare_corpus(
         "corpus_id": corpus_id,
         "membership_sha256": membership_sha256,
         "content_sha256": content_sha256,
+        "estimate_stems": _estimate_stems_manifest(),
         "items": items,
     }
     dataset_metadata = {
@@ -376,6 +388,7 @@ def prepare_corpus(
         "corpus_id": corpus_id,
         "membership_sha256": membership_sha256,
         "content_sha256": content_sha256,
+        "estimate_stems": _estimate_stems_manifest(),
         "dataset": dataset_metadata,
         "splits": {split: {"n_recordings": len(tracks[split])} for split in SPLITS},
         "recordings": recordings,

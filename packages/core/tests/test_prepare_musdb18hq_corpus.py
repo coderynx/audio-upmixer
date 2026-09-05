@@ -82,6 +82,13 @@ def test_prepare_writes_reloadable_manifest_with_stable_relative_items(tmp_path)
     assert len(manifest["items"]) == 24
     assert {item["split"] for item in manifest["items"]} == {"tuning", "heldout"}
     assert set(manifest["items"][0]["stems"]) == {"Vocals", "Bass", "Drums", "Other"}
+    assert manifest["estimate_stems"] == {
+        "Other": ["Guitar", "Piano", "Other"],
+    }
+    assert all(
+        item["estimate_stems"] == manifest["estimate_stems"]
+        for item in manifest["items"]
+    )
     assert all(
         not Path(path).is_absolute()
         for item in manifest["items"]
@@ -96,6 +103,10 @@ def test_prepare_writes_reloadable_manifest_with_stable_relative_items(tmp_path)
     assert all(
         set(item.stems) == {"Vocals", "Bass", "Drums", "Other"} for item in corpus.items
     )
+    assert all(
+        item.estimate_stems == {"Other": ("Guitar", "Piano", "Other")}
+        for item in corpus.items
+    )
 
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     assert provenance["dataset"]["doi"] == "10.5281/zenodo.3338373"
@@ -105,11 +116,13 @@ def test_prepare_writes_reloadable_manifest_with_stable_relative_items(tmp_path)
     )
     assert provenance["membership_sha256"] == manifest["membership_sha256"]
     assert provenance["content_sha256"] == manifest["content_sha256"]
+    assert provenance["estimate_stems"] == manifest["estimate_stems"]
     assert provenance["splits"] == {
         "heldout": {"n_recordings": 12},
         "tuning": {"n_recordings": 12},
     }
     assert provenance["recordings"][0]["category"] == "musdb18-hq-baseline"
+    assert provenance["recordings"][0]["estimate_stems"] == manifest["estimate_stems"]
     assert provenance["recordings"][0]["residual"]["peak"] == pytest.approx(
         0.0, abs=1e-7
     )
@@ -157,6 +170,25 @@ def test_prepare_corpus_id_changes_when_audio_content_changes(tmp_path):
             "content_sha256"
         ]
     )
+
+
+def test_prepare_corpus_id_changes_when_estimate_mapping_changes(tmp_path, monkeypatch):
+    dataset = _write_dataset(tmp_path / "dataset")
+    first_output = tmp_path / "prepared-first"
+    PREPARER.prepare_corpus(dataset, first_output)
+    first_manifest = json.loads(
+        (first_output / "corpus.json").read_text(encoding="utf-8")
+    )
+
+    monkeypatch.setattr(PREPARER, "ESTIMATE_STEMS", {"Other": ("Other",)})
+    second_output = tmp_path / "prepared-second"
+    PREPARER.prepare_corpus(dataset, second_output)
+    second_manifest = json.loads(
+        (second_output / "corpus.json").read_text(encoding="utf-8")
+    )
+
+    assert second_manifest["corpus_id"] != first_manifest["corpus_id"]
+    assert second_manifest["estimate_stems"] == {"Other": ["Other"]}
 
 
 def test_prepare_uses_and_validates_selection_manifest_metadata(tmp_path):
