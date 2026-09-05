@@ -15,14 +15,17 @@ from __future__ import annotations
 
 import argparse
 import math
+import shutil
 import subprocess
 from functools import partial
 from pathlib import Path
 from typing import Callable, Sequence
 
+import numpy as np
 import soundfile as sf
 
 from upmixer.config import UpmixConfig
+from upmixer.execution import write_report
 from upmixer.eval import (
     ReferenceCorpus,
     RunSettings,
@@ -33,9 +36,11 @@ from upmixer.eval import (
     synthetic_corpus,
 )
 from upmixer.separation.stem_plan import normalize_stems
+from upmixer.io.atomic import atomic_output_path
 
 _PROTOCOL_ID = "upmixer-separation-q00-v1"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+_STEM_INDEX_SCHEMA = 1
 
 
 def _positive_int(value: str) -> int:
@@ -83,6 +88,11 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         metavar="NAME[,NAME...]",
         help="Requested production-tree stems; use manifest or canonical names.",
+    )
+    parser.add_argument(
+        "--retain-stems",
+        action="store_true",
+        help="Keep each completed item's pre-routing float32 stems.",
     )
     return parser
 
@@ -164,6 +174,78 @@ def _git_revision() -> str | None:
     return f"{head}-dirty" if status.stdout else head
 
 
+def _retained_filename(stem_name: str, used: set[str]) -> str:
+    base = stem_name.replace("@", "__").replace("/", "__").replace("\\", "__") or "stem"
+    filename = f"{base}.wav"
+    suffix = 2
+    while filename in used:
+        filename = f"{base}__{suffix}.wav"
+        suffix += 1
+    used.add(filename)
+    return filename
+
+
+def _retaining_separator(
+    separate_fn: Callable,
+    corpus: ReferenceCorpus,
+    output_dir: Path,
+) -> Callable:
+    """Persist successful separator returns while evaluation advances in order."""
+    stems_dir = output_dir / "stems"
+    index_path = stems_dir / "index.json"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    entries: list[dict[str, object]] = []
+    write_report(index_path, {"schema_version": _STEM_INDEX_SCHEMA, "items": entries})
+    next_index = 0
+
+    def separate(mixture_path: str):
+        nonlocal next_index
+        if next_index >= len(corpus.items):
+            raise RuntimeError("separator called more times than corpus items")
+        item_index = next_index
+        item = corpus.items[item_index]
+        next_index += 1
+        stems, settings = separate_fn(mixture_path)
+        if not isinstance(stems, dict) or not stems:
+            return stems, settings
+        sample_rate = getattr(settings, "sample_rate", None)
+        if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate < 1:
+            raise ValueError("retained stems require a positive settings sample rate")
+
+        item_dir = stems_dir / f"{item_index:04d}"
+        paths: dict[str, str] = {}
+        used_filenames: set[str] = set()
+        try:
+            item_dir.mkdir(parents=True, exist_ok=False)
+            for stem_name in sorted(stems, key=str):
+                filename = _retained_filename(str(stem_name), used_filenames)
+                destination = item_dir / filename
+                audio = np.asarray(stems[stem_name], dtype=np.float32)
+                with atomic_output_path(destination) as temporary:
+                    sf.write(str(temporary), audio, sample_rate, subtype="FLOAT")
+                paths[str(stem_name)] = destination.relative_to(output_dir).as_posix()
+            entry = {
+                "index": item_index,
+                "recording_id": item.recording_id,
+                "item_id": item.item_id,
+                "split": item.split,
+                "category": item.category,
+                "sample_rate": sample_rate,
+                "stems": paths,
+            }
+            write_report(
+                index_path,
+                {"schema_version": _STEM_INDEX_SCHEMA, "items": [*entries, entry]},
+            )
+        except BaseException:
+            shutil.rmtree(item_dir, ignore_errors=True)
+            raise
+        entries.append(entry)
+        return stems, settings
+
+    return separate
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
@@ -186,6 +268,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         ) or args.stem_ensemble or args.tta:
             parser.error("model settings require --variant real-model")
+        if args.retain_stems:
+            parser.error("--retain-stems requires --variant real-model or production-tree")
     if args.stems is not None:
         try:
             args.stems = normalize_stems(args.stems)
@@ -204,6 +288,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         separate_fn = _reference_separator(corpus, args.sample_rate)
     else:
         separate_fn = _real_separator(args)
+    if args.retain_stems:
+        separate_fn = _retaining_separator(separate_fn, corpus, args.output_dir)
 
     report = evaluate_corpus(
         corpus,
