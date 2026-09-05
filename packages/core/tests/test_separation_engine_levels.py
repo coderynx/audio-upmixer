@@ -100,11 +100,13 @@ def _tone_amplitude(audio: np.ndarray, sample_rate: int, frequency: float) -> fl
 
 _RATE_CASES = (
     ("native-44k", 44_100, 44_100),
+    ("native-48k", 48_000, 48_000),
     ("resampled-48k", 48_000, 44_100),
     ("resampled-to-48k", 44_100, 48_000),
     ("native-96k", 96_000, 96_000),
     ("resampled-96k", 44_100, 96_000),
 )
+_RESAMPLED_RATE_CASES = tuple(case for case in _RATE_CASES if case[1] != case[2])
 
 
 def test_hot_input_restores_gain_and_stems_sum_to_input_level(tmp_path):
@@ -144,6 +146,10 @@ def test_rate_length_parent_and_high_band_contract(
         _diagnostic_mix(source_rate),
         source_rate,
     )
+    source_audio, source_file_rate = sf.read(
+        source, dtype="float32", always_2d=True
+    )
+    assert source_file_rate == source_rate
     engine = _make_engine(str(tmp_path / f"{case}_out"), engine_rate)
 
     paths = engine.separate(source, retain_parent=True)
@@ -163,8 +169,68 @@ def test_rate_length_parent_and_high_band_contract(
     np.testing.assert_allclose(vocals, expected * 0.25, atol=2e-5)
     np.testing.assert_allclose(other, expected * 0.75, atol=2e-5)
     np.testing.assert_allclose(vocals + other, expected, atol=2e-5)
+    if source_rate == engine_rate:
+        np.testing.assert_array_equal(expected.T, source_audio)
+        np.testing.assert_array_equal(parent, source_audio)
+        np.testing.assert_allclose(vocals, source_audio.T * 0.25, atol=2e-5)
+        np.testing.assert_allclose(other, source_audio.T * 0.75, atol=2e-5)
     if source_rate == engine_rate == 96_000:
         assert _tone_amplitude(vocals[0], engine_rate, 18_000.0) > 0.02
 
     with pytest.raises(RuntimeError, match="No completed separation input"):
         engine.take_last_parent()
+
+
+@pytest.mark.parametrize(
+    ("case", "source_rate", "engine_rate"),
+    _RESAMPLED_RATE_CASES,
+    ids=[case[0] for case in _RESAMPLED_RATE_CASES],
+)
+def test_resampled_impulse_has_no_material_position_delay(
+    tmp_path, case: str, source_rate: int, engine_rate: int
+):
+    from upmixer.separation.inference.audio_io import load_audio
+
+    n_samples = 2001
+    impulse_index = n_samples // 2
+    impulse = np.zeros((2, n_samples), dtype=np.float32)
+    impulse[:, impulse_index] = 1.0
+    source = _write_source(tmp_path / f"{case}-impulse.wav", impulse, source_rate)
+
+    loaded = load_audio(source, engine_rate)
+    expected_index = round(impulse_index * engine_rate / source_rate)
+    peak_index = int(np.argmax(np.abs(loaded[0])))
+
+    assert abs(peak_index - expected_index) <= 2
+
+
+@pytest.mark.parametrize(
+    ("case", "source_rate", "engine_rate"),
+    _RESAMPLED_RATE_CASES,
+    ids=[case[0] for case in _RESAMPLED_RATE_CASES],
+)
+def test_resampled_audio_retains_low_and_high_tones(
+    tmp_path, case: str, source_rate: int, engine_rate: int
+):
+    from upmixer.separation.inference.audio_io import load_audio
+
+    n_samples = source_rate
+    time = np.arange(n_samples, dtype=np.float64) / source_rate
+    signal = (
+        0.35 * np.sin(2 * np.pi * 220.0 * time)
+        + 0.18 * np.sin(2 * np.pi * 18_000.0 * time)
+    ).astype(np.float32)
+    source = _write_source(
+        tmp_path / f"{case}-tones.wav",
+        np.stack((signal, signal)),
+        source_rate,
+    )
+
+    loaded = load_audio(source, engine_rate)
+
+    assert _tone_amplitude(loaded[0], engine_rate, 220.0) == pytest.approx(
+        0.35, rel=0.02, abs=0.002
+    )
+    assert _tone_amplitude(loaded[0], engine_rate, 18_000.0) == pytest.approx(
+        0.18, rel=0.02, abs=0.002
+    )
