@@ -108,9 +108,9 @@ def _common_stage_setting(
     name: str,
     requested: object,
 ) -> object:
-    """Return one effective value when every executed stage agrees."""
+    """Return one effective value when an executed stage observed it."""
     if not stage_settings:
-        return requested
+        return None
     values = tuple(getattr(stage, name, None) for stage in stage_settings)
     return values[0] if all(value == values[0] for value in values) else None
 

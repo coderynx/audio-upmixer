@@ -165,6 +165,52 @@ def test_tree_reports_observed_ensemble_pair():
     assert settings.ensemble_models == (MODEL_PRIMARY, MODEL_ENSEMBLE)
 
 
+def test_tree_leaves_inference_settings_unresolved_when_all_silent():
+    fake = _fake_pipeline(
+        {"Vocals": np.zeros((8, 2), dtype=np.float32)},
+        ["Vocals"],
+    )
+    config = UpmixConfig(
+        stems=["Vocals"],
+        stem_silence_skip=True,
+        stem_silence_threshold_db=-72.0,
+        stem_silence_min_duration_s=3.0,
+        stem_silence_crossfade_ms=25.0,
+        stem_silence_pad_ms=300.0,
+        stem_primary_remask=False,
+        stem_drum_remask=False,
+        stem_bleed_reduction=True,
+    )
+
+    with patch("upmixer.separation.stem_pipeline.StemUpmixPipeline", fake):
+        stems, settings = separate_tree_for_eval("silent.wav", 44_100, config)
+
+    assert not np.any(stems["Vocals"])
+    assert settings.stage_settings == ()
+    for name in (
+        "batch_size",
+        "segment_size",
+        "chunk_duration_s",
+        "overlap",
+        "tta",
+        "pitch_shift",
+        "backend",
+        "model_arch",
+        "model_config_name",
+        "model_native_sample_rate",
+        "device",
+    ):
+        assert getattr(settings, name) is None
+    assert settings.stem_silence_skip is True
+    assert settings.stem_silence_threshold_db == -72.0
+    assert settings.stem_silence_min_duration_s == 3.0
+    assert settings.stem_silence_crossfade_ms == 25.0
+    assert settings.stem_silence_pad_ms == 300.0
+    assert settings.stem_primary_remask is False
+    assert settings.stem_drum_remask is False
+    assert settings.stem_bleed_reduction is True
+
+
 def test_tree_records_observed_context_and_effective_stage_values():
     stage_settings = (
         _settings(MODEL_DEUX),
