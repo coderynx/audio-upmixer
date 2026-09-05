@@ -433,6 +433,60 @@ def _validate_bootstrap_args(n_resamples: int, confidence: float, seed: int) -> 
         raise ValueError("seed must be a non-negative integer")
 
 
+_TREE_FIELDS = (
+    "input_sample_rate", "separation_sample_rate", "output_sample_rate", "scoring_sample_rate",
+    "stem_primary_remask", "stem_drum_remask", "stem_bleed_reduction", "stem_ensemble",
+    "stem_silence_skip", "stem_silence_threshold_db", "stem_silence_min_duration_s",
+    "stem_silence_crossfade_ms", "stem_silence_pad_ms",
+)
+_RUNTIME_FIELDS = ("checkpoint_sha256", "model_config_sha256", "runtime_precision", "normalization_policy", "oom_fallback_attempts", "oom_fallback_count")
+
+
+def _short_hash(value: object) -> str:
+    if value is None:
+        return "-"
+    text = str(value)
+    return text if len(text) <= 12 else f"{text[:12]}..."
+
+
+def _format_plan(plan: object) -> str:
+    if not isinstance(plan, dict):
+        return str(plan)
+    compact = dict(plan)
+    for key in ("stems_hash", "inference_hash"):
+        compact[key] = _short_hash(compact.get(key))
+    return json.dumps(compact, sort_keys=True, separators=(",", ":"))
+
+
+def _format_tree_context(settings: object) -> str:
+    plan = getattr(settings, "plan", None)
+    if plan is None and not any(
+        getattr(settings, field, None) is not None for field in _TREE_FIELDS
+    ):
+        return ""
+    text = " ".join(f"{field}={getattr(settings, field, None)}" for field in _TREE_FIELDS)
+    if plan is not None:
+        text += f" plan={_format_plan(plan)}"
+    return f" {text}"
+
+
+def _format_runtime_provenance(settings: object) -> str:
+    values = {field: getattr(settings, field, None) for field in _RUNTIME_FIELDS}
+    if not any(value not in (None, (), 0) for value in values.values()):
+        return ""
+    attempts = json.dumps(
+        values["oom_fallback_attempts"] or (), sort_keys=True, separators=(",", ":")
+    )
+    return (
+        f" checkpoint_sha256={_short_hash(values['checkpoint_sha256'])}"
+        f" model_config_sha256={_short_hash(values['model_config_sha256'])}"
+        f" runtime_precision={values['runtime_precision']}"
+        f" normalization_policy={values['normalization_policy']}"
+        f" oom_fallback_attempts={attempts}"
+        f" oom_fallback_count={values['oom_fallback_count']}"
+    )
+
+
 def _format_settings(settings: object, *, include_ensemble: bool = False) -> str:
     text = (
         f"model={getattr(settings, 'model', None)} "
@@ -455,7 +509,7 @@ def _format_settings(settings: object, *, include_ensemble: bool = False) -> str
             f" ensemble_algorithm={getattr(settings, 'ensemble_algorithm', None)}"
             f" ensemble_models={getattr(settings, 'ensemble_models', None)}"
         )
-    return text
+    return text + _format_tree_context(settings) + _format_runtime_provenance(settings)
 
 
 def format_report(report: EvalReport) -> str:
