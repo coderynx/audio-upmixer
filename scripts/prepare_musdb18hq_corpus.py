@@ -26,7 +26,6 @@ import soundfile as sf
 
 from upmixer.io.atomic import atomic_output_path
 
-CORPUS_ID = "musdb18-hq-v1"
 SAMPLE_RATE = 44_100
 BLOCK_SIZE = 65_536
 CATEGORY = "musdb18-hq-baseline"
@@ -61,6 +60,55 @@ def _track_dirs(split_dir: Path, split: str) -> list[Path]:
             f"{split} requires at least 12 independent tracks, found {len(tracks)}"
         )
     return tracks
+
+
+def _selection_manifest(path: Path) -> tuple[str, list[str], dict[str, Any]]:
+    try:
+        selection = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid selection manifest {path}: {exc}") from exc
+    if not isinstance(selection, dict):
+        raise ValueError(f"invalid selection manifest {path}: expected an object")
+    selection_id = selection.get("selection_id")
+    if not isinstance(selection_id, str) or not selection_id.strip():
+        raise ValueError(f"selection manifest {path} requires a nonempty selection_id")
+
+    tracks = selection.get("tracks")
+    if not isinstance(tracks, dict):
+        raise ValueError(f"selection manifest {path} requires tracks by split")
+    membership = []
+    for split in SPLITS:
+        names = tracks.get(split)
+        if not isinstance(names, list) or not all(
+            isinstance(name, str) and name for name in names
+        ):
+            raise ValueError(f"selection manifest {path} requires {split} track names")
+        membership.extend(f"{split}/{name}" for name in names)
+    if len(membership) != len(set(membership)):
+        raise ValueError(f"selection manifest {path} contains duplicate tracks")
+
+    archive = selection.get("archive")
+    if not isinstance(archive, dict):
+        archive = {}
+
+    def value(*names: str) -> Any:
+        for name in names:
+            candidate = selection.get(name, archive.get(name))
+            if candidate is not None and candidate != "":
+                return candidate
+        return "unknown"
+
+    metadata = {
+        "archive_subset": value("archive_subset", "subset"),
+        "archive_identity": value("archive_identity", "identity"),
+        "benchmark_overlap": value("benchmark_overlap", "benchmark_overlap_statement"),
+    }
+    return selection_id.strip(), sorted(membership), metadata
+
+
+def _membership_hash(membership: list[str]) -> str:
+    payload = ("\n".join(membership) + "\n").encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _sha256(path: Path) -> str:
@@ -227,33 +275,84 @@ def prepare_corpus(
                 )
             seen[key] = split
 
+    membership = [
+        f"{split}/{track.name}" for split in SPLITS for track in tracks[split]
+    ]
+    membership.sort()
+    membership_sha256 = _membership_hash(membership)
+    selection_path = dataset_root / "selection.json"
+    selection = None
+    selection_metadata = {
+        "archive_subset": "unknown",
+        "archive_identity": "MUSDB18-HQ@10.5281/zenodo.3338373",
+        "benchmark_overlap": "unknown",
+    }
+    if selection_path.exists():
+        selection_id, selected_membership, selected_metadata = _selection_manifest(
+            selection_path
+        )
+        expected = set(membership)
+        selected = set(selected_membership)
+        if expected != selected:
+            missing = sorted(expected - selected)
+            extra = sorted(selected - expected)
+            details = []
+            if missing:
+                details.append(f"missing={missing}")
+            if extra:
+                details.append(f"extra={extra}")
+            raise ValueError(
+                "selection.json membership mismatch: " + "; ".join(details)
+            )
+        corpus_id = selection_id
+        selection_metadata.update(selected_metadata)
+        selection = {
+            "selection_id": corpus_id,
+            **selection_metadata,
+        }
+    else:
+        corpus_id = f"musdb18-hq-{membership_sha256}"
+
     items = []
     recordings = []
+    mixture_hashes: dict[str, str] = {}
     for split in SPLITS:
         for track in tracks[split]:
             item, provenance = _inspect_recording(split, track, output_dir)
+            mixture_hash = provenance["files"]["mixture"]["sha256"]
+            previous = mixture_hashes.get(mixture_hash)
+            if previous is not None:
+                raise ValueError(
+                    f"duplicate mixture SHA-256 for {previous} and {split}/{track.name}"
+                )
+            mixture_hashes[mixture_hash] = f"{split}/{track.name}"
             items.append(item)
             recordings.append(provenance)
 
     manifest = {
         "schema_version": 1,
-        "corpus_id": CORPUS_ID,
+        "corpus_id": corpus_id,
+        "membership_sha256": membership_sha256,
         "items": items,
+    }
+    dataset_metadata = {
+        "name": "MUSDB18-HQ",
+        "doi": "10.5281/zenodo.3338373",
+        "source": "MUSDB18-HQ archive on Zenodo",
+        "source_url": "https://doi.org/10.5281/zenodo.3338373",
+        "license": "educational-only",
+        **selection_metadata,
     }
     provenance = {
         "schema_version": 1,
-        "corpus_id": CORPUS_ID,
-        "dataset": {
-            "name": "MUSDB18-HQ",
-            "doi": "10.5281/zenodo.3338373",
-            "source": "MUSDB18-HQ archive on Zenodo",
-            "source_url": "https://doi.org/10.5281/zenodo.3338373",
-            "license": "educational-only",
-            "archive_identity": "MUSDB18-HQ@10.5281/zenodo.3338373",
-        },
+        "corpus_id": corpus_id,
+        "membership_sha256": membership_sha256,
+        "dataset": dataset_metadata,
         "splits": {split: {"n_recordings": len(tracks[split])} for split in SPLITS},
         "recordings": recordings,
     }
+    if selection is not None:
+        provenance["selection"] = selection
     output_dir.mkdir(parents=True, exist_ok=True)
     corpus_path = output_dir / "corpus.json"
     provenance_path = output_dir / "provenance.json"

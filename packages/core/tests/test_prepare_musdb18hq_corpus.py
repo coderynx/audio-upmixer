@@ -77,7 +77,8 @@ def test_prepare_writes_reloadable_manifest_with_stable_relative_items(tmp_path)
 
     manifest = json.loads(corpus_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
-    assert manifest["corpus_id"] == "musdb18-hq-v1"
+    assert manifest["corpus_id"].startswith("musdb18-hq-")
+    assert manifest["corpus_id"] != "musdb18-hq-v1"
     assert len(manifest["items"]) == 24
     assert {item["split"] for item in manifest["items"]} == {"tuning", "heldout"}
     assert set(manifest["items"][0]["stems"]) == {"Vocals", "Bass", "Drums", "Other"}
@@ -89,7 +90,7 @@ def test_prepare_writes_reloadable_manifest_with_stable_relative_items(tmp_path)
     assert not list(output.rglob("*.wav"))
 
     corpus = ReferenceCorpus.from_dir(str(output))
-    assert corpus.corpus_id == "musdb18-hq-v1"
+    assert corpus.corpus_id == manifest["corpus_id"]
     assert len(corpus.items) == 24
     assert all(Path(item.mixture).is_file() for item in corpus.items)
     assert all(
@@ -102,6 +103,7 @@ def test_prepare_writes_reloadable_manifest_with_stable_relative_items(tmp_path)
     assert (
         provenance["dataset"]["archive_identity"] == "MUSDB18-HQ@10.5281/zenodo.3338373"
     )
+    assert provenance["membership_sha256"] == manifest["membership_sha256"]
     assert provenance["splits"] == {
         "heldout": {"n_recordings": 12},
         "tuning": {"n_recordings": 12},
@@ -119,6 +121,60 @@ def test_prepare_writes_reloadable_manifest_with_stable_relative_items(tmp_path)
         for item in json.loads((second_output / "corpus.json").read_text())["items"]
     ]
     assert first_ids == second_ids
+
+    larger_dataset = _write_dataset(tmp_path / "dataset-larger", tuning_count=13)
+    larger_output = tmp_path / "prepared-larger"
+    PREPARER.prepare_corpus(larger_dataset, larger_output)
+    larger_manifest = json.loads(
+        (larger_output / "corpus.json").read_text(encoding="utf-8")
+    )
+    assert larger_manifest["corpus_id"] != manifest["corpus_id"]
+
+
+def test_prepare_uses_and_validates_selection_manifest_metadata(tmp_path):
+    dataset = _write_dataset(tmp_path / "dataset")
+    selection = {
+        "selection_id": "musdb18-hq-test-selection-v2",
+        "tracks": {
+            "tuning": [f"track-{index:02d}" for index in range(12)],
+            "heldout": [f"track-{100 + index:02d}" for index in range(12)],
+        },
+        "archive_subset": "test",
+        "archive_identity": "musdb18-hq-test-archive-v1",
+        "benchmark_overlap": "No overlap with SCNet training data.",
+    }
+    (dataset / "selection.json").write_text(json.dumps(selection), encoding="utf-8")
+
+    output = tmp_path / "prepared"
+    PREPARER.prepare_corpus(dataset, output)
+
+    manifest = json.loads((output / "corpus.json").read_text(encoding="utf-8"))
+    provenance = json.loads((output / "provenance.json").read_text(encoding="utf-8"))
+    assert manifest["corpus_id"] == selection["selection_id"]
+    assert provenance["dataset"]["archive_subset"] == "test"
+    assert provenance["dataset"]["archive_identity"] == "musdb18-hq-test-archive-v1"
+    assert provenance["dataset"]["benchmark_overlap"] == selection["benchmark_overlap"]
+    assert provenance["selection"] == {
+        "selection_id": selection["selection_id"],
+        "archive_subset": "test",
+        "archive_identity": "musdb18-hq-test-archive-v1",
+        "benchmark_overlap": selection["benchmark_overlap"],
+    }
+
+    selection["tracks"]["heldout"][-1] = "not-a-track"
+    (dataset / "selection.json").write_text(json.dumps(selection), encoding="utf-8")
+    with pytest.raises(ValueError, match="selection.json membership mismatch"):
+        PREPARER.prepare_corpus(dataset, tmp_path / "mismatched")
+
+
+def test_prepare_rejects_duplicate_mixture_content(tmp_path):
+    dataset = _write_dataset(tmp_path / "dataset")
+    first = dataset / "subset" / "tuning" / "track-00" / "mixture.wav"
+    second = dataset / "subset" / "tuning" / "track-01" / "mixture.wav"
+    second.write_bytes(first.read_bytes())
+
+    with pytest.raises(ValueError, match="duplicate mixture SHA-256"):
+        PREPARER.prepare_corpus(dataset, tmp_path / "prepared")
 
 
 def test_prepare_records_hash_audio_metadata_and_nonzero_residual(tmp_path):
