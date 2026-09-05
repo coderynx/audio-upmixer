@@ -11,7 +11,13 @@ import pytest
 from upmixer.config import UpmixConfig
 from upmixer.eval import separate_tree_for_eval
 from upmixer.separation.separator import SeparationSettings
-from upmixer.separation.stem_plan import ENSEMBLE_ALGORITHM, MODEL_ENSEMBLE, MODEL_PRIMARY
+from upmixer.separation.stem_plan import (
+    ENSEMBLE_ALGORITHM,
+    MODEL_DEUX,
+    MODEL_ENSEMBLE,
+    MODEL_PRIMARY,
+    resolve_separation_plan,
+)
 from upmixer.separation.stem_store import PlainStemStore
 
 
@@ -26,6 +32,10 @@ def _settings(model: str) -> SeparationSettings:
         tta=False,
         pitch_shift=None,
         backend="cpu",
+        model_arch="bs_roformer",
+        model_config_name="first-config",
+        model_native_sample_rate=44_100,
+        device="cpu",
     )
 
 
@@ -36,6 +46,8 @@ def _fake_pipeline(
     store_rate: int = 44_100,
     stage_settings: tuple[SeparationSettings, ...] = (),
     write_store: bool = True,
+    input_sample_rate: int | None = None,
+    output_sample_rate: int | None = None,
 ):
     class FakePipeline:
         instances: list[FakePipeline] = []
@@ -56,7 +68,11 @@ def _fake_pipeline(
             self.prepare_calls.append(input_path)
             if write_store:
                 PlainStemStore(self.config.stem_output_dir).write(stems, store_rate)
-            return SimpleNamespace(stems=result_stems)
+            return SimpleNamespace(
+                stems=result_stems,
+                input_sample_rate=input_sample_rate,
+                output_sample_rate=output_sample_rate,
+            )
 
         def process_file(self, *_args, **_kwargs):
             raise AssertionError("evaluation must use public prepare_stems")
@@ -128,6 +144,7 @@ def test_tree_does_not_report_unrun_ensemble():
 
     assert settings.ensemble_algorithm is None
     assert settings.ensemble_models is None
+    assert settings.stem_ensemble is False
 
 
 def test_tree_reports_observed_ensemble_pair():
@@ -146,6 +163,82 @@ def test_tree_reports_observed_ensemble_pair():
 
     assert settings.ensemble_algorithm == ENSEMBLE_ALGORITHM
     assert settings.ensemble_models == (MODEL_PRIMARY, MODEL_ENSEMBLE)
+
+
+def test_tree_records_observed_context_and_effective_stage_values():
+    stage_settings = (
+        _settings(MODEL_DEUX),
+        _settings(MODEL_PRIMARY),
+        _settings(MODEL_ENSEMBLE),
+    )
+    config = UpmixConfig(
+        stems=["Bass"],
+        stem_ensemble=True,
+        stem_primary_remask=True,
+        stem_drum_remask=False,
+        stem_bleed_reduction=True,
+        stem_silence_skip=False,
+        stem_silence_threshold_db=-72.0,
+        stem_silence_min_duration_s=3.0,
+        stem_silence_crossfade_ms=25.0,
+        stem_silence_pad_ms=300.0,
+    )
+    fake = _fake_pipeline(
+        _stems("Bass"),
+        ["Bass"],
+        store_rate=44_100,
+        stage_settings=stage_settings,
+        input_sample_rate=48_000,
+        output_sample_rate=44_100,
+    )
+
+    with patch("upmixer.separation.stem_pipeline.StemUpmixPipeline", fake):
+        _, settings = separate_tree_for_eval("mix.wav", 44_100, config)
+
+    expected_plan = resolve_separation_plan(["Bass"], stem_ensemble=True)
+    assert settings.input_sample_rate == 48_000
+    assert settings.separation_sample_rate == 44_100
+    assert settings.output_sample_rate == 44_100
+    assert settings.scoring_sample_rate == 44_100
+    assert settings.batch_size == 1
+    assert settings.segment_size == 64
+    assert settings.chunk_duration_s == 60.0
+    assert settings.overlap == 2
+    assert settings.tta is False
+    assert settings.backend == "cpu"
+    assert settings.device == "cpu"
+    assert settings.model_arch == "bs_roformer"
+    assert settings.model_config_name == "first-config"
+    assert settings.model_native_sample_rate == 44_100
+    assert settings.stem_primary_remask is True
+    assert settings.stem_drum_remask is False
+    assert settings.stem_bleed_reduction is True
+    assert settings.stem_ensemble is True
+    assert settings.stem_silence_skip is False
+    assert settings.stem_silence_threshold_db == -72.0
+    assert settings.stem_silence_min_duration_s == 3.0
+    assert settings.stem_silence_crossfade_ms == 25.0
+    assert settings.stem_silence_pad_ms == 300.0
+    assert settings.plan == {
+        "requested_stems": sorted(expected_plan.requested_stems),
+        "stems_hash": expected_plan.stems_hash,
+        "inference_hash": expected_plan.inference_hash,
+        "tasks": [
+            {
+                "model": task.model,
+                "input_source": task.input_source,
+                "output_stems": sorted(task.output_stems),
+                "keep_stems": sorted(task.keep_stems),
+                "ensemble_models": list(task.ensemble_models),
+                "ensemble_stems": sorted(task.ensemble_stems),
+                "ensemble_algorithm": (
+                    ENSEMBLE_ALGORITHM if task.ensemble_models else None
+                ),
+                "executed": True,
+            }
+            for task in expected_plan.tasks
+        ],
+    }
 
 
 def test_tree_rejects_missing_store():

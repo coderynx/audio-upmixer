@@ -128,6 +128,10 @@ def test_separate_for_eval_records_completed_run_settings_without_registry_reloa
     assert settings.batch_size == 3
     assert settings.device == "cpu"
     assert settings.stage_settings == (separator.run_settings,)
+    assert settings.input_sample_rate == 8000
+    assert settings.separation_sample_rate == 8000
+    assert settings.output_sample_rate == 8000
+    assert settings.scoring_sample_rate == 8000
 
 
 def test_separate_for_eval_ensemble_uses_public_tree_without_model_loading():

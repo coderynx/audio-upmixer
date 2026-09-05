@@ -26,9 +26,12 @@ from upmixer.separation.separator import (
     StemSeparator,
 )
 from upmixer.separation.stem_plan import (
+    DEFAULT_STEMS,
     ENSEMBLE_ALGORITHM,
     MODEL_ENSEMBLE,
     MODEL_PRIMARY,
+    normalize_stems,
+    resolve_separation_plan,
 )
 
 SeparateFn = Callable[[str], tuple[dict[str, np.ndarray], "RunSettings"]]
@@ -73,6 +76,20 @@ class RunSettings:
     model_native_sample_rate: int | None = None
     stage_settings: tuple[SeparationSettings, ...] = ()
     device: str | None = None
+    input_sample_rate: int | None = None
+    separation_sample_rate: int | None = None
+    output_sample_rate: int | None = None
+    scoring_sample_rate: int | None = None
+    plan: dict[str, object] | None = None
+    stem_primary_remask: bool | None = None
+    stem_drum_remask: bool | None = None
+    stem_bleed_reduction: bool | None = None
+    stem_ensemble: bool | None = None
+    stem_silence_skip: bool | None = None
+    stem_silence_threshold_db: float | None = None
+    stem_silence_min_duration_s: float | None = None
+    stem_silence_crossfade_ms: float | None = None
+    stem_silence_pad_ms: float | None = None
 
 
 @dataclass
@@ -84,6 +101,50 @@ class ItemRunSettings:
     split: str | None
     category: str
     settings: RunSettings
+
+
+def _common_stage_setting(
+    stage_settings: tuple[SeparationSettings, ...],
+    name: str,
+    requested: object,
+) -> object:
+    """Return one effective value when every executed stage agrees."""
+    if not stage_settings:
+        return requested
+    values = tuple(getattr(stage, name, None) for stage in stage_settings)
+    return values[0] if all(value == values[0] for value in values) else None
+
+
+def _plan_context(
+    config: UpmixConfig,
+    stage_settings: tuple[SeparationSettings, ...],
+) -> tuple[dict[str, object], bool]:
+    """Serialize the resolved tree plan and mark stages seen in execution."""
+    canonical = normalize_stems(config.stems) if config.stems else list(DEFAULT_STEMS)
+    plan = resolve_separation_plan(canonical, config.stem_ensemble)
+    observed_models = {stage.model for stage in stage_settings}
+    tasks = [
+        {
+            "model": task.model,
+            "input_source": task.input_source,
+            "output_stems": sorted(task.output_stems),
+            "keep_stems": sorted(task.keep_stems),
+            "ensemble_models": list(task.ensemble_models),
+            "ensemble_stems": sorted(task.ensemble_stems),
+            "ensemble_algorithm": ENSEMBLE_ALGORITHM if task.ensemble_models else None,
+            "executed": task.model in observed_models,
+        }
+        for task in plan.tasks
+    ]
+    return (
+        {
+            "requested_stems": sorted(plan.requested_stems),
+            "tasks": tasks,
+            "stems_hash": plan.stems_hash,
+            "inference_hash": plan.inference_hash or None,
+        },
+        {MODEL_PRIMARY, MODEL_ENSEMBLE} <= observed_models,
+    )
 
 
 def separate_for_eval(
@@ -155,6 +216,10 @@ def separate_for_eval(
         raise RuntimeError(
             "StemSeparator completed without a run-settings snapshot"
         )
+    try:
+        input_sample_rate = sf.info(mixture_path).samplerate
+    except (OSError, RuntimeError):
+        input_sample_rate = None
     settings = RunSettings(
         model=snapshot.model,
         sample_rate=snapshot.sample_rate,
@@ -170,6 +235,10 @@ def separate_for_eval(
         model_native_sample_rate=snapshot.model_native_sample_rate,
         stage_settings=(snapshot,),
         device=snapshot.device,
+        input_sample_rate=input_sample_rate,
+        separation_sample_rate=snapshot.sample_rate,
+        output_sample_rate=snapshot.sample_rate,
+        scoring_sample_rate=sample_rate,
     )
     return stems, settings
 
@@ -223,22 +292,55 @@ def separate_tree_for_eval(
                 f"evaluation stem store has no requested stems (requested: {requested})"
             )
 
-    observed_models = {setting.model for setting in stage_settings}
-    ensemble_observed = {MODEL_PRIMARY, MODEL_ENSEMBLE} <= observed_models
+    plan, ensemble_observed = _plan_context(config, stage_settings)
+    output_sample_rate = (
+        getattr(result, "output_sample_rate", None) or stored_sample_rate
+    )
     return stems, RunSettings(
         model="production-tree",
-        sample_rate=sample_rate,
-        batch_size=config.stem_batch_size,
-        segment_size=config.stem_segment_size,
-        chunk_duration_s=config.stem_chunk_duration_s,
-        overlap=config.stem_overlap,
+        sample_rate=stored_sample_rate,
+        batch_size=_common_stage_setting(
+            stage_settings, "batch_size", config.stem_batch_size
+        ),
+        segment_size=_common_stage_setting(
+            stage_settings, "segment_size", config.stem_segment_size
+        ),
+        chunk_duration_s=_common_stage_setting(
+            stage_settings, "chunk_duration_s", config.stem_chunk_duration_s
+        ),
+        overlap=_common_stage_setting(stage_settings, "overlap", config.stem_overlap),
         ensemble_algorithm=ENSEMBLE_ALGORITHM if ensemble_observed else None,
         ensemble_models=(MODEL_PRIMARY, MODEL_ENSEMBLE)
         if ensemble_observed
         else None,
-        tta=config.stem_tta,
-        pitch_shift=config.stem_pitch_shift,
+        tta=_common_stage_setting(stage_settings, "tta", config.stem_tta),
+        pitch_shift=_common_stage_setting(
+            stage_settings, "pitch_shift", config.stem_pitch_shift
+        ),
+        backend=_common_stage_setting(stage_settings, "backend", None),
+        model_arch=_common_stage_setting(stage_settings, "model_arch", None),
+        model_config_name=_common_stage_setting(
+            stage_settings, "model_config_name", None
+        ),
+        model_native_sample_rate=_common_stage_setting(
+            stage_settings, "model_native_sample_rate", None
+        ),
         stage_settings=stage_settings,
+        device=_common_stage_setting(stage_settings, "device", None),
+        input_sample_rate=getattr(result, "input_sample_rate", None),
+        separation_sample_rate=stored_sample_rate,
+        output_sample_rate=output_sample_rate,
+        scoring_sample_rate=sample_rate,
+        plan=plan,
+        stem_primary_remask=config.stem_primary_remask,
+        stem_drum_remask=config.stem_drum_remask,
+        stem_bleed_reduction=config.stem_bleed_reduction,
+        stem_ensemble=ensemble_observed,
+        stem_silence_skip=config.stem_silence_skip,
+        stem_silence_threshold_db=config.stem_silence_threshold_db,
+        stem_silence_min_duration_s=config.stem_silence_min_duration_s,
+        stem_silence_crossfade_ms=config.stem_silence_crossfade_ms,
+        stem_silence_pad_ms=config.stem_silence_pad_ms,
     )
 
 
