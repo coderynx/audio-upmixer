@@ -301,7 +301,7 @@ must not be used for conclusions. The corrected artifacts use the selected
 - [ ] Complete listening review with playback conditions and a defect ledger for leakage, fullness/detail, musical noise, attacks/decay, tonality/phase, stereo image, and continuity; review every numerical flag above.
 - [ ] Define and persist the separate unassigned source-zone remainder, including cache/store, preview/export, subset/solo/mute, alignment, rate, and level semantics. A source anchor is not residual preservation.
 - [x] Run the fixed-sample-context versus matched-duration diagnostic; retain fixed-sample context and reject the 96 kHz matched-duration arm.
-- [ ] Complete remaining real descendants and alternate stages: SCNet, Karaoke, and the private `_deux_inst`/other leaves where references permit. The branch proxies and supplementary IDMT, MedleyDB, CrowdioSet, Freischütz, and Celtic sets do not substitute for aligned heldout music.
+- [ ] Expand and confirm eligible complete-tree real evidence where references permit. The corrected one-item branch smokes exercised the SCNet ensemble, Karaoke lead/backing path, and private `_deux_inst` on tuning/proxy material; broader coverage remains open, and the branch proxies plus supplementary IDMT, MedleyDB, CrowdioSet, Freischütz, and Celtic sets do not substitute for aligned heldout music.
 - [ ] Measure CUDA when available and freeze a numerical device memory ceiling; the CPU smoke is recorded above.
 - [ ] Verify the normal source-anchor product path separately with anchoring off for the experiment.
 - [ ] Q21 native-rate production integration, bounded conversion, cache/resume identity, and any default promotion remain unstarted.
