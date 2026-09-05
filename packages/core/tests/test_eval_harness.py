@@ -19,7 +19,7 @@ import soundfile as sf
 from upmixer.eval.corpus import synthetic_corpus
 from upmixer.eval.harness import evaluate_corpus, separate_for_eval
 from upmixer.eval.report import EvalReport, StemScore, format_report
-from upmixer.separation.separator import DEFAULT_MODEL
+from upmixer.separation.separator import DEFAULT_MODEL, SeparationSettings
 
 
 class _FakeSeparator:
@@ -29,6 +29,21 @@ class _FakeSeparator:
         self.kwargs = kwargs
         self.backend = "cpu"
         self.closed = False
+        self.run_settings = SeparationSettings(
+            model=kwargs["model"],
+            sample_rate=kwargs["sample_rate"],
+            batch_size=3,
+            segment_size=128,
+            chunk_duration_s=45.0,
+            overlap=4,
+            tta=kwargs["tta"],
+            pitch_shift=kwargs["pitch_shift"],
+            backend="cpu",
+            model_arch="bs_roformer",
+            model_config_name="observed-config",
+            model_native_sample_rate=44_100,
+            device="cpu",
+        )
         self.__class__.instances.append(self)
 
     def separate(self, _mixture_path):
@@ -57,14 +72,24 @@ def test_eval_harness_reports_default_model_quality(tmp_path):
     print(format_report(report))
 
 
-def test_separate_for_eval_records_observed_model_metadata_without_loading_weights(
+def test_separate_for_eval_records_completed_run_settings_without_registry_reload(
     tmp_path,
 ):
     mixture_path = tmp_path / "mixture.wav"
     sf.write(mixture_path, np.zeros((8, 2), dtype=np.float32), 8000, subtype="FLOAT")
 
     _FakeSeparator.instances.clear()
-    with patch("upmixer.eval.harness.StemSeparator", _FakeSeparator):
+    with (
+        patch("upmixer.eval.harness.StemSeparator", _FakeSeparator),
+        patch(
+            "upmixer.separation.inference.registry.get_model_spec",
+            side_effect=AssertionError("registry metadata must come from snapshot"),
+        ),
+        patch(
+            "upmixer.separation.inference.config.load_model_config",
+            side_effect=AssertionError("config metadata must come from snapshot"),
+        ),
+    ):
         stems, settings = separate_for_eval(
             str(mixture_path),
             sample_rate=8000,
@@ -90,16 +115,18 @@ def test_separate_for_eval_records_observed_model_metadata_without_loading_weigh
         "pitch_shift": 0.75,
     }
     assert separator.closed
-    assert settings.chunk_duration_s is None
+    assert settings.chunk_duration_s == 45.0
     assert settings.tta is True
     assert settings.pitch_shift == 0.75
     assert settings.backend == "cpu"
     assert settings.model_arch == "bs_roformer"
-    assert settings.model_config_name == "BS-Roformer-SW"
-    assert settings.model_native_sample_rate == 44100
-    assert settings.segment_size is None
-    assert settings.overlap is None
-    assert settings.batch_size is None
+    assert settings.model_config_name == "observed-config"
+    assert settings.model_native_sample_rate == 44_100
+    assert settings.segment_size == 128
+    assert settings.overlap == 4
+    assert settings.batch_size == 3
+    assert settings.device == "cpu"
+    assert settings.stage_settings == (separator.run_settings,)
 
 
 def test_format_report_accepts_legacy_settings_shape():
@@ -130,3 +157,18 @@ def test_format_report_accepts_legacy_settings_shape():
     assert "model=legacy" in text
     assert "chunk_duration_s=None" in text
     assert "model_native_sample_rate=None" in text
+    assert "device=None" in text
+
+
+def test_separate_for_eval_requires_completed_run_settings(tmp_path):
+    mixture_path = tmp_path / "mixture.wav"
+    sf.write(mixture_path, np.zeros((8, 2), dtype=np.float32), 8000, subtype="FLOAT")
+
+    class NoSnapshotSeparator(_FakeSeparator):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.run_settings = None
+
+    with patch("upmixer.eval.harness.StemSeparator", NoSnapshotSeparator):
+        with pytest.raises(RuntimeError, match="run-settings snapshot"):
+            separate_for_eval(str(mixture_path), sample_rate=8000)

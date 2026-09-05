@@ -439,6 +439,7 @@ def format_report(report: EvalReport) -> str:
             f"model_config_name={getattr(settings, 'model_config_name', None)} "
             "model_native_sample_rate="
             f"{getattr(settings, 'model_native_sample_rate', None)} "
+            f"device={getattr(settings, 'device', None)} "
             f"ensemble_algorithm={getattr(settings, 'ensemble_algorithm', None)} "
             f"ensemble_models={getattr(settings, 'ensemble_models', None)}"
         ),

@@ -68,6 +68,7 @@ class RunSettings:
     model_config_name: str | None = None
     model_native_sample_rate: int | None = None
     stage_settings: tuple[SeparationSettings, ...] = ()
+    device: str | None = None
 
 
 def separate_for_eval(
@@ -90,8 +91,8 @@ def separate_for_eval(
         model:        Model filename (registry name), defaults to the
                       package's default model.
         batch_size, segment_size, chunk_duration_s, overlap: Forwarded to
-            ``StemSeparator``; ``None`` selects its backend-aware defaults and
-            remains recorded as an unresolved request.
+            ``StemSeparator``; the returned settings use the effective values
+            observed after inference completes.
         stem_ensemble: Run the production fixed BS-Roformer-SW + SCNet
             primary-stem ensemble.
         tta: Forward test-time augmentation to the selected separator.
@@ -99,7 +100,7 @@ def separate_for_eval(
 
     Returns:
         (stems, settings) — canonical stem name -> (n_samples, 2) float32
-        array, and the requested controls plus observed model metadata.
+        array, and the effective settings observed during inference.
     """
     model_arch = None
     model_config_name = None
@@ -142,17 +143,30 @@ def separate_for_eval(
         )
         try:
             stems = separator.separate(mixture_path)
-            backend = separator.backend
+            snapshot = getattr(separator, "run_settings", None)
         finally:
             separator.close()
-        from upmixer.separation.inference.config import load_model_config
-        from upmixer.separation.inference.registry import get_model_spec
-
-        spec = get_model_spec(model)
-        config = load_model_config(spec.config_name)
-        model_arch = spec.arch
-        model_config_name = spec.config_name
-        model_native_sample_rate = config.sample_rate
+        if snapshot is None:
+            raise RuntimeError(
+                "StemSeparator completed without a run-settings snapshot"
+            )
+        settings = RunSettings(
+            model=snapshot.model,
+            sample_rate=snapshot.sample_rate,
+            segment_size=snapshot.segment_size,
+            overlap=snapshot.overlap,
+            batch_size=snapshot.batch_size,
+            chunk_duration_s=snapshot.chunk_duration_s,
+            tta=snapshot.tta,
+            pitch_shift=snapshot.pitch_shift,
+            backend=snapshot.backend,
+            model_arch=snapshot.model_arch,
+            model_config_name=snapshot.model_config_name,
+            model_native_sample_rate=snapshot.model_native_sample_rate,
+            stage_settings=(snapshot,),
+            device=snapshot.device,
+        )
+        return stems, settings
     settings = RunSettings(
         model=model,
         sample_rate=sample_rate,
