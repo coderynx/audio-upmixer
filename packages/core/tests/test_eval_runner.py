@@ -312,6 +312,71 @@ def test_retain_stems_indexes_completed_items_without_copying_corpus_audio(tmp_p
     }
 
 
+def test_retain_stems_indexes_mapped_components_without_target(
+    tmp_path: Path, monkeypatch
+):
+    runner = _load_runner()
+    reference = tmp_path / "reference.wav"
+    samples = np.linspace(-0.25, 0.25, 32, dtype=np.float32)
+    sf.write(reference, np.column_stack([samples, samples]), 22_050, subtype="FLOAT")
+    components = ("Bass", "Drums", "Guitar", "Other", "Piano", "Vocals")
+    corpus = ReferenceCorpus(
+        [
+            CorpusItem(
+                mixture=str(tmp_path / "mix.wav"),
+                stems={"CompleteLeafSum": str(reference)},
+                estimate_stems={"CompleteLeafSum": list(components)},
+                recording_id="recording-0",
+                item_id="item-0",
+                split="tuning",
+            )
+        ],
+        corpus_id="mapped-retention-test-v1",
+    )
+    monkeypatch.setattr(
+        runner.ReferenceCorpus,
+        "from_dir",
+        classmethod(lambda _cls, _path: corpus),
+    )
+
+    def fake_separator(_mixture_path):
+        audio, _ = sf.read(reference, dtype="float32", always_2d=True)
+        return {
+            component: audio.copy()
+            for component in components
+        }, RunSettings(model="fake", sample_rate=22_050)
+
+    monkeypatch.setattr(runner, "_real_separator", lambda _args: fake_separator)
+    output_dir = tmp_path / "mapped-report"
+    assert (
+        runner.main(
+            [
+                "--corpus",
+                "licensed-test",
+                "--variant",
+                "real-model",
+                "--sample-rate",
+                "22050",
+                "--output-dir",
+                str(output_dir),
+                "--model",
+                "fake",
+                "--retain-stems",
+            ]
+        )
+        == 0
+    )
+
+    index = json.loads((output_dir / "stems/index.json").read_text(encoding="utf-8"))
+    assert set(index["items"][0]["stems"]) == set(components)
+    assert "CompleteLeafSum" not in index["items"][0]["stems"]
+    for component in components:
+        retained = output_dir / index["items"][0]["stems"][component]
+        audio, rate = sf.read(retained, dtype="float32", always_2d=True)
+        assert rate == 22_050
+        assert audio.shape == (32, 2)
+
+
 def test_retain_stems_is_rejected_for_synthetic_reference(tmp_path, capsys):
     runner = _load_runner()
     output_dir = tmp_path / "synthetic"

@@ -509,6 +509,9 @@ def _format_settings(settings: object, *, include_ensemble: bool = False) -> str
             f" ensemble_algorithm={getattr(settings, 'ensemble_algorithm', None)}"
             f" ensemble_models={getattr(settings, 'ensemble_models', None)}"
         )
+    rate_arm = getattr(settings, "rate_arm", None)
+    if rate_arm is not None:
+        text += f" rate_arm={rate_arm}"
     return text + _format_tree_context(settings) + _format_runtime_provenance(settings)
 
 

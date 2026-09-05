@@ -88,6 +88,7 @@ class RunSettings:
     stem_silence_min_duration_s: float | None = None
     stem_silence_crossfade_ms: float | None = None
     stem_silence_pad_ms: float | None = None
+    rate_arm: str = "delivery"
 
 
 @dataclass

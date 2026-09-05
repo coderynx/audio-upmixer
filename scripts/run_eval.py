@@ -35,8 +35,14 @@ from upmixer.eval import (
     separate_tree_for_eval,
     synthetic_corpus,
 )
+from upmixer.eval.rate_experiment import (
+    separate_model_for_rate_experiment,
+    separate_tree_for_rate_experiment,
+)
+from upmixer.eval.reference_targets import estimate_components
 from upmixer.separation.stem_plan import normalize_stems
 from upmixer.io.atomic import atomic_output_path
+from upmixer.separation.separator import DEFAULT_MODEL
 
 _PROTOCOL_ID = "upmixer-separation-q00-v1"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +80,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-dir", required=True, type=Path, metavar="DIR")
     parser.add_argument("--sample-rate", type=_positive_int, default=44_100)
+    parser.add_argument(
+        "--rate-arm",
+        choices=("delivery", "native"),
+        default="delivery",
+        help="Q20 experiment arm: infer at delivery or model-native rate.",
+    )
     parser.add_argument("--model", default=None)
     parser.add_argument("--batch-size", type=_positive_int, default=None)
     parser.add_argument("--segment-size", type=_positive_int, default=None)
@@ -124,6 +136,13 @@ def _real_separator(args: argparse.Namespace) -> Callable:
             stem_tta=args.tta,
             stem_pitch_shift=args.pitch_shift,
         )
+        if args.rate_arm == "native":
+            return partial(
+                separate_tree_for_rate_experiment,
+                delivery_sample_rate=args.sample_rate,
+                config=config,
+                rate_arm=args.rate_arm,
+            )
         return partial(
             separate_tree_for_eval,
             sample_rate=args.sample_rate,
@@ -141,6 +160,19 @@ def _real_separator(args: argparse.Namespace) -> Callable:
     }
     if args.model is not None:
         options["model"] = args.model
+    if args.rate_arm == "native":
+        return partial(
+            separate_model_for_rate_experiment,
+            delivery_sample_rate=args.sample_rate,
+            model=args.model or DEFAULT_MODEL,
+            rate_arm=args.rate_arm,
+            batch_size=args.batch_size,
+            segment_size=args.segment_size,
+            chunk_duration_s=args.chunk_duration_s,
+            overlap=args.overlap,
+            tta=args.tta,
+            pitch_shift=args.pitch_shift,
+        )
     return partial(separate_for_eval, **options)
 
 
@@ -218,7 +250,12 @@ def _retaining_separator(
             raise ValueError("retained stems require a positive settings sample rate")
         if sample_rate != evaluation_sample_rate:
             return stems, settings
-        if item.stems and not set(item.stems).issubset(stems):
+        required_stems = {
+            component
+            for target in item.stems
+            for component in estimate_components(item, target)
+        }
+        if required_stems and not required_stems.issubset(stems):
             return stems, settings
         reference_info = None
         if item.stems:
@@ -304,6 +341,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "production-tree does not accept --model; the plan owns model selection"
         )
+    if args.variant == "real-model" and args.rate_arm == "native" and args.stem_ensemble:
+        parser.error(
+            "--rate-arm native with --stem-ensemble requires --variant production-tree"
+        )
     if args.stems is not None and args.variant != "production-tree":
         parser.error("--stems requires --variant production-tree")
     if args.variant == "synthetic-reference":
@@ -319,6 +360,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         ) or args.stem_ensemble or args.tta:
             parser.error("model settings require --variant real-model")
+        if args.rate_arm != "delivery":
+            parser.error("--rate-arm native requires --variant real-model")
         if args.retain_stems:
             parser.error("--retain-stems requires --variant real-model or production-tree")
     if args.stems is not None:
