@@ -106,7 +106,6 @@ class ItemRunSettings:
 def _common_stage_setting(
     stage_settings: tuple[SeparationSettings, ...],
     name: str,
-    requested: object,
 ) -> object:
     """Return one effective value when an executed stage observed it."""
     if not stage_settings:
@@ -299,34 +298,24 @@ def separate_tree_for_eval(
     return stems, RunSettings(
         model="production-tree",
         sample_rate=stored_sample_rate,
-        batch_size=_common_stage_setting(
-            stage_settings, "batch_size", config.stem_batch_size
-        ),
-        segment_size=_common_stage_setting(
-            stage_settings, "segment_size", config.stem_segment_size
-        ),
-        chunk_duration_s=_common_stage_setting(
-            stage_settings, "chunk_duration_s", config.stem_chunk_duration_s
-        ),
-        overlap=_common_stage_setting(stage_settings, "overlap", config.stem_overlap),
+        batch_size=_common_stage_setting(stage_settings, "batch_size"),
+        segment_size=_common_stage_setting(stage_settings, "segment_size"),
+        chunk_duration_s=_common_stage_setting(stage_settings, "chunk_duration_s"),
+        overlap=_common_stage_setting(stage_settings, "overlap"),
         ensemble_algorithm=ENSEMBLE_ALGORITHM if ensemble_observed else None,
         ensemble_models=(MODEL_PRIMARY, MODEL_ENSEMBLE)
         if ensemble_observed
         else None,
-        tta=_common_stage_setting(stage_settings, "tta", config.stem_tta),
-        pitch_shift=_common_stage_setting(
-            stage_settings, "pitch_shift", config.stem_pitch_shift
-        ),
-        backend=_common_stage_setting(stage_settings, "backend", None),
-        model_arch=_common_stage_setting(stage_settings, "model_arch", None),
-        model_config_name=_common_stage_setting(
-            stage_settings, "model_config_name", None
-        ),
+        tta=_common_stage_setting(stage_settings, "tta"),
+        pitch_shift=_common_stage_setting(stage_settings, "pitch_shift"),
+        backend=_common_stage_setting(stage_settings, "backend"),
+        model_arch=_common_stage_setting(stage_settings, "model_arch"),
+        model_config_name=_common_stage_setting(stage_settings, "model_config_name"),
         model_native_sample_rate=_common_stage_setting(
-            stage_settings, "model_native_sample_rate", None
+            stage_settings, "model_native_sample_rate"
         ),
         stage_settings=stage_settings,
-        device=_common_stage_setting(stage_settings, "device", None),
+        device=_common_stage_setting(stage_settings, "device"),
         input_sample_rate=getattr(result, "input_sample_rate", None),
         separation_sample_rate=stored_sample_rate,
         output_sample_rate=output_sample_rate,
