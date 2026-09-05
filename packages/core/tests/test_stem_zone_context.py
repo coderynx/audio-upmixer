@@ -22,12 +22,16 @@ def _write_source(path, audio: np.ndarray, sample_rate: int = SR) -> None:
 
 def _fake_execute_plan(seen: list, *, value: float = 0.0):
     def execute(_get_separator, plan, sep_path, sep_sr, stage_callback=None,
-                cfg=None, resume_key=None):
+                cfg=None, resume_key=None, **kwargs):
+        from upmixer.separation.stem_pipeline_exec import cacheable_plan_stems
+
         audio, rate = sf.read(sep_path, dtype="float32", always_2d=True)
         seen.append((str(sep_path), audio.copy(), rate, sep_sr))
         return {
             name: np.full((len(audio), 2), value, dtype=np.float32)
-            for name in plan.requested_stems
+            for name in cacheable_plan_stems(
+                plan, retain_private=kwargs.get("retain_private", False)
+            )
         }
 
     return execute
@@ -72,6 +76,32 @@ def test_multichannel_pipeline_preserves_zone_order_and_passthrough(tmp_path):
     )
     np.testing.assert_array_equal(captured["C"], source_audio[:, 2])
     np.testing.assert_array_equal(captured["LFE"], source_audio[:, 3])
+
+
+def test_opt_in_private_terminals_preserve_zone_suffixes(tmp_path):
+    n = SR * 2
+    source_audio = np.zeros((n, 6), dtype=np.float32)
+    source_audio[:, :2] = 0.1
+    source_audio[:, 4:] = 0.2
+    source = tmp_path / "input-private.wav"
+    _write_source(source, source_audio)
+    seen: list = []
+    pipeline = _pipeline(output_format="5.1", stem_silence_skip=False)
+    try:
+        with patch(_EXEC_PLAN, side_effect=_fake_execute_plan(seen)):
+            result = pipeline._separate(
+                str(source), None, lambda *_: None, retain_private=True
+            )
+    finally:
+        pipeline.close()
+
+    assert set(result.all_stems) == {
+        "Vocals@front",
+        "Vocals@surround",
+        "_deux_inst@front",
+        "_deux_inst@surround",
+    }
+    assert result.stem_summary == ["Vocals"]
 
 
 def test_mono_source_stays_mono_for_separator_and_duplicates_source_zone(tmp_path):

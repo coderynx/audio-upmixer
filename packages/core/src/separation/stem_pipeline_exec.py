@@ -22,6 +22,7 @@ from upmixer.separation.stem_plan import (
     MODEL_PRIMARY,
     SeparationPlan,
     SeparationTask,
+    terminal_plan_stems,
 )
 from upmixer.separation.stem_workspace import StemWorkspace
 
@@ -45,14 +46,19 @@ def _discard(path: str) -> None:
         pass
 
 
-def cacheable_plan_stems(plan: SeparationPlan) -> frozenset[str]:
-    """All public outputs produced by a plan at no extra inference cost."""
-    return frozenset(
+def cacheable_plan_stems(
+    plan: SeparationPlan, *, retain_private: bool = False
+) -> frozenset[str]:
+    """Return public outputs and optional unconsumed private terminals."""
+    stems = frozenset(
         stem
         for task in plan.tasks
         for stem in task.output_stems
         if not stem.startswith("_")
     )
+    if retain_private:
+        stems |= terminal_plan_stems(plan, include_private=True) - terminal_plan_stems(plan)
+    return stems
 
 
 def _remasks(cfg: UpmixConfig | None, model: str) -> bool:
@@ -160,6 +166,8 @@ def execute_plan(
     stage_callback: StageCallback | None = None,
     cfg: UpmixConfig | None = None,
     resume_key: str | None = None,
+    *,
+    retain_private: bool = False,
 ) -> dict[str, np.ndarray]:
     """Execute all tasks in the plan against one audio zone (sep_path).
 
@@ -180,11 +188,16 @@ def execute_plan(
             the same key restarts at the stage that failed. ``None``, or a
             config with no stem cache directory, disables it.
 
-    Returns a dict of canonical_name → ndarray for all requested stems.
+    Returns a dict of canonical_name → ndarray for all requested stems and,
+    when enabled, unconsumed private terminal complements.
     """
     n_tasks = len(plan.tasks)
     workspace = StemWorkspace.open(
-        plan, cfg.stem_cache_dir if cfg is not None else None, resume_key, sep_sr
+        plan,
+        cfg.stem_cache_dir if cfg is not None else None,
+        resume_key,
+        sep_sr,
+        retain_private=retain_private,
     )
     if workspace.completed:
         _log.info(
@@ -512,6 +525,8 @@ def execute_plan_with_silence_skip(
     original_path: str | None = None,
     stage_callback: StageCallback | None = None,
     resume_key: str | None = None,
+    *,
+    retain_private: bool = False,
 ) -> dict[str, np.ndarray]:
     """Run stem separation on active spans only, skipping silent regions.
 
@@ -519,8 +534,8 @@ def execute_plan_with_silence_skip(
     active portions, and stitches the per-stem outputs back into
     full-length arrays with a linear crossfade at each boundary.
 
-    Returns the same dict shape as :func:`execute_plan`:
-    ``{stem_name: (n_sep_samples, 2) float32}``.
+    Returns the same dict shape as :func:`execute_plan`, including private
+    terminal complements when ``retain_private`` is enabled.
 
     ``resume_key`` is per span, so a crash on a multi-span zone resumes the
     span it died in; spans that already finished are re-separated, since
@@ -551,12 +566,13 @@ def execute_plan_with_silence_skip(
         _log.info("  Silence-skip: zone is entirely silent — skipping separator")
         return {
             name: np.zeros((n_sep, 2), dtype=np.float32)
-            for name in cacheable_plan_stems(plan)
+            for name in cacheable_plan_stems(plan, retain_private=retain_private)
         }
 
     if len(spans) == 1 and spans[0] == (0, n_sr):
         if original_path is not None:
             _log.debug("  Silence-skip: full-active fast path uses source file")
+            options = {"retain_private": True} if retain_private else {}
             return execute_plan(
                 get_separator,
                 plan,
@@ -565,12 +581,21 @@ def execute_plan_with_silence_skip(
                 stage_callback,
                 cfg,
                 resume_key,
+                **options,
             )
         tmp = temporary_wav_path("upmixer_full_")
         try:
             sf.write(tmp, zone_audio, sr, subtype="FLOAT")
+            options = {"retain_private": True} if retain_private else {}
             return execute_plan(
-                get_separator, plan, tmp, sep_sr, stage_callback, cfg, resume_key
+                get_separator,
+                plan,
+                tmp,
+                sep_sr,
+                stage_callback,
+                cfg,
+                resume_key,
+                **options,
             )
         finally:
             if os.path.exists(tmp):
@@ -578,7 +603,7 @@ def execute_plan_with_silence_skip(
 
     _log.info("  Silence-skip: %d active span(s)", len(spans))
     fade_samples = max(0, int(cfg.stem_silence_crossfade_ms / 1000.0 * sep_sr))
-    stem_names = cacheable_plan_stems(plan)
+    stem_names = cacheable_plan_stems(plan, retain_private=retain_private)
     result = {
         stem_name: np.zeros((n_sep, 2), dtype=np.float32) for stem_name in stem_names
     }
@@ -588,6 +613,7 @@ def execute_plan_with_silence_skip(
         tmp = temporary_wav_path("upmixer_span_")
         try:
             sf.write(tmp, span_audio, sr, subtype="FLOAT")
+            options = {"retain_private": True} if retain_private else {}
             outputs = execute_plan(
                 get_separator,
                 plan,
@@ -596,6 +622,7 @@ def execute_plan_with_silence_skip(
                 stage_callback,
                 cfg,
                 None if resume_key is None else f"{resume_key}|span{span_idx}",
+                **options,
             )
             sep_start = int(round(s_start * sep_sr / sr)) if sep_sr != sr else s_start
             out_len = max((len(v) for v in outputs.values()), default=0)

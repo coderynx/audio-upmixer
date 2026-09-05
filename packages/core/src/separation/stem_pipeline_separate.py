@@ -32,6 +32,7 @@ from upmixer.separation.stem_plan import (
     SeparationPlan,
     normalize_stems,
     resolve_separation_plan,
+    terminal_plan_stems,
 )
 from upmixer.separation.stem_zones import _as_stereo_pair, _extract_zones
 from upmixer.utils import preview_slice, itu_downmix_stereo
@@ -198,6 +199,8 @@ def _run_zone_separation(
     stereo_mode: bool,
     progress: Callable[[str, float], None],
     resume_key: str | None = None,
+    *,
+    retain_private: bool = False,
 ) -> dict[str, np.ndarray]:
     all_stems: dict[str, np.ndarray] = {}
     tmp_files: list[str] = []
@@ -233,6 +236,7 @@ def _run_zone_separation(
             zone_resume_key = (
                 None if resume_key is None else f"{resume_key}|{zone_name}"
             )
+            options = {"retain_private": True} if retain_private else {}
             if cfg.stem_silence_skip:
                 if isinstance(pair_src, str):
                     zone_audio = audio_full
@@ -250,6 +254,7 @@ def _run_zone_separation(
                     original_path=original_path,
                     stage_callback=_stage_callback,
                     resume_key=zone_resume_key,
+                    **options,
                 )
             else:
                 if isinstance(pair_src, str):
@@ -267,6 +272,7 @@ def _run_zone_separation(
                     _stage_callback,
                     cfg,
                     zone_resume_key,
+                    **options,
                 )
 
             for stem_name, stem_audio in zone_stems.items():
@@ -287,6 +293,8 @@ def separate(
     input_path: str,
     input_format_override: str | None,
     progress: Callable[[str, float], None],
+    *,
+    retain_private: bool = False,
 ) -> SeparationResult:
     """Read, zone-split, separate, and cache stems — no routing or mastering."""
     reader = AudioReader(input_path)
@@ -400,6 +408,7 @@ def separate(
             stereo_mode,
             progress,
             _resume_key(cfg, input_path, cache_identity, sep_sr),
+            retain_private=retain_private,
         )
 
         if cfg.stem_cache_dir and not cfg.stem_input_dir and all_stems:
@@ -414,10 +423,16 @@ def separate(
 
     # Models often emit more stems than requested. Cache those free outputs,
     # then keep only requested stems out of routing and mixing.
+    private_terminal_stems = (
+        terminal_plan_stems(plan, include_private=True) - terminal_plan_stems(plan)
+        if retain_private
+        else frozenset()
+    )
     all_stems = {
         key: audio
         for key, audio in all_stems.items()
         if key.split("@", 1)[0] in plan.requested_stems
+        or key.split("@", 1)[0] in private_terminal_stems
     }
 
     if not all_stems:
@@ -426,7 +441,13 @@ def separate(
         )
 
     n_samples = max(len(s) for s in all_stems.values())
-    stem_summary = sorted({k.split("@")[0] for k in all_stems})
+    stem_summary = sorted(
+        {
+            k.split("@", 1)[0]
+            for k in all_stems
+            if not k.split("@", 1)[0].startswith("_")
+        }
+    )
     _log.info(
         "separation_completed stems=%s duration_s=%.3f sample_rate=%d",
         stem_summary,

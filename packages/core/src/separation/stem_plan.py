@@ -133,6 +133,22 @@ class SeparationPlan:
         return frozenset()
 
 
+def terminal_plan_stems(
+    plan: SeparationPlan, *, include_private: bool = False
+) -> frozenset[str]:
+    """Return outputs produced by the plan that no later task consumes."""
+    later_inputs = frozenset(
+        task.input_source for task in plan.tasks if task.input_source != "original"
+    )
+    return frozenset(
+        stem
+        for task in plan.tasks
+        for stem in task.output_stems
+        if stem not in later_inputs
+        and (include_private or not stem.startswith("_"))
+    )
+
+
 
 
 def normalize_stems(stems: list[str]) -> list[str]:

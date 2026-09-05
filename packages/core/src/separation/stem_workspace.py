@@ -9,6 +9,7 @@ import numpy as np
 import soundfile as sf
 
 from upmixer.separation.remask import share_parent_residual
+from upmixer.separation.stem_plan import terminal_plan_stems
 from upmixer.separation.stem_resume import ResumeStore
 
 
@@ -78,16 +79,36 @@ class StemWorkspace:
     """Own intermediate stems, their checkpoints, and their cleanup."""
 
     later_inputs: frozenset[str]
+    private_terminal_stems: frozenset[str]
+    retain_private: bool
     resume: ResumeStore | None
     loaded: dict[str, np.ndarray] = field(default_factory=dict)
     on_disk: dict[str, str] = field(default_factory=dict)
     completed: int = 0
 
     @classmethod
-    def open(cls, plan, cache_dir: str | None, resume_key: str | None, sample_rate: int) -> "StemWorkspace":
+    def open(
+        cls,
+        plan,
+        cache_dir: str | None,
+        resume_key: str | None,
+        sample_rate: int,
+        *,
+        retain_private: bool = False,
+    ) -> "StemWorkspace":
+        later_inputs = frozenset(
+            task.input_source
+            for task in plan.tasks
+            if task.input_source != "original"
+        )
         workspace = cls(
-            frozenset(task.input_source for task in plan.tasks if task.input_source != "original"),
-            ResumeStore.open(cache_dir, resume_key, sample_rate),
+            later_inputs=later_inputs,
+            private_terminal_stems=(
+                terminal_plan_stems(plan, include_private=True)
+                - terminal_plan_stems(plan)
+            ),
+            retain_private=retain_private,
+            resume=ResumeStore.open(cache_dir, resume_key, sample_rate),
         )
         if workspace.resume is not None and (restored := workspace.resume.restore()) is not None:
             workspace.completed, workspace.loaded, workspace.on_disk = restored
@@ -105,7 +126,15 @@ class StemWorkspace:
         return self.on_disk[source]
 
     def keep(self, outputs: frozenset[str]) -> frozenset[str]:
-        return outputs & self.later_inputs
+        keep = self.later_inputs
+        if self.retain_private:
+            keep |= self.private_terminal_stems
+        return outputs & keep
+
+    def _is_result_name(self, name: str) -> bool:
+        return not name.startswith("_") or (
+            self.retain_private and name in self.private_terminal_stems
+        )
 
     def stabilize(self, paths: dict[str, str], temporary_path) -> None:
         for name, path in list(paths.items()):
@@ -124,7 +153,13 @@ class StemWorkspace:
         _cleanup_deux_stage(loaded, on_disk, parent, sample_rate)
 
     def commit(self, loaded: dict[str, np.ndarray], on_disk: dict[str, str]) -> None:
-        self.loaded.update({name: audio for name, audio in loaded.items() if not name.startswith("_")})
+        self.loaded.update(
+            {
+                name: audio
+                for name, audio in loaded.items()
+                if self._is_result_name(name)
+            }
+        )
         for name in loaded.keys() | on_disk.keys():
             superseded = self.on_disk.pop(name, None)
             if superseded is not None and superseded != on_disk.get(name):
@@ -143,11 +178,15 @@ class StemWorkspace:
 
     def finish(self) -> dict[str, np.ndarray]:
         for name, path in self.on_disk.items():
-            if not name.startswith("_") and name not in self.loaded:
+            if self._is_result_name(name) and name not in self.loaded:
                 audio, _ = sf.read(path, dtype="float32", always_2d=True)
                 self.loaded[name] = audio if audio.shape[1] > 1 else np.concatenate([audio, audio], axis=1)
         for path in self.on_disk.values():
             _discard(path)
         if self.resume is not None:
             self.resume.clear()
-        return self.loaded
+        return {
+            name: audio
+            for name, audio in self.loaded.items()
+            if self._is_result_name(name)
+        }

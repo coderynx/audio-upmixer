@@ -261,12 +261,21 @@ class TestExecutePlanWithSilenceSkip:
         cfg.stem_silence_pad_ms = 0.0
         return cfg
 
-    def _fake_execute_plan(self, plan, sep_path, sep_sr):
+    def _fake_execute_plan(self, plan, sep_path, sep_sr, *, retain_private=False):
         """Return constant float32 arrays shaped (n, 2) based on WAV duration."""
         import soundfile as sf_mod
+        from upmixer.separation.stem_pipeline_exec import cacheable_plan_stems
+
         audio, sr = sf_mod.read(sep_path, dtype="float32", always_2d=True)
         n = len(audio)
-        return {name: np.full((n, 2), 0.25, dtype=np.float32) for name in plan.requested_stems}
+        names = (
+            cacheable_plan_stems(plan, retain_private=True)
+            if retain_private
+            else plan.requested_stems
+        )
+        return {
+            name: np.full((n, 2), 0.25, dtype=np.float32) for name in names
+        }
 
     def test_all_silent_returns_zeros_skips_plan(self):
         cfg = self._make_cfg()
@@ -288,6 +297,25 @@ class TestExecutePlanWithSilenceSkip:
             assert np.all(arr == 0.0)
             assert arr.dtype == np.float32
 
+    def test_opt_in_all_silent_includes_private_terminal(self):
+        from upmixer.separation.stem_pipeline_exec import cacheable_plan_stems
+        from upmixer.separation.stem_plan import resolve_separation_plan
+
+        cfg = self._make_cfg()
+        plan = resolve_separation_plan(["Vocals"])
+        result = execute_plan_with_silence_skip(
+            None,
+            plan,
+            _silence(SR * 5),
+            SR,
+            SR,
+            cfg,
+            retain_private=True,
+        )
+
+        assert set(result) == cacheable_plan_stems(plan, retain_private=True)
+        assert np.all(result["_deux_inst"] == 0.0)
+
     def test_all_active_fast_path_calls_plan_once(self):
         cfg = self._make_cfg()
         plan = self._make_plan()
@@ -306,6 +334,32 @@ class TestExecutePlanWithSilenceSkip:
         assert call_count["n"] == 1
         for arr in result.values():
             assert arr.shape[0] == n
+
+    def test_opt_in_all_active_preserves_private_terminal(self):
+        from upmixer.separation.stem_pipeline_exec import cacheable_plan_stems
+        from upmixer.separation.stem_plan import resolve_separation_plan
+
+        cfg = self._make_cfg()
+        plan = resolve_separation_plan(["Vocals"])
+
+        def mock_execute(get_sep, p, path, sr_val, stage_callback=None, cfg=None,
+                         resume_key=None, **kwargs):
+            assert kwargs.get("retain_private") is True
+            return self._fake_execute_plan(p, path, sr_val, **kwargs)
+
+        with patch(_EXEC_PLAN, side_effect=mock_execute):
+            result = execute_plan_with_silence_skip(
+                None,
+                plan,
+                _sine(SR * 5),
+                SR,
+                SR,
+                cfg,
+                retain_private=True,
+            )
+
+        assert set(result) == cacheable_plan_stems(plan, retain_private=True)
+        assert "_deux_inst" in result
 
     def test_all_active_uses_original_source_path(self, tmp_path):
         cfg = self._make_cfg()
@@ -382,7 +436,8 @@ class TestExecutePlanWithSilenceSkip:
         cfg_no_skip = cfg.__class__()
         cfg_no_skip.stem_silence_skip = False
 
-        import tempfile, soundfile as sf_mod
+        import tempfile
+        import soundfile as sf_mod
         tmp = tempfile.mktemp(suffix=".wav")
         sf_mod.write(tmp, zone_audio, SR, subtype="PCM_24")
         result_full = mock_execute(None, plan, tmp, SR)
@@ -394,21 +449,33 @@ class TestExecutePlanWithSilenceSkip:
 
     def test_multiple_active_spans_correct_length(self):
         cfg = self._make_cfg()
-        plan = self._make_plan()
+        from upmixer.separation.stem_plan import resolve_separation_plan
+
+        plan = resolve_separation_plan(["Vocals"])
         n_act = int(3.0 * SR)
         n_sil = int(4.0 * SR)
         n_total = n_act + n_sil + n_act
         zone_audio = np.vstack([_sine(n_act), _silence(n_sil), _sine(n_act)])
 
         def mock_execute(get_sep, p, path, sr_val, stage_callback=None, cfg=None,
-                         resume_key=None):
-            return self._fake_execute_plan(p, path, sr_val)
+                         resume_key=None, **kwargs):
+            assert kwargs.get("retain_private") is True
+            return self._fake_execute_plan(p, path, sr_val, **kwargs)
 
         with patch(_EXEC_PLAN, side_effect=mock_execute):
-            result = execute_plan_with_silence_skip(None, plan, zone_audio, SR, SR, cfg)
+            result = execute_plan_with_silence_skip(
+                None,
+                plan,
+                zone_audio,
+                SR,
+                SR,
+                cfg,
+                retain_private=True,
+            )
 
         for arr in result.values():
             assert arr.shape[0] == n_total
+        assert "_deux_inst" in result
 
     def test_stems_all_present_in_output(self):
         cfg = self._make_cfg()

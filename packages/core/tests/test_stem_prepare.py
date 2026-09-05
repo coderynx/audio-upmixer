@@ -29,10 +29,17 @@ def _sine(n: int, freq: float = 440.0, amp: float = 0.3) -> np.ndarray:
 
 
 def _fake_execute_plan(get_separator, plan, sep_path, sep_sr, stage_callback=None,
-                       cfg=None, resume_key=None):
+                       cfg=None, resume_key=None, **kwargs):
+    from upmixer.separation.stem_pipeline_exec import cacheable_plan_stems
+
     audio, _ = sf.read(sep_path, dtype="float32", always_2d=True)
     n = len(audio)
-    return {name: np.full((n, 2), 0.2, dtype=np.float32) for name in plan.requested_stems}
+    names = (
+        cacheable_plan_stems(plan, retain_private=True)
+        if kwargs.get("retain_private")
+        else plan.requested_stems
+    )
+    return {name: np.full((n, 2), 0.2, dtype=np.float32) for name in names}
 
 
 def test_prepare_stems_skips_routing_and_mastering(tmp_path):
@@ -71,6 +78,23 @@ def test_prepare_stems_writes_cache(tmp_path):
 
     assert cache_dir.exists()
     assert any(os.scandir(cache_dir))
+
+
+def test_prepare_opt_in_writes_private_terminals_without_public_summary_change(tmp_path):
+    output_dir = tmp_path / "prepared"
+    cfg = UpmixConfig(stems=["Vocals"], stem_output_dir=str(output_dir))
+    pipeline = StemUpmixPipeline(cfg)
+    source = str(tmp_path / "in.wav")
+    sf.write(source, _sine(SR), SR, subtype="FLOAT")
+
+    with patch(_EXEC_PLAN, side_effect=_fake_execute_plan):
+        result = pipeline.prepare_stems(source, retain_private=True)
+    pipeline.close()
+
+    loaded, stored_sr = PlainStemStore(str(output_dir)).load()
+    assert stored_sr == SR
+    assert set(loaded) == {"Vocals", "_deux_inst"}
+    assert result.stems == ["Vocals"]
 
 
 def test_prepare_prefers_supplied_stems_over_cache_or_inference(tmp_path):

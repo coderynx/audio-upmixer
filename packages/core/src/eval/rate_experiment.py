@@ -28,6 +28,7 @@ from upmixer.separation.stem_plan import (
     DEFAULT_STEMS,
     normalize_stems,
     resolve_separation_plan,
+    terminal_plan_stems,
 )
 
 RateArm = Literal["delivery", "native"]
@@ -102,24 +103,23 @@ def _terminal_public_stems(
     stems: dict[str, np.ndarray], config: UpmixConfig
 ) -> dict[str, np.ndarray]:
     """Keep public outputs that no later plan task consumes."""
+    return _terminal_stems(stems, config)
+
+
+def _terminal_stems(
+    stems: dict[str, np.ndarray],
+    config: UpmixConfig,
+    *,
+    include_private: bool = False,
+) -> dict[str, np.ndarray]:
+    """Keep plan outputs that no later task consumes."""
     canonical = normalize_stems(config.stems) if config.stems else list(DEFAULT_STEMS)
     plan = resolve_separation_plan(canonical, config.stem_ensemble)
-    produced = {
-        stem
-        for task in plan.tasks
-        for stem in task.output_stems
-        if not stem.startswith("_")
-    }
-    later_inputs = {
-        task.input_source
-        for task in plan.tasks
-        if task.input_source != "original"
-    }
+    terminal = terminal_plan_stems(plan, include_private=include_private)
     return {
         key: audio
         for key, audio in stems.items()
-        if (base := key.split("@", 1)[0]) in produced
-        and base not in later_inputs
+        if key.split("@", 1)[0] in terminal
     }
 
 
@@ -303,8 +303,9 @@ def separate_tree_for_rate_experiment(
             delivery_rate,
             config,
             include_all_public=True,
+            include_private=True,
         )
-        raw_stems = _terminal_public_stems(raw_stems, config)
+        raw_stems = _terminal_stems(raw_stems, config, include_private=True)
         raw_output_frames = _common_frame_count(raw_stems)
         stems = _normalise_stems(
             raw_stems, delivery_rate, delivery_rate, delivery_frames
@@ -334,8 +335,9 @@ def separate_tree_for_rate_experiment(
             native_rate,
             native_config,
             include_all_public=True,
+            include_private=True,
         )
-    native_stems = _terminal_public_stems(native_stems, native_config)
+    native_stems = _terminal_stems(native_stems, native_config, include_private=True)
     raw_output_frames = _common_frame_count(native_stems)
     stems = _normalise_stems(
         native_stems, native_rate, delivery_rate, delivery_frames

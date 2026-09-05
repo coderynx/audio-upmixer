@@ -56,6 +56,7 @@ def _fake_pipeline(
             self.config = config
             self.last_separation_settings = stage_settings
             self.prepare_calls: list[str] = []
+            self.retain_private_calls: list[bool] = []
             self.__class__.instances.append(self)
 
         def __enter__(self):
@@ -64,8 +65,9 @@ def _fake_pipeline(
         def __exit__(self, *_args):
             return False
 
-        def prepare_stems(self, input_path: str):
+        def prepare_stems(self, input_path: str, *, retain_private: bool = False):
             self.prepare_calls.append(input_path)
+            self.retain_private_calls.append(retain_private)
             if write_store:
                 PlainStemStore(self.config.stem_output_dir).write(stems, store_rate)
             return SimpleNamespace(
@@ -147,6 +149,24 @@ def test_tree_opt_in_exposes_all_public_store_outputs(tmp_path):
 
     assert set(requested) == {"Bass@front", "Bass@surround"}
     assert set(public) == {"Vocals@front", "Bass@front", "Bass@surround"}
+
+
+def test_tree_opt_in_exposes_only_private_terminal_outputs(tmp_path):
+    fake = _fake_pipeline(
+        _stems("Vocals@front", "_deux_inst@front", "_crowd_other@front"),
+        ["Vocals"],
+    )
+
+    with patch("upmixer.separation.stem_pipeline.StemUpmixPipeline", fake):
+        stems, _ = separate_tree_for_eval(
+            "mix.wav",
+            44_100,
+            UpmixConfig(stems=["Vocals"]),
+            include_private=True,
+        )
+
+    assert set(stems) == {"Vocals@front", "_deux_inst@front"}
+    assert fake.instances[-1].retain_private_calls == [True]
 
 
 def test_tree_does_not_report_unrun_ensemble():

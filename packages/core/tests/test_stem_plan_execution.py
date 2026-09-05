@@ -249,6 +249,34 @@ def test_execution_records_order_and_replaces_ancestor_outputs(
     ] == [VOCALS_MARKER] * expected_sources.count("Vocals")
 
 
+@pytest.mark.parametrize(
+    ("requested", "expected_private"),
+    [
+        (["Vocals"], {"_deux_inst"}),
+        (["Crowd"], {"_crowd_other"}),
+        (["Crowd", "Bass"], set()),
+        (["Crowd", "Vocals"], {"_deux_inst"}),
+    ],
+)
+def test_opt_in_returns_only_unconsumed_private_terminals(
+    tmp_path: Path, requested: list[str], expected_private: set[str]
+):
+    factory = _RecordingFactory(tmp_path / "separators")
+    plan = resolve_separation_plan(requested)
+
+    stems = execute_plan(
+        factory,
+        plan,
+        _source(tmp_path),
+        SR,
+        cfg=UpmixConfig(stem_primary_remask=False, stem_drum_remask=False),
+        retain_private=True,
+    )
+
+    assert {name for name in stems if name.startswith("_")} == expected_private
+    assert set(stems) == cacheable_plan_stems(plan, retain_private=True)
+
+
 def test_remask_cleanup_passes_corrected_drums_to_drumsep(tmp_path, monkeypatch):
     factory = _RecordingFactory(tmp_path / "separators")
     cleanup_calls = []

@@ -39,6 +39,7 @@ from upmixer.separation.stem_plan import (
     MODEL_PRIMARY,
     normalize_stems,
     resolve_separation_plan,
+    terminal_plan_stems,
 )
 
 SeparateFn = Callable[[str], tuple[dict[str, np.ndarray], "RunSettings"]]
@@ -251,6 +252,7 @@ def separate_tree_for_eval(
     config: UpmixConfig,
     *,
     include_all_public: bool = False,
+    include_private: bool = False,
 ) -> tuple[dict[str, np.ndarray], RunSettings]:
     """Run the production stem tree and return its prepared stem audio.
 
@@ -259,6 +261,7 @@ def separate_tree_for_eval(
     fresh, isolated store and disable every cache/input shortcut before
     reading the store back.  ``include_all_public`` exposes every public store
     output for tree experiments while the default keeps requested-only output.
+    ``include_private`` exposes unconsumed private terminal complements.
     """
     from upmixer.separation.stem_pipeline import StemUpmixPipeline
     from upmixer.separation.stem_store import PlainStemStore
@@ -271,7 +274,10 @@ def separate_tree_for_eval(
             stem_output_dir=stem_output_dir,
         )
         with StemUpmixPipeline(eval_config) as pipeline:
-            result = pipeline.prepare_stems(mixture_path)
+            if include_private:
+                result = pipeline.prepare_stems(mixture_path, retain_private=True)
+            else:
+                result = pipeline.prepare_stems(mixture_path)
             loaded = PlainStemStore(stem_output_dir).load()
             stage_settings = tuple(pipeline.last_separation_settings)
 
@@ -286,17 +292,29 @@ def separate_tree_for_eval(
                 f"evaluation sample rate {sample_rate}"
             )
         requested_stems = frozenset(result.stems or ())
+        plan = resolve_separation_plan(
+            normalize_stems(config.stems) if config.stems else list(DEFAULT_STEMS),
+            config.stem_ensemble,
+        )
+        private_terminals = (
+            terminal_plan_stems(plan, include_private=True)
+            - terminal_plan_stems(plan)
+            if include_private
+            else frozenset()
+        )
         if include_all_public:
             stems = {
                 key: audio
                 for key, audio in all_stems.items()
                 if not key.split("@", 1)[0].startswith("_")
+                or key.split("@", 1)[0] in private_terminals
             }
         else:
             stems = {
                 key: audio
                 for key, audio in all_stems.items()
                 if key.split("@", 1)[0] in requested_stems
+                or key.split("@", 1)[0] in private_terminals
             }
         if not stems:
             requested = ", ".join(sorted(requested_stems)) or "none"

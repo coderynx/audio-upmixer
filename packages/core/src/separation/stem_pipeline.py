@@ -210,6 +210,8 @@ class StemUpmixPipeline:
         input_path: str,
         input_format_override: str | None,
         _progress: Callable[[str, float], None],
+        *,
+        retain_private: bool = False,
     ) -> SeparationResult:
         """Read, zone-split, separate, and cache stems — no routing or mastering."""
         self._last_separation_settings = ()
@@ -225,12 +227,14 @@ class StemUpmixPipeline:
             return separator
 
         try:
+            options = {"retain_private": True} if retain_private else {}
             return separate(
                 _tracked_get_or_create,
                 self.config,
                 input_path,
                 input_format_override,
                 _progress,
+                **options,
             )
         finally:
             if self._separation_settings_history:
@@ -511,6 +515,8 @@ class StemUpmixPipeline:
         input_path: str,
         input_format_override: str | None = None,
         progress_callback: Callable[[str, float], None] | None = None,
+        *,
+        retain_private: bool = False,
     ) -> UpmixResult:
         """Separate and cache instrument stems without routing or mastering.
 
@@ -533,7 +539,12 @@ class StemUpmixPipeline:
                 progress_callback(msg, frac)
 
         _log.info("stem_preparation_started")
-        sep = self._separate(input_path, input_format_override, _progress)
+        sep = self._separate(
+            input_path,
+            input_format_override,
+            _progress,
+            retain_private=retain_private,
+        )
         _progress("  Stems prepared", 1.0)
 
         result = UpmixResult(

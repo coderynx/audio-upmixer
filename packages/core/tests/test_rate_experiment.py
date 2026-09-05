@@ -407,9 +407,11 @@ def test_tree_rate_arms_request_all_public_and_return_terminals(tmp_path, rate_a
     output_names = ("Vocals", "Bass", "Drums", "Guitar", "Piano", "Other")
     calls = []
 
-    def fake_tree(path, sample_rate, config, *, include_all_public):
+    def fake_tree(path, sample_rate, config, *, include_all_public, include_private):
         audio, file_rate = sf.read(path, dtype="float32", always_2d=True)
-        calls.append((file_rate, sample_rate, config.output_sample_rate, include_all_public))
+        calls.append(
+            (file_rate, sample_rate, config.output_sample_rate, include_all_public, include_private)
+        )
         return {
             name: audio for name in output_names
         }, RunSettings(model="production-tree", sample_rate=sample_rate)
@@ -430,7 +432,7 @@ def test_tree_rate_arms_request_all_public_and_return_terminals(tmp_path, rate_a
         )
 
     expected_rate = 48_000 if rate_arm == "delivery" else 44_100
-    assert calls == [(expected_rate, expected_rate, expected_rate, True)]
+    assert calls == [(expected_rate, expected_rate, expected_rate, True, True)]
     assert set(stems) == set(output_names)
     assert all(audio.shape == (480, 2) for audio in stems.values())
     assert settings.sample_rate == settings.output_sample_rate == 48_000
@@ -440,8 +442,9 @@ def test_native_tree_arm_resamples_the_complete_tree_input_and_outputs(tmp_path)
     source = _write_source(tmp_path / "mix.wav")
     calls: list[tuple[int, int]] = []
 
-    def fake_tree(path, sample_rate, config, *, include_all_public):
+    def fake_tree(path, sample_rate, config, *, include_all_public, include_private):
         assert include_all_public is True
+        assert include_private is True
         audio, file_rate = sf.read(path, dtype="float32", always_2d=True)
         assert file_rate == sample_rate == 44_100
         calls.append((file_rate, len(audio)))
@@ -471,6 +474,34 @@ def test_native_tree_arm_resamples_the_complete_tree_input_and_outputs(tmp_path)
     assert settings.rate_arm == "native"
     assert settings.separation_sample_rate == 44_100
     assert settings.output_sample_rate == 48_000
+
+
+def test_tree_rate_arm_returns_unconsumed_private_terminal(tmp_path):
+    source = _write_source(tmp_path / "mix.wav")
+    audio, _ = sf.read(source, dtype="float32", always_2d=True)
+
+    def fake_tree(path, sample_rate, config, *, include_all_public, include_private):
+        assert include_all_public is True
+        assert include_private is True
+        return {
+            "Vocals": audio,
+            "_deux_inst": audio,
+            "_crowd_other": audio,
+        }, RunSettings(model="production-tree", sample_rate=sample_rate)
+
+    config = UpmixConfig(stems=["Vocals"], output_sample_rate=48_000)
+    with patch(
+        "upmixer.eval.rate_experiment.separate_tree_for_eval",
+        side_effect=fake_tree,
+    ):
+        stems, _ = separate_tree_for_rate_experiment(
+            source,
+            delivery_sample_rate=48_000,
+            config=config,
+            rate_arm="delivery",
+        )
+
+    assert set(stems) == {"Vocals", "_deux_inst"}
 
 
 @pytest.mark.parametrize("rate_arm", ["native", "delivery"])
