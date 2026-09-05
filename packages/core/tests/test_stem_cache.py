@@ -181,6 +181,29 @@ class TestStemCacheSaveLoad:
         cache.save(wav, "model", 44100, _make_stems(), 44100)
         assert not list(cache_dir.rglob("*.tmp*"))
 
+    def test_failed_save_is_not_read_as_a_partial_cache_hit(self, tmp_path, monkeypatch):
+        sf = pytest.importorskip("soundfile")
+        wav = str(tmp_path / "src.wav")
+        _write_dummy_wav(wav)
+        cache_dir = tmp_path / "cache"
+        cache = StemCache(str(cache_dir))
+        real_write = sf.write
+        writes = 0
+
+        def fail_second_write(*args, **kwargs):
+            nonlocal writes
+            writes += 1
+            if writes == 2:
+                raise OSError("synthetic partial cache write")
+            return real_write(*args, **kwargs)
+
+        monkeypatch.setattr(sf, "write", fail_second_write)
+        with pytest.raises(OSError, match="synthetic partial"):
+            cache.save(wav, "model", 44100, _make_stems(n=128), 44100)
+
+        assert not list(cache_dir.rglob("*.tmp*"))
+        assert cache.load(wav, "model", 44100) is None
+
     def test_save_creates_wav_files(self, tmp_path):
         pytest.importorskip("soundfile")
         wav = str(tmp_path / "src.wav")
@@ -313,11 +336,7 @@ class TestStemCacheSaveLoad:
 
         loaded_stems, _ = cache.load(wav, "model", 44100)
         for name in stems:
-            # PCM_24 → ~144 dB dynamic range → error < 1e-6
-            np.testing.assert_allclose(
-                loaded_stems[name], stems[name], atol=1e-4,
-                err_msg=f"Stem '{name}' not preserved through cache round-trip"
-            )
+            np.testing.assert_array_equal(loaded_stems[name], stems[name].astype(np.float32))
 
     def test_roundtrip_zone_tagged_stems(self, tmp_path):
         pytest.importorskip("soundfile")

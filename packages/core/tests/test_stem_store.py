@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+import soundfile as sf
 
 from upmixer.separation.stem_store import PlainStemStore
 
@@ -29,7 +31,27 @@ def test_write_then_load_round_trips_stems(tmp_path):
     assert sample_rate == 44100
     assert set(loaded.keys()) == set(stems.keys())
     for key, audio in stems.items():
-        np.testing.assert_allclose(loaded[key], audio, atol=2e-4)
+        np.testing.assert_array_equal(loaded[key], audio)
+
+
+def test_failed_write_leaves_no_temporary_file_or_readable_partial_store(tmp_path, monkeypatch):
+    store = PlainStemStore(str(tmp_path))
+    real_write = sf.write
+    writes = 0
+
+    def fail_second_write(*args, **kwargs):
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("synthetic partial store write")
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(sf, "write", fail_second_write)
+    with pytest.raises(OSError, match="synthetic partial"):
+        store.write(_make_stems(), 44100)
+
+    assert not list(tmp_path.glob(".*.tmp.wav"))
+    assert store.load() is None
 
 
 def test_load_writes_no_hash_subdirectory(tmp_path):

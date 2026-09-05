@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import soundfile as sf
+from sqlalchemy import select
 
 pytest.importorskip("sqlalchemy")
 
@@ -19,7 +20,7 @@ from upmixer_web.features.projects.storage import (
     _write_preview,
 )
 from upmixer_web.shared.database import create_database_engine, create_session_factory, upgrade_database
-from upmixer_web.shared.models import ImportBatch, MediaAsset, Project, ProjectTrack
+from upmixer_web.shared.models import ImportBatch, MediaAsset, Project, ProjectStem, ProjectTrack
 
 
 @pytest.fixture
@@ -174,6 +175,19 @@ def test_catalogue_track_rewrites_preview_after_stem_reprepare(tmp_path):
 
     with factory() as session:
         project, track = _seed_project_track(session)
+        other_asset = MediaAsset(
+            import_batch=project.import_batch,
+            filename="song-b.wav",
+            relative_path="song-b.wav",
+            storage_key="objects/song-b.wav",
+            sha256="1" * 64,
+            size_bytes=1,
+        )
+        other_track = ProjectTrack(project=project, asset=other_asset, position=1)
+        session.add_all([other_asset, other_track])
+        session.flush()
+        _seed_stem_store(storage, project, other_track, ["Vocals"])
+        storage.catalogue_track(session, project, other_track, generation=1)
         entry = _seed_stem_store(storage, project, track, ["Vocals"])
         storage.catalogue_track(session, project, track, generation=1)
 
@@ -185,10 +199,18 @@ def test_catalogue_track_rewrites_preview_after_stem_reprepare(tmp_path):
         )
         rows = storage.catalogue_track(session, project, track, generation=2)
         session.commit()
+        first_track_stems = session.scalars(
+            select(ProjectStem).where(ProjectStem.track_id == track.id)
+        ).all()
+        other_track_stems = session.scalars(
+            select(ProjectStem).where(ProjectStem.track_id == other_track.id)
+        ).all()
 
     preview_audio, _ = sf.read(str(storage.resolve(rows[0].preview_relative_path)))
     assert np.abs(preview_audio).max() < 1e-3
     assert storage.read_track_peaks_meta(project.id, track.id)["generation"] == 2
+    assert [(stem.generation, stem.sample_rate) for stem in first_track_stems] == [(2, 48_000)]
+    assert [stem.generation for stem in other_track_stems] == [1]
 
     engine.dispose()
 

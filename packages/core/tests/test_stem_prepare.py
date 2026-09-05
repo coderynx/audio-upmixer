@@ -13,7 +13,9 @@ import soundfile as sf
 from unittest.mock import patch
 
 from upmixer.config import UpmixConfig
+from upmixer.separation import render_prepared_stem_bed
 from upmixer.separation.stem_pipeline import StemUpmixPipeline
+from upmixer.separation.stem_store import PlainStemStore
 
 _EXEC_PLAN = "upmixer.separation.stem_pipeline_exec.execute_plan"
 
@@ -69,3 +71,73 @@ def test_prepare_stems_writes_cache(tmp_path):
 
     assert cache_dir.exists()
     assert any(os.scandir(cache_dir))
+
+
+def test_prepare_prefers_supplied_stems_over_cache_or_inference(tmp_path):
+    source = str(tmp_path / "in.wav")
+    sf.write(source, _sine(SR), SR, subtype="FLOAT")
+    input_dir = tmp_path / "prepared"
+    PlainStemStore(str(input_dir)).write(
+        {"Vocals": np.full((SR, 2), 0.2, dtype=np.float32)}, SR,
+    )
+    cfg = UpmixConfig(
+        stems=["Vocals"],
+        stem_input_dir=str(input_dir),
+        stem_cache_dir=str(tmp_path / "cache"),
+    )
+    pipeline = StemUpmixPipeline(cfg)
+    try:
+        with patch(_EXEC_PLAN, side_effect=AssertionError("inference was not skipped")):
+            result = pipeline.prepare_stems(source)
+    finally:
+        pipeline.close()
+
+    assert result.stems == ["Vocals"]
+    assert result.output_sample_rate == SR
+    assert not (tmp_path / "cache").exists()
+
+
+def test_prepare_and_render_keep_the_accepted_stem_sample_rate(tmp_path):
+    source_sr = SR
+    target_sr = 44_100
+    source_frames = 480
+    source = str(tmp_path / "in.wav")
+    sf.write(source, _sine(source_frames), source_sr, subtype="FLOAT")
+    output_dir = tmp_path / "prepared"
+    cfg = UpmixConfig(
+        stems=["Vocals"],
+        output_format="5.1",
+        output_sample_rate=target_sr,
+        stem_output_dir=str(output_dir),
+    )
+
+    def fake_at_rate(get_separator, plan, sep_path, sep_sr, stage_callback=None,
+                     cfg=None, resume_key=None):
+        audio, input_sr = sf.read(sep_path, dtype="float32", always_2d=True)
+        frames = round(len(audio) * sep_sr / input_sr)
+        return {
+            name: np.full((frames, 2), 0.2, dtype=np.float32)
+            for name in plan.requested_stems
+        }
+
+    pipeline = StemUpmixPipeline(cfg)
+    try:
+        with patch(_EXEC_PLAN, side_effect=fake_at_rate):
+            result = pipeline.prepare_stems(source)
+    finally:
+        pipeline.close()
+
+    loaded, stored_sr = PlainStemStore(str(output_dir)).load()
+    assert result.output_sample_rate == target_sr
+    assert stored_sr == target_sr
+    assert len(loaded["Vocals"]) == round(source_frames * target_sr / source_sr)
+
+    render_cfg = UpmixConfig(
+        stems=["Vocals"],
+        output_format="5.1",
+        output_sample_rate=target_sr,
+        stem_input_dir=str(output_dir),
+    )
+    rendered, render_sr = render_prepared_stem_bed(render_cfg, source)
+    assert render_sr == target_sr
+    assert len(next(iter(rendered.values()))) == len(loaded["Vocals"])

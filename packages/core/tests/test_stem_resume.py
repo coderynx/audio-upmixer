@@ -90,6 +90,13 @@ def test_a_failed_run_resumes_at_the_stage_that_failed(tmp_path):
             plan, source, SR, None, cfg, "run-key",
         )
     assert first == ["a.ckpt", "b.ckpt", "c.ckpt"]
+    checkpoint = ResumeStore.open(cfg.stem_cache_dir, "run-key", SR)
+    assert checkpoint is not None
+    restored = checkpoint.restore()
+    assert restored is not None
+    assert restored[0] == 2
+    # Files stabilized for the failed stage do not escape the failed run.
+    assert not list((tmp_path / "r1").rglob("*.wav"))
 
     second: list[str] = []
     stems = execute_plan(
@@ -100,6 +107,16 @@ def test_a_failed_run_resumes_at_the_stage_that_failed(tmp_path):
     assert stems["Bass"][0, 0] == 3.0
     assert stems["Drums"][0, 0] == 4.0
     assert stems["Vocals"][0, 0] == 5.0
+    assert ResumeStore.open(cfg.stem_cache_dir, "run-key", SR).restore() is None
+
+    clean: list[str] = []
+    clean_stems = execute_plan(
+        _separator(tmp_path / "clean", clean), plan, source, SR,
+        None, UpmixConfig(stem_cache_dir=None), "clean-key",
+    )
+    assert clean == ["a.ckpt", "b.ckpt", "c.ckpt"]
+    for name in clean_stems:
+        np.testing.assert_array_equal(stems[name], clean_stems[name])
 
 
 def test_a_successful_run_leaves_no_checkpoint(tmp_path):
