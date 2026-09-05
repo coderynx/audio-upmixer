@@ -1,13 +1,15 @@
 # Separation quality Q00 protocol
 
 Frozen: 2026-09-04  
-Status: synthetic/plumbing protocol frozen; licensed-corpus and listening gates
-are blocked.
+Updated: 2026-09-05
+Status: protocol frozen; the selected real corpus is available under restricted
+research use. Category coverage and listening/promotion gates remain open.
 
 | Identifier | Value |
 | --- | --- |
 | Protocol | `upmixer-separation-q00-v1` |
 | Synthetic corpus | `upmixer-synthetic-v1` |
+| Selected real corpus | `upmixer-musdb18hq-v1-c5ba6b34513f` |
 
 These IDs are stable report keys. A changed generator, membership, split rule,
 or acceptance rule gets a new version; generated paths, hosts, and timestamps
@@ -40,6 +42,25 @@ deterministic harness plumbing and category grouping; they do not establish
 musical model rankings or a quality claim. Keep real-model clips comfortably
 above the documented approximately three-second short-input floor.
 
+## Selected external corpus
+
+The selected official MUSDB18-HQ test-subset corpus is external at
+`$UPMIXER_MUSDB_ROOT`; no audio or private absolute path is committed. It has
+24 distinct recordings/artists split into 12 tuning and 12 heldout recording
+groups, with 120 WAVs in 44.1 kHz stereo. Its content SHA-256 is
+`c5ba6b34513f09632e33c9334de8a5849d0cd8181d20cba4507e7632493f0237`.
+
+The official archive is 22,656,664,047 bytes with MD5
+`12d4f2ecd55245a4688754dd76363103`; the prepared local corpus is
+5,086,843,660 bytes. The audio is available for restricted educational and
+research use only. This does not grant commercial or redistribution
+permission. SCNet has no overlap by the known model list; overlap for other
+checkpoints is unknown.
+
+The prepared manifest maps the aggregate `Other` reference to
+`Guitar + Piano + Other` under code revision `b85880e`. This mapping is part of
+the corpus identity and must be held fixed when comparing reports.
+
 The reproducible checks frozen for this stage are:
 
 ```bash
@@ -69,13 +90,13 @@ Synthetic results validate deterministic harness plumbing only; they are not
 musical-quality evidence. The real-model and production-tree commands may
 download weights and are smoke runs, not held-out music-quality results.
 
-## Future corpus, provenance, and splits
+## Corpus provenance and splits
 
-The real corpus remains an access-controlled local directory. When lawful
-assets arrive, commit only a versioned `corpus.json`, an adjacent provenance
-and split manifest, and shareable derived reports. Use stable `recording_id` and
-`item_id` values, relative manifest paths, and hashes; never use private
-absolute paths as identity.
+The selected corpus remains an access-controlled local directory. Keep its
+audio outside the repository; commit only a versioned `corpus.json`, adjacent
+provenance and split metadata when they are shareable, and derived reports.
+Use stable `recording_id` and `item_id` values, relative manifest paths, and
+hashes; never use private absolute paths as identity.
 
 Each recording/item entry must include:
 
@@ -97,31 +118,36 @@ and bandwidth/conditioning. Start with at least 12 tuning and 12 held-out
 recording groups overall, with at least three independent holdout groups for
 each promoted target category; expand when uncertainty requires it.
 
+The selected corpus meets the 12 tuning / 12 heldout minimum for a broad
+baseline. Its current broad category assignment does not yet establish the
+required independent heldout coverage for every promoted target category.
+
 Unavailable child references are recorded as unavailable rather than silently
 excluded. Kit, karaoke, crowd, or similar scores then have limited claims;
 known-source controls may exercise plumbing, but real child references and
 listening are required before promotion for that child.
 
-## Gates still blocked
+## Gates still open
 
-No original or licensed multitrack stems are available in this workspace.
-Therefore the following are not claimed: a licensed `corpus.json`, provenance
-and split manifests for real recordings, tuning/holdout measurements, a
-baseline on musical material, or category-specific child-reference coverage.
+Licensed original stems are now available under the restricted research terms
+above. The selected corpus clears the access gate and is large enough for a
+broad baseline, but category coverage remains open: no full 24-track baseline
+or per-category promotion evidence is claimed yet.
 
-No listening panel or listening assets are available. The missing gate is a
-blinded randomized A/B set with stable anonymous IDs and a separate answer
-key; solos, subtraction residuals, and modest ±3/6 dB remixes; common
-comparison gain plus an original-level check; at least three listeners where
-available; playback conditions, randomization seed, ties, repeatability, and
-uncertainty; track-level aggregation with a 95% preference interval; and a
-defect ledger covering leakage, detail/fullness, musical noise, attacks/decay,
-tonality/phase, stereo image, and continuity.
+The listening gate is still open. No human listening panel or listening assets
+are available. It requires a blinded randomized A/B set with stable anonymous
+IDs and a separate answer key; solos, subtraction residuals, and modest ±3/6
+dB remixes; common comparison gain plus an original-level check; at least three
+listeners where available; playback conditions, randomization seed, ties,
+repeatability, and uncertainty; track-level aggregation with a 95% preference
+interval; and a defect ledger covering leakage, detail/fullness, musical noise,
+attacks/decay, tonality/phase, stereo image, and continuity.
 
-Until both gates are supplied, synthetic results may validate determinism,
-metric plumbing, and exact-transfer behavior only. They cannot promote a
-quality feature, change a default, rank models for music, or support an audible
-improvement claim.
+Until category coverage and listening evidence are supplied, the selected
+corpus may support a broad baseline report, but it cannot claim full Q00
+promotion, change a default, rank models for every promoted category, or
+support an audible improvement claim. Synthetic results remain limited to
+determinism, metric plumbing, and exact-transfer checks.
 
 ## Frozen acceptance thresholds
 

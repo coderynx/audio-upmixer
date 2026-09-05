@@ -53,9 +53,10 @@ raw scores alone.
 
 ## Corpus (`packages/core/src/eval/corpus.py`)
 
-**No copyrighted audio ships with this repository.** `MUSDB18-HQ` is
-research-only and is not bundled; licensing for internal-eval use is an open
-point tracked in the roadmap.
+**No copyrighted audio ships with this repository.** The selected official
+`MUSDB18-HQ` test-subset corpus is external at `$UPMIXER_MUSDB_ROOT` and is
+available for restricted educational/research evaluation only. This does not
+grant commercial or redistribution permission.
 
 - `ReferenceCorpus.from_dir(path)` loads a user-supplied, lawfully-licensed
   directory containing a `corpus.json` manifest:

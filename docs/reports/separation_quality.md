@@ -1,163 +1,141 @@
 # Separation quality implementation ledger
 
 Updated: 2026-09-05
-Status: Q01 is in progress. Q00 is blocked only by the licensed-corpus and
-listening gates.
+Status: Q01/Q02 plumbing and regression work is complete; Q03 is partial; Q10
+passes its objective equivalence and memory gate. Q00 promotion remains open
+for category coverage and listening evidence.
 
-This is the resumable implementation handoff for the frozen
+This is the resumable handoff for the frozen
 [Q00 protocol](separation_quality_protocol.md) and its
 [evaluation harness contract](../evaluation_harness.md).
 
-## Frozen identity and scope
+## Frozen identity and current corpus
 
 | Key | Value |
 | --- | --- |
-| Research baseline | `2877054` (`287705467f65a2bdc52b09ceffeccd4f17821548`) |
-| Current code revision | `4b0e1e0` (`4b0e1e07e1852707b05811c3accd7bebfa06fdf0`) |
+| Research baseline | `287705467f65a2bdc52b09ceffeccd4f17821548` |
+| Assigned code revision | `b85880e23160691d2a593d772bd014a1feacd3ba` |
 | Protocol | `upmixer-separation-q00-v1` |
 | Synthetic corpus | `upmixer-synthetic-v1` |
-| Licensed split | unavailable; no real split is claimed |
-| Clean baseline | `1343 passed, 38 deselected` |
+| Selected real corpus | `upmixer-musdb18hq-v1-c5ba6b34513f` |
+| Real corpus content hash | `c5ba6b34513f09632e33c9334de8a5849d0cd8181d20cba4507e7632493f0237` |
+| Real split | 12 tuning and 12 heldout distinct recordings/artists; 120 WAVs; 44.1 kHz stereo |
+| Archive identity | 22,656,664,047 bytes; MD5 `12d4f2ecd55245a4688754dd76363103` |
+| Local corpus bytes | 5,086,843,660 |
+| Use | Restricted educational/research use only; no commercial or redistribution permission is claimed |
+| Model overlap | SCNet: none by the known list; other checkpoints: unknown |
+| Aggregate `Other` mapping | `Guitar + Piano + Other` under `b85880e` |
 
-The frozen synthetic corpus contains three four-second, stereo float32 items at
-the generator's 44.1 kHz rate: `default`, `dense_synth`, and `choir_cluster`.
-They use duplicated mono channels, unity additive mixing, no master-bus
-processing, and generator seed `20260728`. Their purpose is deterministic
-plumbing and category grouping; they do not substitute for musical material.
-Future lawful assets must use stable recording/item IDs, hashes, explicit
-provenance, and recording-group split membership. Every excerpt, alternate
-rate, master, and stem from one recording group stays in one split. The
-required corpus and category rules are frozen in the protocol report.
+The real corpus is external at `$UPMIXER_MUSDB_ROOT`; no audio is committed.
+Its 12/12 split is enough for a broad baseline, but the required category
+coverage and listening/promotion gates remain open. The synthetic corpus still
+contains three four-second stereo float32 items at 44.1 kHz (`default`,
+`dense_synth`, and `choir_cluster`) for deterministic plumbing only.
 
 ## Gate status
 
-### Q00 — blocked
+### Q00 — corpus available; promotion open
 
-Revision `eef1bf0` froze the protocol in
-[the Q00 report](separation_quality_protocol.md). No original or licensed
-multitrack stems are available in this workspace, so the corpus gate remains
-blocked. A qualifying future corpus needs permission and hashes, mixture and
-reference provenance, aligned parent/child stems, and at least 12 tuning and
-12 held-out recording groups overall, with at least three independent held-out
-groups for each promoted target category. The screened categories are dense/
-electronic, vocal, acoustic/tonal, drum kit, live/spatial, stereo adversarial,
-temporal/context, and bandwidth/conditioning.
+The selected official MUSDB18-HQ test-subset corpus is available under the
+restricted research terms above. It meets the broad 12 tuning / 12 heldout
+recording-group minimum. The current category assignment does not yet provide
+the required independent heldout coverage for every promoted target category,
+and no full 24-recording baseline is claimed.
 
-No listening panel or listening assets are available, so the listening gate is
-also blocked. It requires blinded randomized A/B material with stable
-anonymous IDs and an answer key, original-level and remixed checks, available
-listener coverage, playback/randomization/repeatability records, a track-level
-95% preference interval, and a defect ledger for leakage, fullness/detail,
-musical noise, attacks/decay, tonality/phase, stereo image, and continuity.
-Synthetic numbers cannot clear either gate.
+The listening gate is still open: no human listening panel or listening assets
+are available. Promotion therefore remains blocked even where objective
+measurements exist. Do not treat the corpus as a full Q00 promotion.
 
-The frozen promotion thresholds remain in the protocol: median paired SDR
-improvement at least `0.2 dB` or fullness/bleedless at least `0.01`, with the
-track-bootstrap 95% lower bound above zero; no supported co-metric loss beyond
-`0.1 dB` SDR or `0.005` fullness/bleedless; flag individual losses above
-`0.5 dB` SDR or `0.02` fullness/bleedless; default added RTF at most `0.1` and
-job-time increase at most `10%`; optional extra-view time at most `2x` and
-within the measured device memory ceiling.
+The frozen thresholds remain in the
+[protocol](separation_quality_protocol.md): paired SDR improvement of at least
+`0.2 dB` or fullness/bleedless improvement of at least `0.01`, bootstrap lower
+bound above zero, no supported co-metric loss beyond `0.1 dB` SDR or `0.005`
+fullness/bleedless, default job-time increase at most `10%`, and the measured
+device memory ceiling.
 
-### Q01 — in progress
+### Q01/Q02 — complete plumbing and regression work
 
-Q01 remains evaluation plumbing only. The slices currently present are:
+Q01 added strict corpus/report validation, unavailable coverage, paired
+recording-group statistics, serialization, the offline runner, production-tree
+evaluation, and execution provenance. Its relevant history runs from
+`ed73831` through the tree/provenance fixes ending at `b85880e`.
 
-| Slice | Revision | Delivered behavior |
-| --- | --- | --- |
-| Q01a | `ed73831` | Stable recording/item/split identities; strict required-estimate, rate, shape, channel, length, finite-value, and settings validation; public metric-helper truncation preserved. |
-| Q01b | `55e4fa6` | Actual model metadata and TTA/pitch settings are recorded while legacy report formatting and public imports remain compatible. |
-| Q01c | `98ed432` | Explicit unavailable references and identity-bearing coverage rows; manifest parsing and unavailable-only items report coverage without fake metric rows; required/scored failures remain strict. |
-| Q01d | `6aadb85` + correctness follow-up `ebb6ba8` | Recording means and fixed-seed paired bootstrap over recording groups, with split-aware identities/groups, unavailable coverage, and per-group `n_recordings`, status, and `None` CI bounds. |
-| Serialization | `cbe4f5f` | Versioned `EvalReport` JSON and readable text serialization through the public report APIs. |
-| Coverage counts | `42e7aaa` | Report-level scored/unavailable coverage counts are serialized and formatted. |
-| Offline runner | `789ed99` + `7050407` | Stdlib runner accepts corpus/variant/output arguments, requires fresh output, reproduces synthetic-reference reports, documents real-model smoke, and rejects non-finite/non-positive chunk and pitch settings. |
-| Effective settings | `fc446d5` + `c60ba68` + `4b0e1e0` | Separator snapshots capture resolved settings; the public pipeline retains ordered settings across the requested tree and reports effective batch/segment behavior. |
+Q02 added deterministic schedule, rate/level, plan, zone, persistence, and
+retry regression coverage (`ceb90da`, `c2866f3`, `f600c86`, `3518c3d`,
+`b3f3d71`, `d98b264`, and `04d1c5e`). These are plumbing and regression checks;
+they do not establish a separation-quality improvement or change a default.
 
-Q01 source and focused test files are
-`packages/core/src/eval/{__init__,corpus,harness,report}.py`,
-`packages/core/src/separation/{separator,stem_pipeline}.py`, and
-`scripts/run_eval.py`, with focused coverage in
-`packages/core/tests/{test_eval_boundaries,test_eval_harness,test_eval_metrics,test_eval_report,test_eval_runner,test_batch_separation,test_separator_optimization,test_stem_prepare}.py`.
-The handoff evidence is:
+The final Python suite was:
 
-- Root Q01 focused suite:
-  `uv run pytest packages/core/tests/test_separator_optimization.py packages/core/tests/test_batch_separation.py packages/core/tests/test_stem_prepare.py packages/core/tests/test_eval_runner.py packages/core/tests/test_eval_report.py packages/core/tests/test_eval_boundaries.py packages/core/tests/test_eval_harness.py packages/core/tests/test_eval_metrics.py -q`
-  reported `93 passed, 1 deselected` (14 existing warnings; 10.38s).
-- Offline runner artifact:
-  `uv run python scripts/run_eval.py --corpus synthetic --variant synthetic-reference --sample-rate 44100 --output-dir /tmp/upmixer-q01-synthetic.54jqlf`
-  wrote schema v1 with `8` scores and `8` coverage rows, `4` stems and `3`
-  categories; all `8` coverage rows were `scored`.
-- Prior real-model synthetic smoke:
-  `uv run pytest packages/core/tests -m perf -k eval -s` reported `1 passed,
-  1247 deselected` in `41.12s` on MPS with `BS-Roformer-SW.ckpt` at 44.1 kHz.
-  The existing metric table below is retained for that smoke only.
-- The full core suite is pending after the current Q01 slices; no full-suite
-  result is claimed here.
-
-Q01 remains evaluation plumbing only. The full-tree adapter through public
-`StemUpmixPipeline.prepare_stems` and `PlainStemStore`, richer stage/plan
-provenance, and failure/skip summaries remain. No production audio algorithm or
-default changed; the strict boundary stays at `evaluate_corpus` and existing
-public constructors/imports retain compatible defaults.
-
-## Prior real-model synthetic smoke metrics
-
-The recorded handoff invocation was:
-
-```bash
-uv run pytest packages/core/tests -m perf -k eval -s
+```text
+uv run pytest packages/core/tests apps/api/tests apps/cli/tests -q
+1552 passed, 38 deselected, 24 warnings in 40.66s
 ```
 
-It reported `1 passed, 1247 deselected` in `41.12s` on MPS using
-`BS-Roformer-SW.ckpt` at 44.1 kHz. TTA and pitch shift were off; the effective
-model-native rate was 44.1 kHz. The reported means were:
+### Q03 — partial baseline
 
-| Group | SDR (dB) | Fullness | Bleedless |
+One full tuning track, `Hollow Ground - Ill Fate`, has a valid current
+production-tree report. All four requested references scored:
+
+| Stem/category | SDR (dB) | Fullness | Bleedless |
 | --- | ---: | ---: | ---: |
-| Bass | 1.87 | 0.661 | 0.165 |
-| Drums | -0.00 | 0.000 | 0.438 |
-| Other | 0.30 | 0.521 | 0.874 |
-| Vocals | 0.00 | 0.000 | 0.379 |
-| `choir_cluster` | 0.99 | 0.185 | 0.505 |
-| `default` | 0.82 | 0.215 | 0.415 |
-| `dense_synth` | -1.25 | 0.499 | 0.846 |
+| Bass | 2.65 | 0.340 | 0.910 |
+| Drums | 8.63 | 0.672 | 0.915 |
+| Other (aggregate) | 6.96 | 0.815 | 0.881 |
+| Vocals | 8.89 | 0.751 | 0.902 |
+| Category aggregate | 6.78 | 0.645 | 0.902 |
 
-These are synthetic harness metrics only. They provide no musical-quality,
-held-out ranking, promotion, or listener result. Peak memory was not measured;
-no listening result is available.
+This is a one-track tuning result, with no human listening panel and no full
+24-track run. Q03 is therefore partial and cannot close the category,
+listening, or Q00 promotion gates.
 
-## Q10 disposition
+### Q10 — implemented; objective audit passes
 
-The Q10 scout is **ready after Q01/Q02/Q03 plumbing**. Q10 has no implementation
-or quality result yet. Its prerequisite is a completed Q03 full-tree baseline
-with the licensed corpus and listening evidence above; until then Q10 cannot
-claim an optimization or a quality change.
+`168ed7b` reuses identical Roformer tail windows. The full comparison is in the
+external artifact
+`$UPMIXER_EVAL_ROOT/q10/full/Hollow-Ground-Ill-Fate/equivalence.json`, with
+`UPMIXER_EVAL_ROOT` set to the local evaluation root.
 
-## Next eligible work and restart
+| Measure | Old `a6feaab` | Current `b85880e` | Delta |
+| --- | ---: | ---: | ---: |
+| Cold runtime | 188.33 s | 193.78 s | +2.894% |
+| Peak RSS | 3,096,068,096 B | 3,314,614,272 B | +7.059% |
+| Memory footprint | 9,685,011,840 B | 9,787,674,728 B | +1.060% |
 
-1. Finish and validate the remaining Q01 full-tree adapter, richer provenance,
-   and failure/skip summaries, then record their exact commands and results.
-2. Run `uv run pytest packages/core/tests -q` after the pending Q01 slices are
-   green; this full-suite result is still pending.
-3. Run Q02 deterministic incumbent/candidate regression checks against the Q01
-   interfaces.
-4. Run Q03 full-tree baseline and listening/defect review once the two Q00
-   gates are supplied; keep the status blocked if either is still missing.
-5. Start Q10 only after Q03, with duplicate-forward equivalence plus measured
-   runtime and peak-memory evidence.
+All six decoded float32 arrays are exact on MPS (`max diff = 0`). The audio
+equivalence and `<10%` memory gates pass. Tests demonstrate less evaluated
+duplicate tail work. The audited full-track configs reduce evaluated windows
+from 18 to 17 for Deux and from 15 to 14 for SW, 33 to 31 total (`6.061%`).
+The single cold runtime is within measurement noise, so no speed claim is made.
+Intermediate callback cadence changes, while final completion is preserved.
+CPU and CUDA real-model backend gates remain open.
 
-Resume from the shared branch and preserve any in-progress eval work:
+The old report's raw `Other` metric used the wrong taxonomy. The current
+`b85880e` mapping (`Guitar + Piano + Other`) is the valid comparison.
+
+## Restart commands
+
+Keep private audio and generated reports outside the repository:
 
 ```bash
+export UPMIXER_MUSDB_ROOT=/path/to/selected-musdb18hq
+export UPMIXER_EVAL_ROOT=/path/to/upmixer-eval/separation-quality
+
 git switch feature/improve-stem-separation
 git log --oneline --decorate -6
 git status --short
-uv run pytest packages/core/tests/test_eval_boundaries.py packages/core/tests/test_eval_harness.py packages/core/tests/test_eval_metrics.py packages/core/tests/test_eval_report.py -q
-uv run python scripts/run_eval.py --corpus synthetic --variant synthetic-reference --sample-rate 44100 --output-dir /tmp/upmixer-q01-synthetic-next
-uv run pytest packages/core/tests -m perf -k eval -s
+
+uv run python scripts/prepare_musdb18hq_corpus.py \
+  --dataset-root "$UPMIXER_MUSDB_ROOT" \
+  --output-dir "$UPMIXER_MUSDB_ROOT"
+uv run python scripts/run_eval.py \
+  --corpus "$UPMIXER_MUSDB_ROOT" \
+  --variant production-tree --sample-rate 44100 \
+  --stems vocals,bass,drums,guitar,piano,other --retain-stems \
+  --output-dir "$UPMIXER_EVAL_ROOT/q03/full/current"
 ```
 
-Run `uv run pytest packages/core/tests -q` after the pending Q01 slices are
-green, then repeat the runner and protocol smoke and record the actual settings,
-metrics, runtime, and peak memory in a new dated report.
+The Q10 audit artifact is read from
+`$UPMIXER_EVAL_ROOT/q10/full/Hollow-Ground-Ill-Fate/equivalence.json`.
+Q20 is the next eligible experiment; retain the open category, listening, and
+promotion gates until its controls and the missing Q03 evidence are complete.
