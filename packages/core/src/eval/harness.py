@@ -242,171 +242,33 @@ def separate_tree_for_eval(
     )
 
 
-def evaluate_corpus(
-    corpus: ReferenceCorpus,
-    separate_fn: SeparateFn,
-    sample_rate: int,
-    *,
-    protocol_id: str | None = None,
-    code_revision: str | None = None,
-    report_failures: bool = False,
-) -> EvalReport:
-    """Score a separation run over every item in a corpus.
-
-    For each corpus item, calls ``separate_fn(item.mixture)`` and compares
-    every stem the estimate and the reference share by name against the
-    reference audio, computing SDR + fullness + bleedless (never SDR alone,
-    per the harness requirements).
-
-    Args:
-        corpus:      Reference corpus to evaluate against.
-        separate_fn: Callable producing (stems, RunSettings) for a mixture
-            path — either ``separate_for_eval`` (bound to fixed settings via
-            ``functools.partial``) for real inference, or a test double.
-        sample_rate: Sample rate of the reference audio (used for the
-            magnitude-STFT fullness/bleedless computation).
-        protocol_id: Optional evaluation protocol identifier.
-        code_revision: Optional exact code revision identifier.
-        report_failures: Return a partial report with per-stem failure coverage
-            instead of raising on separator or audio validation failures.
-
-    Returns:
-        EvalReport with one StemScore per (item, shared stem), one effective
-        settings row per item, and shared settings when every item agrees.
-    """
-    if report_failures:
-        return _evaluate_corpus_with_failures(
-            corpus,
-            separate_fn,
-            sample_rate,
-            protocol_id=protocol_id,
-            code_revision=code_revision,
-        )
-
-    scores: list[StemScore] = []
-    coverage: list[CoverageRow] = []
-    settings_rows: list[ItemRunSettings] = []
-    shared_settings: RunSettings | None = None
-    settings_vary = False
-    for item in corpus.items:
-        unavailable_stems = tuple(item.unavailable_stems or ())
-        if not item.stems and not unavailable_stems:
-            raise ValueError(f"item {item.item_id or item.mixture} has no reference stems")
-        if len(unavailable_stems) != len(set(unavailable_stems)):
-            raise ValueError(f"item {item.item_id or item.mixture} has duplicate unavailable stems")
-        overlap = set(item.stems) & set(unavailable_stems)
-        if overlap:
-            raise ValueError(
-                f"item {item.item_id or item.mixture} marks stems as both scored and unavailable: "
-                f"{', '.join(sorted(overlap))}"
-            )
-        estimate_stems, item_settings = separate_fn(item.mixture)
-        if not isinstance(estimate_stems, dict):
-            raise ValueError(f"item {item.item_id or item.mixture} returned invalid outputs")
-        if item.stems and not estimate_stems:
-            raise ValueError(f"item {item.item_id or item.mixture} returned empty outputs")
-        missing = sorted(set(item.stems) - set(estimate_stems))
-        if missing:
-            raise ValueError(
-                f"item {item.item_id or item.mixture} missing required stem(s): "
-                f"{', '.join(missing)}"
-            )
-        if not isinstance(item_settings, RunSettings):
-            raise ValueError("separation returned invalid RunSettings")
-        if item_settings.sample_rate != sample_rate:
-            raise ValueError(
-                f"RunSettings sample rate {item_settings.sample_rate} does not "
-                f"match evaluation sample rate {sample_rate}"
-            )
-        settings_rows.append(
-            ItemRunSettings(
-                recording_id=item.recording_id,
-                item_id=item.item_id,
-                split=item.split,
-                category=item.category,
-                settings=item_settings,
-            )
-        )
-        if shared_settings is None:
-            shared_settings = item_settings
-        elif item_settings != shared_settings:
-            settings_vary = True
-        for stem_name in item.stems:
-            coverage.append(
-                CoverageRow(
-                    stem=stem_name,
-                    category=item.category,
-                    status="scored",
-                    recording_id=item.recording_id,
-                    item_id=item.item_id,
-                    split=item.split,
-                )
-            )
-        for stem_name in unavailable_stems:
-            coverage.append(
-                CoverageRow(
-                    stem=stem_name,
-                    category=item.category,
-                    status="unavailable",
-                    recording_id=item.recording_id,
-                    item_id=item.item_id,
-                    split=item.split,
-                )
-            )
-        for stem_name, ref_path in item.stems.items():
-            reference, reference_rate = sf.read(ref_path, dtype="float32", always_2d=True)
-            if reference_rate != sample_rate:
-                raise ValueError(
-                    f"reference {ref_path} sample rate {reference_rate} does not "
-                    f"match evaluation sample rate {sample_rate}"
-                )
-            _validate_audio(reference, f"reference {ref_path}")
-            estimate = estimate_stems[stem_name]
-            _validate_audio(estimate, f"estimate {stem_name}")
-            if reference.shape[1] != estimate.shape[1]:
-                raise ValueError(
-                    f"channel count mismatch for {stem_name}: reference has "
-                    f"{reference.shape[1]}, estimate has {estimate.shape[1]}"
-                )
-            if reference.shape[0] != estimate.shape[0]:
-                raise ValueError(
-                    f"frame count mismatch for {stem_name}: reference has "
-                    f"{reference.shape[0]}, estimate has {estimate.shape[0]}"
-                )
-            scores.append(
-                StemScore(
-                    stem=stem_name,
-                    category=item.category,
-                    sdr=sdr(reference, estimate),
-                    fullness=fullness(reference, estimate, sample_rate),
-                    bleedless=bleedless(reference, estimate, sample_rate),
-                    recording_id=item.recording_id,
-                    item_id=item.item_id,
-                    split=item.split,
-                )
-            )
-    if shared_settings is None:
-        raise ValueError("corpus has no items to evaluate")
-    return EvalReport(
-        settings=None if settings_vary else shared_settings,
-        scores=scores,
-        coverage=coverage,
-        item_settings=settings_rows,
-        protocol_id=protocol_id,
-        corpus_id=corpus.corpus_id,
-        code_revision=code_revision,
-    )
-
-
 def _failure_detail(exc: BaseException) -> str:
     detail = " ".join(str(exc).split()) or type(exc).__name__
     return detail if len(detail) <= 240 else f"{detail[:237]}..."
+
+
+def _validate_item(item: CorpusItem) -> tuple[str, ...]:
+    unavailable_stems = tuple(item.unavailable_stems or ())
+    if not item.stems and not unavailable_stems:
+        raise ValueError(f"item {item.item_id or item.mixture} has no reference stems")
+    if len(unavailable_stems) != len(set(unavailable_stems)):
+        raise ValueError(
+            f"item {item.item_id or item.mixture} has duplicate unavailable stems"
+        )
+    overlap = set(item.stems) & set(unavailable_stems)
+    if overlap:
+        raise ValueError(
+            f"item {item.item_id or item.mixture} marks stems as both scored and "
+            f"unavailable: {', '.join(sorted(overlap))}"
+        )
+    return unavailable_stems
 
 
 def _coverage_rows(
     item: CorpusItem,
     statuses: dict[str, str],
     details: dict[str, str],
+    unavailable_stems: tuple[str, ...],
 ) -> list[CoverageRow]:
     rows = [
         CoverageRow(
@@ -429,20 +291,62 @@ def _coverage_rows(
             item_id=item.item_id,
             split=item.split,
         )
-        for stem_name in item.unavailable_stems
+        for stem_name in unavailable_stems
     )
     return rows
 
 
-def _evaluate_corpus_with_failures(
+def _score_stem(
+    item: CorpusItem,
+    stem_name: str,
+    ref_path: str,
+    estimate: np.ndarray,
+    sample_rate: int,
+) -> StemScore:
+    reference, reference_rate = sf.read(ref_path, dtype="float32", always_2d=True)
+    if reference_rate != sample_rate:
+        raise ValueError(
+            f"reference {ref_path} sample rate {reference_rate} does not "
+            f"match evaluation sample rate {sample_rate}"
+        )
+    _validate_audio(reference, f"reference {ref_path}")
+    _validate_audio(estimate, f"estimate {stem_name}")
+    if reference.shape[1] != estimate.shape[1]:
+        raise ValueError(
+            f"channel count mismatch for {stem_name}: reference has "
+            f"{reference.shape[1]}, estimate has {estimate.shape[1]}"
+        )
+    if reference.shape[0] != estimate.shape[0]:
+        raise ValueError(
+            f"frame count mismatch for {stem_name}: reference has "
+            f"{reference.shape[0]}, estimate has {estimate.shape[0]}"
+        )
+    return StemScore(
+        stem=stem_name,
+        category=item.category,
+        sdr=sdr(reference, estimate),
+        fullness=fullness(reference, estimate, sample_rate),
+        bleedless=bleedless(reference, estimate, sample_rate),
+        recording_id=item.recording_id,
+        item_id=item.item_id,
+        split=item.split,
+    )
+
+
+def evaluate_corpus(
     corpus: ReferenceCorpus,
     separate_fn: SeparateFn,
     sample_rate: int,
     *,
-    protocol_id: str | None,
-    code_revision: str | None,
+    protocol_id: str | None = None,
+    code_revision: str | None = None,
+    report_failures: bool = False,
 ) -> EvalReport:
-    """Evaluate items while retaining expected-stem coverage on failures."""
+    """Score a separation run over every item in a corpus.
+
+    ``report_failures`` keeps expected-stem coverage when a separator or
+    per-stem validation fails; the default remains fail-fast.
+    """
     scores: list[StemScore] = []
     coverage: list[CoverageRow] = []
     settings_rows: list[ItemRunSettings] = []
@@ -450,135 +354,94 @@ def _evaluate_corpus_with_failures(
     settings_vary = False
 
     for item in corpus.items:
-        unavailable_stems = tuple(item.unavailable_stems or ())
-        if not item.stems and not unavailable_stems:
-            raise ValueError(f"item {item.item_id or item.mixture} has no reference stems")
-        if len(unavailable_stems) != len(set(unavailable_stems)):
-            raise ValueError(f"item {item.item_id or item.mixture} has duplicate unavailable stems")
-        overlap = set(item.stems) & set(unavailable_stems)
-        if overlap:
-            raise ValueError(
-                f"item {item.item_id or item.mixture} marks stems as both scored and unavailable: "
-                f"{', '.join(sorted(overlap))}"
-            )
-
+        unavailable_stems = _validate_item(item)
         statuses = {stem_name: "failed" for stem_name in item.stems}
         details: dict[str, str] = {}
         try:
             estimate_stems, item_settings = separate_fn(item.mixture)
+            if not isinstance(estimate_stems, dict):
+                raise ValueError(
+                    "returned invalid outputs"
+                    if report_failures
+                    else f"item {item.item_id or item.mixture} returned invalid outputs"
+                )
+            if not report_failures and item.stems and not estimate_stems:
+                raise ValueError(
+                    f"item {item.item_id or item.mixture} returned empty outputs"
+                )
+            missing = sorted(set(item.stems) - set(estimate_stems))
+            if missing and not report_failures:
+                raise ValueError(
+                    f"item {item.item_id or item.mixture} missing required stem(s): "
+                    f"{', '.join(missing)}"
+                )
+            for stem_name in missing:
+                statuses[stem_name] = "absent"
+                details[stem_name] = "missing from separator output"
+            if not isinstance(item_settings, RunSettings):
+                raise ValueError("separation returned invalid RunSettings")
+            if item_settings.sample_rate != sample_rate:
+                raise ValueError(
+                    f"RunSettings sample rate {item_settings.sample_rate} does not "
+                    f"match evaluation sample rate {sample_rate}"
+                )
+            settings_rows.append(
+                ItemRunSettings(
+                    recording_id=item.recording_id,
+                    item_id=item.item_id,
+                    split=item.split,
+                    category=item.category,
+                    settings=item_settings,
+                )
+            )
+            if shared_settings is None:
+                shared_settings = item_settings
+            elif item_settings != shared_settings:
+                settings_vary = True
+            for stem_name, ref_path in item.stems.items():
+                if stem_name in missing:
+                    continue
+                try:
+                    score = _score_stem(
+                        item,
+                        stem_name,
+                        ref_path,
+                        estimate_stems[stem_name],
+                        sample_rate,
+                    )
+                except EvaluationSkipped as exc:
+                    if not report_failures:
+                        raise
+                    statuses[stem_name] = "skipped"
+                    details[stem_name] = _failure_detail(exc)
+                except Exception as exc:
+                    if not report_failures:
+                        raise
+                    statuses[stem_name] = "failed"
+                    details[stem_name] = _failure_detail(exc)
+                else:
+                    scores.append(score)
+                    statuses[stem_name] = "scored"
         except EvaluationSkipped as exc:
+            if not report_failures:
+                raise
             statuses = {stem_name: "skipped" for stem_name in item.stems}
             detail = _failure_detail(exc)
             details = {stem_name: detail for stem_name in item.stems}
             settings_vary = True
-            coverage.extend(_coverage_rows(item, statuses, details))
-            continue
         except Exception as exc:
+            if not report_failures:
+                raise
             detail = _failure_detail(exc)
-            details = {stem_name: detail for stem_name in item.stems}
             settings_vary = True
-            coverage.extend(_coverage_rows(item, statuses, details))
-            continue
-
-        if not isinstance(estimate_stems, dict):
-            details = {
-                stem_name: "returned invalid outputs" for stem_name in item.stems
-            }
-            settings_vary = True
-            coverage.extend(_coverage_rows(item, statuses, details))
-            continue
-        if item.stems and not estimate_stems:
-            details = {stem_name: "returned empty outputs" for stem_name in item.stems}
-            settings_vary = True
-            coverage.extend(_coverage_rows(item, statuses, details))
-            continue
-
-        missing = sorted(set(item.stems) - set(estimate_stems))
-        for stem_name in missing:
-            statuses[stem_name] = "absent"
-            details[stem_name] = "missing from separator output"
-
-        if not isinstance(item_settings, RunSettings):
-            detail = "separation returned invalid RunSettings"
             for stem_name in item.stems:
                 if statuses[stem_name] != "absent":
                     statuses[stem_name] = "failed"
                     details[stem_name] = detail
-            settings_vary = True
-            coverage.extend(_coverage_rows(item, statuses, details))
-            continue
-        if item_settings.sample_rate != sample_rate:
-            detail = (
-                f"RunSettings sample rate {item_settings.sample_rate} does not "
-                f"match evaluation sample rate {sample_rate}"
-            )
-            for stem_name in item.stems:
-                if statuses[stem_name] != "absent":
-                    statuses[stem_name] = "failed"
-                    details[stem_name] = detail
-            settings_vary = True
-            coverage.extend(_coverage_rows(item, statuses, details))
-            continue
-
-        settings_rows.append(
-            ItemRunSettings(
-                recording_id=item.recording_id,
-                item_id=item.item_id,
-                split=item.split,
-                category=item.category,
-                settings=item_settings,
-            )
-        )
-        if shared_settings is None:
-            shared_settings = item_settings
-        elif item_settings != shared_settings:
-            settings_vary = True
-
-        for stem_name, ref_path in item.stems.items():
-            if stem_name in missing:
-                continue
-            try:
-                reference, reference_rate = sf.read(
-                    ref_path, dtype="float32", always_2d=True
-                )
-                if reference_rate != sample_rate:
-                    raise ValueError(
-                        f"reference {ref_path} sample rate {reference_rate} does not "
-                        f"match evaluation sample rate {sample_rate}"
-                    )
-                _validate_audio(reference, f"reference {ref_path}")
-                estimate = estimate_stems[stem_name]
-                _validate_audio(estimate, f"estimate {stem_name}")
-                if reference.shape[1] != estimate.shape[1]:
-                    raise ValueError(
-                        f"channel count mismatch for {stem_name}: reference has "
-                        f"{reference.shape[1]}, estimate has {estimate.shape[1]}"
-                    )
-                if reference.shape[0] != estimate.shape[0]:
-                    raise ValueError(
-                        f"frame count mismatch for {stem_name}: reference has "
-                        f"{reference.shape[0]}, estimate has {estimate.shape[0]}"
-                    )
-                scores.append(
-                    StemScore(
-                        stem=stem_name,
-                        category=item.category,
-                        sdr=sdr(reference, estimate),
-                        fullness=fullness(reference, estimate, sample_rate),
-                        bleedless=bleedless(reference, estimate, sample_rate),
-                        recording_id=item.recording_id,
-                        item_id=item.item_id,
-                        split=item.split,
-                    )
-                )
-                statuses[stem_name] = "scored"
-            except Exception as exc:
-                statuses[stem_name] = "failed"
-                details[stem_name] = _failure_detail(exc)
 
         if any(status != "scored" for status in statuses.values()):
             settings_vary = True
-        coverage.extend(_coverage_rows(item, statuses, details))
+        coverage.extend(_coverage_rows(item, statuses, details, unavailable_stems))
 
     if not corpus.items:
         raise ValueError("corpus has no items to evaluate")

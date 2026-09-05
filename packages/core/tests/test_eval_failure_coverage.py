@@ -135,6 +135,22 @@ def test_reporting_mode_marks_per_stem_validation_error_and_continues(tmp_path):
     assert "frame count mismatch" in (report.coverage[1].detail or "")
 
 
+def test_reporting_mode_marks_empty_outputs_absent(tmp_path):
+    corpus = _corpus(tmp_path)
+    report = evaluate_corpus(
+        ReferenceCorpus([corpus.items[0]]),
+        lambda _mixture: ({}, _settings()),
+        sample_rate=8000,
+        report_failures=True,
+    )
+
+    assert [(row.stem, row.status) for row in report.coverage] == [
+        ("Vocals", "absent"),
+        ("Bass", "absent"),
+    ]
+    assert all(row.detail == "missing from separator output" for row in report.coverage)
+
+
 def test_typed_skip_propagates_in_strict_mode(tmp_path):
     corpus = _corpus(tmp_path)
 
