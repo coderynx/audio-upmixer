@@ -31,6 +31,23 @@ def _plan():
     )
 
 
+def _plan_with_private_terminal():
+    return SeparationPlan(
+        tasks=[
+            SeparationTask(
+                "a.ckpt", "original", frozenset({"Vocals", "_inst"}),
+                frozenset({"Vocals"}),
+            ),
+            SeparationTask(
+                "b.ckpt", "Vocals", frozenset({"Bass", "Drums"}),
+                frozenset({"Bass", "Drums"}),
+            ),
+        ],
+        requested_stems=frozenset({"Vocals", "Bass", "Drums"}),
+        stems_hash="private-terminal",
+    )
+
+
 def _separator(tmp_path, runs, fail_on=None):
     """Fake separator recording every model it is asked to run."""
     emits = {
@@ -188,3 +205,42 @@ def test_a_checkpoint_missing_its_audio_starts_over(tmp_path):
         None, cfg, "run-key",
     )
     assert runs == ["a.ckpt", "b.ckpt", "c.ckpt"]
+
+
+def test_retain_private_ignores_public_only_checkpoint(tmp_path):
+    from upmixer.config import UpmixConfig
+
+    cfg = UpmixConfig(stem_cache_dir=str(tmp_path / "cache"))
+    source = _source(tmp_path)
+    plan = _plan_with_private_terminal()
+    with pytest.raises(_Boom):
+        execute_plan(
+            _separator(tmp_path / "r1", [], fail_on="b.ckpt"),
+            plan,
+            source,
+            SR,
+            None,
+            cfg,
+            "run-key",
+        )
+
+    checkpoint = ResumeStore.open(cfg.stem_cache_dir, "run-key", SR)
+    assert checkpoint is not None
+    restored = checkpoint.restore()
+    assert restored is not None
+    assert restored[0] == 1
+    assert "_inst" not in restored[1] | restored[2]
+
+    runs: list[str] = []
+    stems = execute_plan(
+        _separator(tmp_path / "r2", runs),
+        plan,
+        source,
+        SR,
+        None,
+        cfg,
+        "run-key",
+        retain_private=True,
+    )
+    assert runs == ["a.ckpt", "b.ckpt"]
+    assert "_inst" in stems

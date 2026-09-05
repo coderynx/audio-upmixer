@@ -293,15 +293,13 @@ def separate_tree_for_eval(
             )
         requested_stems = frozenset(result.stems or ())
         plan = resolve_separation_plan(
-            normalize_stems(config.stems) if config.stems else list(DEFAULT_STEMS),
-            config.stem_ensemble,
+            normalize_stems(config.stems or DEFAULT_STEMS), config.stem_ensemble
         )
-        private_terminals = (
-            terminal_plan_stems(plan, include_private=True)
-            - terminal_plan_stems(plan)
-            if include_private
-            else frozenset()
-        )
+        private_terminals = frozenset()
+        if include_private:
+            private_terminals = terminal_plan_stems(
+                plan, include_private=True
+            ) - terminal_plan_stems(plan)
         if include_all_public:
             stems = {
                 key: audio

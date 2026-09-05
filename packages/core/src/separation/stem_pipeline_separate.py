@@ -203,6 +203,7 @@ def _run_zone_separation(
     retain_private: bool = False,
 ) -> dict[str, np.ndarray]:
     all_stems: dict[str, np.ndarray] = {}
+    resume_key = None if retain_private else resume_key
     tmp_files: list[str] = []
     zone_names = list(sep_zones.keys())
     n_zones = len(zone_names)
@@ -345,13 +346,13 @@ def separate(
 
     cache_identity = ""
     cache_hit_stems: dict[str, np.ndarray] | None = None
-    if cfg.stem_input_dir:
+    if not retain_private and cfg.stem_input_dir:
         from upmixer.separation.stem_store import PlainStemStore
 
         stem_input_result = PlainStemStore(cfg.stem_input_dir).load()
         if stem_input_result is not None:
             cache_hit_stems = stem_input_result[0]
-    elif cfg.stem_cache_dir:
+    elif not retain_private and cfg.stem_cache_dir:
         # A folded run separates one "front" zone where the same file
         # unfolded yields "@zone"-keyed stems, so the two must not share
         # a cache entry.
@@ -407,11 +408,11 @@ def separate(
             sep_sr,
             stereo_mode,
             progress,
-            _resume_key(cfg, input_path, cache_identity, sep_sr),
+            None if retain_private else _resume_key(cfg, input_path, cache_identity, sep_sr),
             retain_private=retain_private,
         )
 
-        if cfg.stem_cache_dir and not cfg.stem_input_dir and all_stems:
+        if not retain_private and cfg.stem_cache_dir and not cfg.stem_input_dir and all_stems:
             _save_cached_stems(cfg, input_path, cache_identity, sep_sr, all_stems)
 
         if cfg.stem_output_dir and all_stems:

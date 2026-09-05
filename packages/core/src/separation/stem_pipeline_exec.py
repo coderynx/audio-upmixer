@@ -191,6 +191,7 @@ def execute_plan(
     Returns a dict of canonical_name → ndarray for all requested stems and,
     when enabled, unconsumed private terminal complements.
     """
+    resume_key = None if retain_private else resume_key
     n_tasks = len(plan.tasks)
     workspace = StemWorkspace.open(
         plan,
@@ -546,6 +547,7 @@ def execute_plan_with_silence_skip(
         write_crossfaded_span,
     )
 
+    resume_key = None if retain_private else resume_key
     n_sr = len(zone_audio)
     silence_started = time.monotonic()
     spans = find_active_spans(

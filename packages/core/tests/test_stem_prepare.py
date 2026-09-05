@@ -6,6 +6,7 @@ mastering or write an output file.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 
 import numpy as np
@@ -95,6 +96,61 @@ def test_prepare_opt_in_writes_private_terminals_without_public_summary_change(t
     assert stored_sr == SR
     assert set(loaded) == {"Vocals", "_deux_inst"}
     assert result.stems == ["Vocals"]
+
+
+def test_prepare_opt_in_bypasses_supplied_and_public_cached_stems(tmp_path):
+    from upmixer.separation.stem_cache import StemCache
+    from upmixer.separation.stem_identity import stem_cache_identity
+    from upmixer.separation.stem_plan import resolve_separation_plan
+
+    source = str(tmp_path / "in.wav")
+    sf.write(source, _sine(SR), SR, subtype="FLOAT")
+    input_dir = tmp_path / "input"
+    cache_dir = tmp_path / "cache"
+    cached = np.full((SR, 2), 0.7, dtype=np.float32)
+    PlainStemStore(str(input_dir)).write({"Vocals": cached}, SR)
+    cfg = UpmixConfig(
+        stems=["Vocals"],
+        stem_input_dir=str(input_dir),
+        stem_cache_dir=str(cache_dir),
+    )
+    plan = resolve_separation_plan(["Vocals"], False)
+    StemCache(str(cache_dir)).save(
+        source,
+        stem_cache_identity(plan, cfg),
+        SR,
+        {"Vocals": cached},
+        SR,
+    )
+    before_cache = {
+        path.relative_to(cache_dir): path.read_bytes()
+        for path in cache_dir.rglob("*")
+        if path.is_file()
+    }
+
+    def prepare(output_dir, **config_overrides):
+        run_cfg = replace(cfg, stem_output_dir=str(output_dir), **config_overrides)
+        pipeline = StemUpmixPipeline(run_cfg)
+        try:
+            with patch(_EXEC_PLAN, side_effect=_fake_execute_plan):
+                result = pipeline.prepare_stems(source, retain_private=True)
+        finally:
+            pipeline.close()
+        loaded, _ = PlainStemStore(str(output_dir)).load()
+        return result, loaded
+
+    result, loaded = prepare(tmp_path / "from_input")
+    assert result.stems == ["Vocals"]
+    assert set(loaded) == {"Vocals", "_deux_inst"}
+
+    result, loaded = prepare(tmp_path / "from_cache", stem_input_dir=None)
+    assert result.stems == ["Vocals"]
+    assert set(loaded) == {"Vocals", "_deux_inst"}
+    assert {
+        path.relative_to(cache_dir): path.read_bytes()
+        for path in cache_dir.rglob("*")
+        if path.is_file()
+    } == before_cache
 
 
 def test_prepare_prefers_supplied_stems_over_cache_or_inference(tmp_path):
