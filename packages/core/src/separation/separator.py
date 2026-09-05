@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import logging
 import os
 import platform
@@ -158,6 +159,18 @@ def _is_oom_error(exc: BaseException) -> bool:
     )
 
 
+def _sha256_file(path: Path) -> str | None:
+    """Return a file digest, or ``None`` when provenance is unavailable."""
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
 def _remove_empty_output_dirs(paths: list[str], root: str) -> None:
     root_path = Path(root)
     parents = {
@@ -233,6 +246,12 @@ class SeparationSettings:
     model_config_name: str | None = None
     model_native_sample_rate: int | None = None
     device: str | None = None
+    checkpoint_sha256: str | None = None
+    model_config_sha256: str | None = None
+    runtime_precision: str | None = None
+    normalization_policy: str | None = None
+    oom_fallback_attempts: tuple[dict[str, int | float | None], ...] = ()
+    oom_fallback_count: int = 0
 
 
 class StemSeparator:
@@ -332,6 +351,10 @@ class StemSeparator:
         self._scnet_worker: SCNetWorker | None = None
         self._tmp_dir: str | None = None
         self._run_settings: SeparationSettings | None = None
+        self._checkpoint_sha256: str | None = None
+        self._model_config_sha256: str | None = None
+        self._provenance_ready = False
+        self._oom_fallback_attempts: list[dict[str, int | float | None]] = []
 
     @property
     def backend(self) -> str:
@@ -368,6 +391,27 @@ class StemSeparator:
             native_sample_rate,
             config,
         )
+
+    def _capture_provenance(self, config_name: str | None) -> None:
+        """Cache file identity after a completed inference run."""
+        if self._provenance_ready:
+            return
+        try:
+            from .inference.registry import get_model_spec
+
+            checkpoint_name = get_model_spec(self._model).filename
+        except (ImportError, KeyError, AttributeError):
+            checkpoint_name = self._model
+        self._checkpoint_sha256 = _sha256_file(
+            Path(self._model_dir) / checkpoint_name
+        )
+        if config_name:
+            config_filename = (
+                config_name if config_name.endswith(".yaml") else f"{config_name}.yaml"
+            )
+            config_path = Path(__file__).parent / "inference" / "configs" / config_filename
+            self._model_config_sha256 = _sha256_file(config_path)
+        self._provenance_ready = True
 
     def _settings_snapshot(self) -> SeparationSettings:
         """Build a snapshot after inference, including resolved engine defaults."""
@@ -434,6 +478,14 @@ class StemSeparator:
             model_config_name=config_name,
             model_native_sample_rate=native_sample_rate,
             device=device_name,
+            checkpoint_sha256=self._checkpoint_sha256,
+            model_config_sha256=self._model_config_sha256,
+            runtime_precision="float32",
+            normalization_policy="peak-downscale-to-0.9; inverse-output-scale",
+            oom_fallback_attempts=tuple(
+                dict(attempt) for attempt in self._oom_fallback_attempts
+            ),
+            oom_fallback_count=len(self._oom_fallback_attempts),
         )
 
     def _ensure_tmp_dir(self) -> str:
@@ -515,6 +567,7 @@ class StemSeparator:
     ) -> list[str]:
         """Separate with progressively lower-memory retries after OOM."""
         self._run_settings = None
+        self._oom_fallback_attempts = []
         while True:
             engine = None
             try:
@@ -556,6 +609,8 @@ class StemSeparator:
                     self._model,
                     time.monotonic() - started,
                 )
+                _, config_name, _, _ = self._registry_details()
+                self._capture_provenance(config_name)
                 self._run_settings = self._settings_snapshot()
                 return paths
             except Exception as exc:
@@ -565,6 +620,13 @@ class StemSeparator:
                     self._batch_size,
                     self._segment_size,
                     self._chunk_duration_s,
+                )
+                self._oom_fallback_attempts.append(
+                    {
+                        "batch_size": old_settings[0],
+                        "segment_size": old_settings[1],
+                        "chunk_duration_s": old_settings[2],
+                    }
                 )
                 if self._batch_size > 1:
                     self._batch_size = max(1, self._batch_size // 2)

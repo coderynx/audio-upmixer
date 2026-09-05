@@ -321,7 +321,9 @@ def test_cpu_oom_retries_into_chunk_duration_and_snapshots_all_settings():
             assert separator._separate_paths("input.wav") == []
 
         assert attempts == [(1, 64, 240.0), (1, 64, 120.0), (1, 64, 60.0)]
-        assert separator.run_settings == SeparationSettings(
+        settings = separator.run_settings
+        assert settings is not None
+        assert settings == SeparationSettings(
             model="BS-Roformer-SW.ckpt",
             sample_rate=48000,
             batch_size=1,
@@ -335,6 +337,12 @@ def test_cpu_oom_retries_into_chunk_duration_and_snapshots_all_settings():
             model_config_name="BS-Roformer-SW",
             model_native_sample_rate=44100,
             device="cpu",
+            checkpoint_sha256=settings.checkpoint_sha256,
+            model_config_sha256=settings.model_config_sha256,
+            runtime_precision="float32",
+            normalization_policy="peak-downscale-to-0.9; inverse-output-scale",
+            oom_fallback_attempts=settings.oom_fallback_attempts,
+            oom_fallback_count=2,
         )
     finally:
         separator.close()
