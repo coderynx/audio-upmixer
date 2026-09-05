@@ -1,6 +1,6 @@
 # Separation quality implementation ledger
 
-Updated: 2026-09-05. Current branch: `feature/improve-stem-separation`.
+Updated: 2026-09-06. Current branch: `feature/improve-stem-separation`.
 
 This is the resumable handoff for the frozen
 [Q00 protocol](separation_quality_protocol.md) and the
@@ -8,7 +8,8 @@ This is the resumable handoff for the frozen
 
 Current status: Q01/Q02 plumbing and regression work is complete; Q03 has a
 12-recording tuning baseline; Q10 passes its objective equivalence and memory
-gate; Q20 remains a tuning experiment; Q21 and all later quality changes have
+gate; Q20 remains a tuning experiment; Q30 experiment/eval plumbing is complete
+but its candidate is rejected for production; Q21 and Q31+ quality changes have
 not started. No production default has changed.
 
 ## Frozen identity and corpus
@@ -16,7 +17,7 @@ not started. No production default has changed.
 | Key | Value |
 | --- | --- |
 | Research baseline | `287705467f65a2bdc52b09ceffeccd4f17821548` |
-| Current code revision | `8683132fcac8533963c7ffe59ee09b12bf331d0d` |
+| Current code revision | `f500a8abdd2b046275a07c41b0b97699b9c02e69` |
 | Q03/Q20 matrix revision | `7a2806cf5fa7f0d8a84af3b8139b92c68a8c242b` |
 | Protocol | `upmixer-separation-q00-v1` |
 | Synthetic corpus | `upmixer-synthetic-v1`; deterministic harness checks only |
@@ -293,6 +294,58 @@ markers. Their comparison files (`short-12s/comparison-scipy-default-invalid.jso
 and `highrate-smoke/analysis-scipy-default-invalid.json`) are audit-only and
 must not be used for conclusions. The corrected artifacts use the selected
 120 dB FIR above.
+
+### Q30 — origin-view experiment complete; candidate rejected
+
+Q30 code is in commits `2007ca6` and `f500a8a`; the evaluated code revision is
+`f500a8abdd2b046275a07c41b0b97699b9c02e69`. The opt-in
+`--extra-origin-samples 11138` path is evaluation-only direct-model plumbing:
+it runs linked-stereo origin 0 and a second view with 11,138 zero samples on
+both sides, crops the second output back to the exact source span, and fuses
+the two float32 waveforms at 50/50. It retains per-view outputs, timing, and
+provenance, and enforces matching settings/rate plus stereo, exact-shape,
+finite-output, and float32 checks. The flag is restricted to direct models and
+cannot be combined with production-tree/ensemble, rate-arm, TTA, or pitch
+shift. Ordinary report JSON is unchanged; origin fields are opt-in.
+
+Validation at this revision was `1594 passed, 38 deselected, 24 warnings` for
+the full suite, `1317 passed, 18 skipped, 35 deselected` for the core suite,
+and `26 passed` for the focused Q30 tests.
+
+The base protocol root is
+`/Volumes/External SSD/upmixer-eval/separation-quality/q30/direct-origin-11138-v1`
+(`q30-direct-origin-11138-v1`, protocol SHA-256
+`eb9f33ceb510c020912d33257480507c3ebe2b1da17936d1d86509df240485dd`). The
+stage-input protocol is nested at
+`/Volumes/External SSD/upmixer-eval/separation-quality/q30/direct-origin-11138-v1/stage-sw-after-deux-v1`
+(`q30-stage-sw-after-deux-v1`, protocol SHA-256
+`1ea35bd87039ce1fedaef1ff1124074e1c4a740f1a6feff284749ff58a4e8952`), with
+corpus SHA-256
+`9d26d6cb242e1032423d52c740b2f376d7cf99fac8020584125da482a01bc39f` and
+fixed Deux input SHA-256
+`c1f5f4e7748b3b30e81fb016772f94f9efe77e8fd8cafead27587275163031d5`.
+
+| Screen | Candidate minus baseline (SDR / fullness / bleedless) | Runtime | Analysis SHA-256 | `SHA256SUMS` SHA-256 |
+| --- | --- | ---: | --- | --- |
+| Deux, one tuning item, Vocals | `+0.0206775665 / +0.0002805484 / +0.0012732680` | `1.465x` | `8b04f0b52cd778d182da2b4d805e442a259dc76a5843076e8f69a7bbd50c9461` | `665c6565b64625f90e10e96294a5aa07200ae2357e5f8b34dba9c7211bdc0131` |
+| SW on the raw mixture, Drums | `+0.100725174 / +0.000468951 / +0.000852201` | `1.490x` | `777586335e75a7fc3b1b9bc69949e6688ce70bcb479294af8adf680800c1af0a` | `877fc44b5acc9b008077a3ef22523f001418b6d3a6848b1aa025873529482fb3` |
+| SW after Deux stage input, Drums | `+0.103761673 / +0.001047498 / +0.001054209` | `12.18 s → 19.35 s (1.589x)` | `b28dfe18ae9da54774fd1152e5dfee32482960a87a8559f8f134ba30254ca14a` | `33b4b5ea357e52cf0b8c29372f2eb14fe89a19eb28692b0675714790f2b40003` |
+
+Raw-mixture SW Bass and Other scores were near zero and are diagnostic,
+non-production-equivalent evidence. Stage-input Bass and Other deltas were
+negligible. The controlled stage-input repeat measured RSS of
+`2153627648` bytes baseline and `2319253504` bytes candidate (`1.077x`), with
+zero swaps.
+
+All Q30 artifacts passed exact origin-0/baseline array checks, exact float32
+fusion checks, shape/rate/finite checks, provenance totals
+`scheduled_windows/evaluated_unique_windows/tail_replay_contributions/model_forward_calls`
+of `4/2/2/2`, and the individual regression screen had no flags. The
+experiment/eval plumbing is complete, but every one-item gain is below the
+frozen material gate. The candidate is rejected for production and Q31 is not
+implemented. No full tuning or heldout run was made; bootstrap, listening, and
+numeric memory-ceiling gates remain open. No default or web product behavior
+changed, and Q30 was not promoted.
 
 ## Gates still open
 
