@@ -15,6 +15,7 @@ from upmixer.eval.harness import RunSettings
 from upmixer.eval.rate_experiment import (
     _INCUMBENT_RESAMPLER_ID,
     _RESAMPLER_ID,
+    _terminal_public_stems,
     separate_model_for_rate_experiment,
     separate_tree_for_rate_experiment,
 )
@@ -255,11 +256,108 @@ def test_native_tree_rejects_mixed_model_and_ensemble_rates(tmp_path):
     separate.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("requested", "outputs", "expected"),
+    [
+        (
+            "Bass",
+            ("Vocals", "Bass", "Drums", "Guitar", "Piano", "Other"),
+            {"Vocals", "Bass", "Drums", "Guitar", "Piano", "Other"},
+        ),
+        (
+            "Kick",
+            (
+                "Vocals",
+                "Bass",
+                "Drums",
+                "Guitar",
+                "Piano",
+                "Other",
+                "Kick",
+                "Snare",
+                "Toms",
+                "Hi-Hat",
+                "Ride",
+                "Crash",
+            ),
+            {
+                "Vocals",
+                "Bass",
+                "Guitar",
+                "Piano",
+                "Other",
+                "Kick",
+                "Snare",
+                "Toms",
+                "Hi-Hat",
+                "Ride",
+                "Crash",
+            },
+        ),
+        (
+            "Lead Vocals",
+            ("Vocals", "Lead Vocals", "Backing Vocals"),
+            {"Lead Vocals", "Backing Vocals"},
+        ),
+    ],
+)
+def test_terminal_public_stems_exclude_consumed_parents(
+    requested, outputs, expected
+):
+    audio = np.zeros((8, 2), dtype=np.float32)
+    stems = {
+        f"{name}@front": audio
+        for name in outputs
+    }
+
+    terminal = _terminal_public_stems(
+        stems, UpmixConfig(stems=[requested])
+    )
+
+    assert set(terminal) == {f"{name}@front" for name in expected}
+
+
+@pytest.mark.parametrize("rate_arm", ["delivery", "native"])
+def test_tree_rate_arms_request_all_public_and_return_terminals(tmp_path, rate_arm):
+    source = _write_source(tmp_path / f"mix-{rate_arm}.wav")
+    output_names = ("Vocals", "Bass", "Drums", "Guitar", "Piano", "Other")
+    calls = []
+
+    def fake_tree(path, sample_rate, config, *, include_all_public):
+        audio, file_rate = sf.read(path, dtype="float32", always_2d=True)
+        calls.append((file_rate, sample_rate, config.output_sample_rate, include_all_public))
+        return {
+            name: audio for name in output_names
+        }, RunSettings(model="production-tree", sample_rate=sample_rate)
+
+    config = UpmixConfig(stems=["Bass"], output_sample_rate=48_000)
+    with (
+        patch(
+            "upmixer.eval.rate_experiment.separate_tree_for_eval",
+            side_effect=fake_tree,
+        ),
+        patch("upmixer.eval.rate_experiment._native_tree_rate", return_value=44_100),
+    ):
+        stems, settings = separate_tree_for_rate_experiment(
+            source,
+            delivery_sample_rate=48_000,
+            config=config,
+            rate_arm=rate_arm,
+        )
+
+    expected_rate = 48_000 if rate_arm == "delivery" else 44_100
+    assert calls == [(expected_rate, expected_rate, expected_rate, True)]
+    assert set(stems) == set(output_names)
+    assert all(audio.shape == (480, 2) for audio in stems.values())
+    assert settings.sample_rate == settings.output_sample_rate == 48_000
+
+
 def test_native_tree_arm_resamples_the_complete_tree_input_and_outputs(tmp_path):
     source = _write_source(tmp_path / "mix.wav")
     calls: list[tuple[int, int]] = []
 
-    def fake_tree(path, sample_rate, config):
+    def fake_tree(path, sample_rate, config, *, include_all_public):
+        assert include_all_public is True
         audio, file_rate = sf.read(path, dtype="float32", always_2d=True)
         assert file_rate == sample_rate == 44_100
         calls.append((file_rate, len(audio)))

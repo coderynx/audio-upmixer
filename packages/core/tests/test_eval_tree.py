@@ -128,6 +128,27 @@ def test_tree_preserves_zone_keys_and_stage_order(tmp_path):
     assert settings.stage_settings == stage_settings
 
 
+def test_tree_opt_in_exposes_all_public_store_outputs(tmp_path):
+    fake = _fake_pipeline(
+        _stems("Vocals@front", "Bass@front", "Bass@surround", "_deux_inst@front"),
+        ["Bass"],
+    )
+
+    with patch("upmixer.separation.stem_pipeline.StemUpmixPipeline", fake):
+        requested, _ = separate_tree_for_eval(
+            "mix.wav", 44_100, UpmixConfig(stems=["Bass"])
+        )
+        public, _ = separate_tree_for_eval(
+            "mix.wav",
+            44_100,
+            UpmixConfig(stems=["Bass"]),
+            include_all_public=True,
+        )
+
+    assert set(requested) == {"Bass@front", "Bass@surround"}
+    assert set(public) == {"Vocals@front", "Bass@front", "Bass@surround"}
+
+
 def test_tree_does_not_report_unrun_ensemble():
     fake = _fake_pipeline(
         _stems("Vocals"),

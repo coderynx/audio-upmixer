@@ -249,13 +249,16 @@ def separate_tree_for_eval(
     mixture_path: str,
     sample_rate: int,
     config: UpmixConfig,
+    *,
+    include_all_public: bool = False,
 ) -> tuple[dict[str, np.ndarray], RunSettings]:
     """Run the production stem tree and return its prepared stem audio.
 
     The pipeline's public preparation method returns a stem summary while its
     plain stem store owns the actual arrays.  Evaluation runs therefore use a
     fresh, isolated store and disable every cache/input shortcut before
-    reading the store back.
+    reading the store back.  ``include_all_public`` exposes every public store
+    output for tree experiments while the default keeps requested-only output.
     """
     from upmixer.separation.stem_pipeline import StemUpmixPipeline
     from upmixer.separation.stem_store import PlainStemStore
@@ -283,11 +286,18 @@ def separate_tree_for_eval(
                 f"evaluation sample rate {sample_rate}"
             )
         requested_stems = frozenset(result.stems or ())
-        stems = {
-            key: audio
-            for key, audio in all_stems.items()
-            if key.split("@", 1)[0] in requested_stems
-        }
+        if include_all_public:
+            stems = {
+                key: audio
+                for key, audio in all_stems.items()
+                if not key.split("@", 1)[0].startswith("_")
+            }
+        else:
+            stems = {
+                key: audio
+                for key, audio in all_stems.items()
+                if key.split("@", 1)[0] in requested_stems
+            }
         if not stems:
             requested = ", ".join(sorted(requested_stems)) or "none"
             raise RuntimeError(

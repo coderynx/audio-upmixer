@@ -260,7 +260,15 @@ def test_retain_stems_indexes_completed_items_without_copying_corpus_audio(tmp_p
         if item.item_id == "item-2":
             raise RuntimeError("synthetic later-item failure")
         audio, _ = sf.read(item.stems["Vocals"], dtype="float64", always_2d=True)
-        return {"Vocals": audio}, RunSettings(model="fake", sample_rate=22_050)
+        return {"Vocals": audio}, RunSettings(
+            model="fake",
+            sample_rate=22_050,
+            rate_arm="native",
+            input_frame_count=32,
+            separation_frame_count=16,
+            output_frame_count=32,
+            resampler="q20-test-resampler",
+        )
 
     monkeypatch.setattr(runner, "_real_separator", lambda _args: fake_separator)
     output_dir = tmp_path / "report"
@@ -289,6 +297,22 @@ def test_retain_stems_indexes_completed_items_without_copying_corpus_audio(tmp_p
         {"Vocals": "stems/0001/Vocals.wav"},
     ]
     assert index["items"][0]["recording_id"] == "recording-0"
+    assert {
+        field: index["items"][0][field]
+        for field in (
+            "rate_arm",
+            "input_frame_count",
+            "separation_frame_count",
+            "output_frame_count",
+            "resampler",
+        )
+    } == {
+        "rate_arm": "native",
+        "input_frame_count": 32,
+        "separation_frame_count": 16,
+        "output_frame_count": 32,
+        "resampler": "q20-test-resampler",
+    }
     for item in index["items"]:
         retained = output_dir / item["stems"]["Vocals"]
         info = sf.info(retained)
@@ -310,6 +334,31 @@ def test_retain_stems_indexes_completed_items_without_copying_corpus_audio(tmp_p
         "stems/0000/Vocals.wav",
         "stems/0001/Vocals.wav",
     }
+
+
+def test_retain_stems_keeps_extra_terminal_outputs(tmp_path):
+    runner = _load_runner()
+    corpus = _retention_corpus(tmp_path)
+    audio, _ = sf.read(
+        corpus.items[0].stems["Vocals"], dtype="float32", always_2d=True
+    )
+    names = ("Vocals", "Bass", "Drums", "Guitar", "Piano", "Other")
+    retaining = runner._retaining_separator(
+        lambda _path: (
+            {name: audio for name in names},
+            RunSettings(model="fake", sample_rate=22_050),
+        ),
+        corpus,
+        tmp_path / "report",
+        22_050,
+    )
+
+    retaining(corpus.items[0].mixture)
+
+    index = json.loads(
+        (tmp_path / "report/stems/index.json").read_text(encoding="utf-8")
+    )
+    assert set(index["items"][0]["stems"]) == set(names)
 
 
 def test_retain_stems_indexes_mapped_components_without_target(

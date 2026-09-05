@@ -22,7 +22,6 @@ from upmixer.eval.harness import (
     separate_tree_for_eval,
 )
 from upmixer.separation.inference.config import load_model_config
-from upmixer.separation.inference.demix import match_length
 from upmixer.separation.inference.registry import get_model_spec
 from upmixer.resample import resample_channels
 from upmixer.separation.stem_plan import (
@@ -59,13 +58,23 @@ def _target_frames(frames: int, source_rate: int, target_rate: int) -> int:
     return int(round(frames * target_rate / source_rate))
 
 
+def _match_length(values: np.ndarray, frames: int) -> np.ndarray:
+    current = values.shape[-1]
+    if current < frames:
+        values = np.pad(
+            values,
+            [(0, 0)] * (values.ndim - 1) + [(0, frames - current)],
+        )
+    return values[..., :frames]
+
+
 def _resample(audio: np.ndarray, source_rate: int, target_rate: int, frames: int) -> np.ndarray:
     values = np.asarray(audio, dtype=np.float32)
     if source_rate != target_rate:
         values = resample_channels(
             {"audio": values}, source_rate, target_rate
         )["audio"]
-    return np.asarray(match_length(values.T, frames).T, dtype=np.float32)
+    return np.asarray(_match_length(values.T, frames).T, dtype=np.float32)
 
 
 def _normalise_stems(
@@ -87,6 +96,31 @@ def _common_frame_count(stems: dict[str, np.ndarray]) -> int:
             "rate experiment separator returned stems with different frame counts"
         )
     return counts.pop() if counts else 0
+
+
+def _terminal_public_stems(
+    stems: dict[str, np.ndarray], config: UpmixConfig
+) -> dict[str, np.ndarray]:
+    """Keep public outputs that no later plan task consumes."""
+    canonical = normalize_stems(config.stems) if config.stems else list(DEFAULT_STEMS)
+    plan = resolve_separation_plan(canonical, config.stem_ensemble)
+    produced = {
+        stem
+        for task in plan.tasks
+        for stem in task.output_stems
+        if not stem.startswith("_")
+    }
+    later_inputs = {
+        task.input_source
+        for task in plan.tasks
+        if task.input_source != "original"
+    }
+    return {
+        key: audio
+        for key, audio in stems.items()
+        if (base := key.split("@", 1)[0]) in produced
+        and base not in later_inputs
+    }
 
 
 def _native_model_rate(model: str) -> int:
@@ -265,8 +299,12 @@ def separate_tree_for_rate_experiment(
     delivery_frames = _target_frames(source_frames, source_rate, delivery_rate)
     if arm == "delivery":
         raw_stems, settings = separate_tree_for_eval(
-            mixture_path, delivery_rate, config
+            mixture_path,
+            delivery_rate,
+            config,
+            include_all_public=True,
         )
+        raw_stems = _terminal_public_stems(raw_stems, config)
         raw_output_frames = _common_frame_count(raw_stems)
         stems = _normalise_stems(
             raw_stems, delivery_rate, delivery_rate, delivery_frames
@@ -292,8 +330,12 @@ def separate_tree_for_rate_experiment(
     with TemporaryDirectory(prefix="upmixer_q20_rate_") as temp_dir:
         native_path = _native_input(mixture_path, native_rate, temp_dir)
         native_stems, settings = separate_tree_for_eval(
-            native_path, native_rate, native_config
+            native_path,
+            native_rate,
+            native_config,
+            include_all_public=True,
         )
+    native_stems = _terminal_public_stems(native_stems, native_config)
     raw_output_frames = _common_frame_count(native_stems)
     stems = _normalise_stems(
         native_stems, native_rate, delivery_rate, delivery_frames

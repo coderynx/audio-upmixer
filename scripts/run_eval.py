@@ -321,6 +321,16 @@ def _retaining_separator(
                 "sample_rate": sample_rate,
                 "stems": paths,
             }
+            for field in (
+                "rate_arm",
+                "input_frame_count",
+                "separation_frame_count",
+                "output_frame_count",
+                "resampler",
+            ):
+                value = getattr(settings, field, None)
+                if value is not None:
+                    entry[field] = value
             write_report(
                 index_path,
                 {"schema_version": _STEM_INDEX_SCHEMA, "items": [*entries, entry]},
