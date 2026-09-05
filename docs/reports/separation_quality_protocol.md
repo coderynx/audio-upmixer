@@ -1,6 +1,6 @@
 # Separation quality Q00 protocol
 
-Frozen: 2026-09-04  
+Frozen: 2026-09-04
 Updated: 2026-09-05
 Status: protocol frozen; the selected real corpus is available under restricted
 research use. Category coverage and listening/promotion gates remain open.
