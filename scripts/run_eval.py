@@ -61,7 +61,6 @@ _RETAINED_SETTINGS_FIELDS = (
     "separation_frame_count",
     "output_frame_count",
     "resampler",
-    "origin_schedule",
 )
 
 
@@ -444,6 +443,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--extra-origin-samples is for direct model evaluation")
     if args.extra_origin_samples is not None and args.rate_arm is not None:
         parser.error("--extra-origin-samples cannot be combined with --rate-arm")
+    if args.extra_origin_samples is not None and (
+        args.tta or args.pitch_shift is not None
+    ):
+        parser.error(
+            "--extra-origin-samples cannot be combined with --tta or --pitch-shift"
+        )
     if args.variant == "synthetic-reference":
         if any(
             value is not None

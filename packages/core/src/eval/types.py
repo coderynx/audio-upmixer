@@ -45,7 +45,6 @@ class RunSettings:
     separation_frame_count: int | None = None
     output_frame_count: int | None = None
     resampler: str | None = None
-    origin_schedule: tuple[int, ...] | None = None
 
 
 @dataclass

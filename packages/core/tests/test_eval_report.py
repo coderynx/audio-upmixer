@@ -452,6 +452,18 @@ def test_format_report_summarizes_empty_coverage():
     assert "Per-category (mean SDR dB / fullness / bleedless):" in text
 
 
+def test_ordinary_report_does_not_add_origin_fields():
+    report = EvalReport(
+        settings=RunSettings(model="fake", sample_rate=44_100),
+        scores=[],
+    )
+
+    payload = report.to_dict()
+
+    assert "origin_provenance" not in payload
+    assert "origin_schedule" not in payload["settings"]
+
+
 def test_format_report_includes_every_effective_stage_setting():
     stage_settings = (
         SeparationSettings(

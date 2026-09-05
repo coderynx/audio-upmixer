@@ -107,11 +107,12 @@ class EvalReport:
             "item_settings": [asdict(row) for row in self.item_settings],
             "scores": [asdict(score) for score in self.scores],
             "coverage": [asdict(row) for row in self.coverage],
-            "origin_provenance": self.origin_provenance,
             "by_stem": _named_means(self.by_stem()),
             "by_category": _named_means(self.by_category()),
             "by_recording": self.recording_means(),
         }
+        if self.origin_provenance:
+            payload["origin_provenance"] = self.origin_provenance
         if paired_bootstrap is not None:
             payload["paired_bootstrap"] = paired_bootstrap
         return _validated_json(_json_safe(payload))
@@ -595,5 +596,4 @@ def format_report(report: EvalReport) -> str:
                 f"split={row.split} category={row.category} stem={row.stem}"
             )
             lines.append(f"  {row.status} {identity}: {detail}")
-
     return "\n".join(lines)
