@@ -211,6 +211,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sample_rate=args.sample_rate,
         protocol_id=_PROTOCOL_ID,
         code_revision=code_revision,
+        report_failures=True,
     )
     report.write_json(args.output_dir / "report.json")
     text = format_report(report)
@@ -218,7 +219,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(text)
     print(f"\nWrote {args.output_dir / 'report.json'}")
     print(f"Wrote {args.output_dir / 'report.txt'}")
-    return 0
+    return int(
+        any(
+            row.status in {"failed", "absent"}
+            for row in getattr(report, "coverage", ())
+        )
+    )
 
 
 if __name__ == "__main__":

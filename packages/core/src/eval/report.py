@@ -34,7 +34,10 @@ class StemScore:
 
 @dataclass
 class CoverageRow:
-    """Coverage status for one stem on one corpus item."""
+    """Coverage status for one stem on one corpus item.
+
+    ``detail`` is a concise diagnostic for failed, absent, or skipped rows.
+    """
 
     stem: str
     category: str
@@ -42,6 +45,7 @@ class CoverageRow:
     recording_id: str | None = None
     item_id: str | None = None
     split: str | None = None
+    detail: str | None = None
 
 
 @dataclass
@@ -197,6 +201,7 @@ def _grouped_means(scores: list[StemScore], key) -> dict[str, tuple[float, float
 
 
 _METRICS = ("sdr", "fullness", "bleedless")
+_COVERAGE_STATUSES = ("scored", "unavailable", "failed", "absent", "skipped")
 
 
 def _named_means(grouped: dict[str, tuple[float, float, float]]) -> dict[str, dict[str, float]]:
@@ -466,7 +471,11 @@ def format_report(report: EvalReport) -> str:
         f"Code revision: {report.code_revision}",
     ]
     if settings is None:
-        lines.append("Settings vary by item:")
+        lines.append(
+            "Settings vary by item:"
+            if report.item_settings
+            else "Settings unavailable: no item completed"
+        )
         for row in report.item_settings:
             row_settings = getattr(row, "settings", None)
             lines.append(
@@ -514,7 +523,20 @@ def format_report(report: EvalReport) -> str:
     lines.append("")
     lines.append(f"Coverage: total={len(report.coverage)}")
     lines.extend(
-        f"  {status}: {count}" for status, count in sorted(status_counts.items())
+        f"  {status}: {status_counts.get(status, 0)}"
+        for status in sorted(_COVERAGE_STATUSES)
     )
+    lines.extend(
+        f"  {status}: {status_counts[status]}"
+        for status in sorted(set(status_counts) - set(_COVERAGE_STATUSES))
+    )
+    for row in report.coverage:
+        detail = getattr(row, "detail", None)
+        if detail and row.status in {"failed", "absent", "skipped"}:
+            identity = (
+                f"recording_id={row.recording_id} item_id={row.item_id} "
+                f"split={row.split} category={row.category} stem={row.stem}"
+            )
+            lines.append(f"  {row.status} {identity}: {detail}")
 
     return "\n".join(lines)

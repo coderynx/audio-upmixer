@@ -13,6 +13,7 @@ measured here before shipping, per AGENTS.md's Knowledge Base section.
 from upmixer.eval.metrics import bleedless, fullness, sdr
 from upmixer.eval.corpus import CorpusItem, ReferenceCorpus, synthetic_corpus
 from upmixer.eval.harness import (
+    EvaluationSkipped,
     ItemRunSettings,
     RunSettings,
     evaluate_corpus,
@@ -29,6 +30,7 @@ __all__ = [
     "ReferenceCorpus",
     "synthetic_corpus",
     "RunSettings",
+    "EvaluationSkipped",
     "ItemRunSettings",
     "separate_for_eval",
     "separate_tree_for_eval",
