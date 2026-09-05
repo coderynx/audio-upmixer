@@ -9,7 +9,7 @@ stand-in without downloading model weights.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from tempfile import TemporaryDirectory
 from typing import Callable
 
@@ -26,7 +26,9 @@ from upmixer.eval.reference_targets import (
     validate_audio as _validate_audio,
     validate_mapping as _validate_mapping,
 )
+from upmixer.eval.origins import OriginEvaluationResult
 from upmixer.eval.report import CoverageRow, EvalReport, StemScore
+from upmixer.eval.types import ItemRunSettings, RunSettings
 from upmixer.separation.separator import (
     DEFAULT_MODEL,
     SeparationSettings,
@@ -47,64 +49,6 @@ SeparateFn = Callable[[str], tuple[dict[str, np.ndarray], "RunSettings"]]
 
 class EvaluationSkipped(RuntimeError):
     """Signal that an evaluation item was skipped intentionally."""
-
-
-@dataclass
-class RunSettings:
-    """Inference configuration recorded alongside every score.
-
-    Scores without settings are noise: a model swap, segment-size change, or
-    ensemble config change all alter output, so every EvalReport carries the
-    requested controls and the observed model metadata. Optional controls stay
-    ``None`` when this single-model boundary cannot resolve them.
-    """
-
-    model: str
-    sample_rate: int
-    segment_size: int | None = None
-    overlap: int | None = None
-    batch_size: int | None = None
-    ensemble_algorithm: str | None = None
-    ensemble_models: tuple[str, ...] | None = None
-    chunk_duration_s: float | None = None
-    tta: bool = False
-    pitch_shift: float | None = None
-    backend: str | None = None
-    model_arch: str | None = None
-    model_config_name: str | None = None
-    model_native_sample_rate: int | None = None
-    stage_settings: tuple[SeparationSettings, ...] = ()
-    device: str | None = None
-    input_sample_rate: int | None = None
-    separation_sample_rate: int | None = None
-    output_sample_rate: int | None = None
-    scoring_sample_rate: int | None = None
-    plan: dict[str, object] | None = None
-    stem_primary_remask: bool | None = None
-    stem_drum_remask: bool | None = None
-    stem_bleed_reduction: bool | None = None
-    stem_ensemble: bool | None = None
-    stem_silence_skip: bool | None = None
-    stem_silence_threshold_db: float | None = None
-    stem_silence_min_duration_s: float | None = None
-    stem_silence_crossfade_ms: float | None = None
-    stem_silence_pad_ms: float | None = None
-    rate_arm: str | None = None
-    input_frame_count: int | None = None
-    separation_frame_count: int | None = None
-    output_frame_count: int | None = None
-    resampler: str | None = None
-
-
-@dataclass
-class ItemRunSettings:
-    """Effective settings recorded for one corpus item."""
-
-    recording_id: str | None
-    item_id: str | None
-    split: str | None
-    category: str
-    settings: RunSettings
 
 
 def _common_stage_setting(
@@ -471,6 +415,7 @@ def evaluate_corpus(
     scores: list[StemScore] = []
     coverage: list[CoverageRow] = []
     settings_rows: list[ItemRunSettings] = []
+    origin_provenance: list[dict[str, object]] = []
     shared_settings: RunSettings | None = None
     settings_vary = False
 
@@ -479,7 +424,17 @@ def evaluate_corpus(
         statuses = {stem_name: "failed" for stem_name in item.stems}
         details: dict[str, str] = {}
         try:
-            estimate_stems, item_settings = separate_fn(item.mixture)
+            separation_result = separate_fn(item.mixture)
+            origin_result = (
+                separation_result
+                if isinstance(separation_result, OriginEvaluationResult)
+                else None
+            )
+            estimate_stems, item_settings = (
+                (origin_result.stems, origin_result.settings)
+                if origin_result is not None
+                else separation_result
+            )
             if not isinstance(estimate_stems, dict):
                 raise ValueError(
                     "returned invalid outputs"
@@ -519,6 +474,15 @@ def evaluate_corpus(
                 raise ValueError(
                     f"RunSettings sample rate {item_settings.sample_rate} does not "
                     f"match evaluation sample rate {sample_rate}"
+                )
+            if origin_result is not None:
+                origin_provenance.append(
+                    origin_result.provenance(
+                        recording_id=item.recording_id,
+                        item_id=item.item_id,
+                        split=item.split,
+                        category=item.category,
+                    )
                 )
             settings_rows.append(
                 ItemRunSettings(
@@ -596,4 +560,5 @@ def evaluate_corpus(
         protocol_id=protocol_id,
         corpus_id=corpus.corpus_id,
         code_revision=code_revision,
+        origin_provenance=origin_provenance,
     )

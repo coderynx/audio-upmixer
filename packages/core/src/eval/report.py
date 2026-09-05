@@ -12,7 +12,7 @@ import numpy as np
 from upmixer.execution import write_report
 
 if TYPE_CHECKING:
-    from upmixer.eval.harness import ItemRunSettings, RunSettings
+    from upmixer.eval.types import ItemRunSettings, RunSettings
 
 
 _ScoreKey = tuple[str, str, str, str, str | None]
@@ -59,6 +59,7 @@ class EvalReport:
     protocol_id: str | None = None
     corpus_id: str | None = None
     code_revision: str | None = None
+    origin_provenance: list[dict[str, object]] = field(default_factory=list)
 
     def by_stem(self) -> dict[str, tuple[float, float, float]]:
         """Mean (sdr, fullness, bleedless) grouped by canonical stem name."""
@@ -106,6 +107,7 @@ class EvalReport:
             "item_settings": [asdict(row) for row in self.item_settings],
             "scores": [asdict(score) for score in self.scores],
             "coverage": [asdict(row) for row in self.coverage],
+            "origin_provenance": self.origin_provenance,
             "by_stem": _named_means(self.by_stem()),
             "by_category": _named_means(self.by_category()),
             "by_recording": self.recording_means(),

@@ -14,12 +14,16 @@ from upmixer.eval.metrics import bleedless, fullness, sdr
 from upmixer.eval.corpus import CorpusItem, ReferenceCorpus, synthetic_corpus
 from upmixer.eval.harness import (
     EvaluationSkipped,
-    ItemRunSettings,
-    RunSettings,
     evaluate_corpus,
     separate_for_eval,
     separate_tree_for_eval,
 )
+from upmixer.eval.origins import (
+    OriginEvaluationResult,
+    OriginViewOutput,
+    separate_with_extra_origin,
+)
+from upmixer.eval.types import ItemRunSettings, RunSettings
 from upmixer.eval.report import CoverageRow, EvalReport, StemScore, format_report
 
 __all__ = [
@@ -32,7 +36,10 @@ __all__ = [
     "RunSettings",
     "EvaluationSkipped",
     "ItemRunSettings",
+    "OriginEvaluationResult",
+    "OriginViewOutput",
     "separate_for_eval",
+    "separate_with_extra_origin",
     "separate_tree_for_eval",
     "evaluate_corpus",
     "EvalReport",
