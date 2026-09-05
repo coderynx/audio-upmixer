@@ -369,6 +369,7 @@ class StemSeparator:
         self._model_config_sha256: str | None = None
         self._provenance_ready = False
         self._oom_fallback_attempts: list[dict[str, int | float | None]] = []
+        self._settings_observer: Callable[[SeparationSettings], None] | None = None
 
     @property
     def backend(self) -> str:
@@ -427,24 +428,33 @@ class StemSeparator:
             self._model_config_sha256 = _sha256_file(config_path)
         self._provenance_ready = True
 
-    def _settings_snapshot(self) -> SeparationSettings:
-        """Build a snapshot after inference, including resolved engine defaults."""
-        model_arch, config_name, native_sample_rate, registry_config = (
-            self._registry_details()
-        )
-        engine = self._engine
-        arch = getattr(engine, "_arch", None) or model_arch
-        device = None
-        device_name = None
-        if engine is not None:
-            try:
-                device = engine._model_device()
-                device_name = str(device)
-            except (AttributeError, RuntimeError, StopIteration):
-                pass
+    def _engine_device(
+        self, engine: object | None
+    ) -> tuple[object | None, str | None]:
+        if engine is None:
+            return None, None
+        try:
+            device = engine._model_device()
+            return device, str(device)
+        except (AttributeError, RuntimeError, StopIteration):
+            return None, None
 
+    def _effective_batch_size(
+        self, arch: str | None, device: object | None
+    ) -> int:
+        batch_size = self._batch_size
+        if (
+            device is not None
+            and getattr(device, "type", None) != "cuda"
+            and arch in {"bs_roformer", "mel_band_roformer"}
+        ):
+            batch_size = 1
+        return batch_size
+
+    def _effective_segment_size(
+        self, engine: object | None, arch: str | None, registry_config: object | None
+    ) -> int | None:
         segment_size = self._segment_size
-        overlap = self._overlap
         if engine is not None and arch != "scnet":
             # SCNet's default is a sample-domain chunk, not a frame override.
             try:
@@ -458,6 +468,33 @@ class StemSeparator:
                     segment_size = int(registry_config.default_segment_size)
                 except (AttributeError, KeyError, TypeError, ValueError):
                     pass
+        return segment_size
+
+    def _effective_attempt_settings(
+        self, engine: object | None
+    ) -> tuple[int, int | None, float | None]:
+        """Return the values actually passed through the current engine path."""
+        arch = getattr(engine, "_arch", None)
+        device, _ = self._engine_device(engine)
+        registry_config = getattr(engine, "_config", None)
+        return (
+            self._effective_batch_size(arch, device),
+            self._effective_segment_size(engine, arch, registry_config),
+            self._chunk_duration_s,
+        )
+
+    def _settings_snapshot(self) -> SeparationSettings:
+        """Build a snapshot after inference, including resolved engine defaults."""
+        model_arch, config_name, native_sample_rate, registry_config = (
+            self._registry_details()
+        )
+        engine = self._engine
+        arch = getattr(engine, "_arch", None) or model_arch
+        device, device_name = self._engine_device(engine)
+        segment_size = self._effective_segment_size(
+            engine, arch, registry_config
+        )
+        overlap = self._overlap
 
         if overlap is None:
             if arch in {"bs_roformer", "mel_band_roformer"}:
@@ -470,13 +507,7 @@ class StemSeparator:
                 except (AttributeError, KeyError, TypeError, ValueError):
                     pass
 
-        batch_size = self._batch_size
-        if (
-            device is not None
-            and getattr(device, "type", None) != "cuda"
-            and arch in {"bs_roformer", "mel_band_roformer"}
-        ):
-            batch_size = 1
+        batch_size = self._effective_batch_size(arch, device)
 
         return SeparationSettings(
             model=self._model,
@@ -626,20 +657,20 @@ class StemSeparator:
                 _, config_name, _, _ = self._registry_details()
                 self._capture_provenance(config_name)
                 self._run_settings = self._settings_snapshot()
+                if self._settings_observer is not None:
+                    self._settings_observer(self._run_settings)
                 return paths
             except Exception as exc:
                 if not _is_oom_error(exc):
                     raise
-                old_settings = (
-                    self._batch_size,
-                    self._segment_size,
-                    self._chunk_duration_s,
+                old_batch, old_segment, old_chunk = self._effective_attempt_settings(
+                    engine
                 )
                 self._oom_fallback_attempts.append(
                     {
-                        "batch_size": old_settings[0],
-                        "segment_size": old_settings[1],
-                        "chunk_duration_s": old_settings[2],
+                        "batch_size": old_batch,
+                        "segment_size": old_segment,
+                        "chunk_duration_s": old_chunk,
                     }
                 )
                 if self._batch_size > 1:
@@ -675,9 +706,9 @@ class StemSeparator:
                 _log.warning(
                     "  Separator OOM at batch=%d segment=%s chunk=%s; "
                     "retrying batch=%d segment=%s chunk=%s",
-                    old_settings[0],
-                    old_settings[1] or "model",
-                    old_settings[2] or "off",
+                    old_batch,
+                    old_segment or "model",
+                    old_chunk or "off",
                     self._batch_size,
                     self._segment_size or "model",
                     self._chunk_duration_s or "off",

@@ -112,10 +112,11 @@ class StemUpmixPipeline:
         self._separator_sr: int | None = None
         self._separator_settings: tuple[object, ...] | None = None
         self._last_separation_settings: tuple[SeparationSettings, ...] = ()
+        self._separation_settings_history: list[SeparationSettings] = []
 
     @property
     def last_separation_settings(self) -> tuple[SeparationSettings, ...]:
-        """Settings from each separator that completed the latest run."""
+        """Settings from each completed separator invocation in the latest run."""
         return self._last_separation_settings
 
     def _validated_separator_settings(self) -> tuple[object, ...]:
@@ -212,10 +213,13 @@ class StemUpmixPipeline:
     ) -> SeparationResult:
         """Read, zone-split, separate, and cache stems — no routing or mastering."""
         self._last_separation_settings = ()
+        self._separation_settings_history.clear()
         requested: list[StemSeparator] = []
 
         def _tracked_get_or_create(model: str, sep_sr: int) -> StemSeparator:
             separator = self._get_or_create_separator(model, sep_sr)
+            if hasattr(separator, "_settings_observer"):
+                separator._settings_observer = self._separation_settings_history.append
             if not any(separator is existing for existing in requested):
                 requested.append(separator)
             return separator
@@ -229,11 +233,17 @@ class StemUpmixPipeline:
                 _progress,
             )
         finally:
-            self._last_separation_settings = tuple(
-                snapshot
-                for separator in requested
-                if (snapshot := getattr(separator, "run_settings", None)) is not None
-            )
+            if self._separation_settings_history:
+                self._last_separation_settings = tuple(
+                    self._separation_settings_history
+                )
+            else:
+                self._last_separation_settings = tuple(
+                    snapshot
+                    for separator in requested
+                    if (snapshot := getattr(separator, "run_settings", None))
+                    is not None
+                )
 
     def _post_process_stems(
         self, sep: SeparationResult, _progress: Callable[[str, float], None]
