@@ -211,6 +211,36 @@ def _retaining_separator(
         sample_rate = getattr(settings, "sample_rate", None)
         if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate < 1:
             raise ValueError("retained stems require a positive settings sample rate")
+        if item.stems and not set(item.stems).issubset(stems):
+            return stems, settings
+        retained: dict[str, np.ndarray] = {}
+        try:
+            for stem_name, value in stems.items():
+                if not isinstance(stem_name, str):
+                    return stems, settings
+                raw_audio = np.asarray(value)
+                if (
+                    raw_audio.ndim != 2
+                    or not raw_audio.size
+                    or not raw_audio.shape[0]
+                    or not raw_audio.shape[1]
+                    or not np.issubdtype(raw_audio.dtype, np.number)
+                ):
+                    return stems, settings
+                audio = np.asarray(raw_audio, dtype=np.float32)
+                if not np.all(np.isfinite(audio)):
+                    return stems, settings
+                if stem_name in item.stems:
+                    info = sf.info(item.stems[stem_name])
+                    if (
+                        info.samplerate != sample_rate
+                        or info.frames != audio.shape[0]
+                        or info.channels != audio.shape[1]
+                    ):
+                        return stems, settings
+                retained[stem_name] = audio
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return stems, settings
 
         item_dir = stems_dir / f"{item_index:04d}"
         paths: dict[str, str] = {}
@@ -220,9 +250,10 @@ def _retaining_separator(
             for stem_name in sorted(stems, key=str):
                 filename = _retained_filename(str(stem_name), used_filenames)
                 destination = item_dir / filename
-                audio = np.asarray(stems[stem_name], dtype=np.float32)
                 with atomic_output_path(destination) as temporary:
-                    sf.write(str(temporary), audio, sample_rate, subtype="FLOAT")
+                    sf.write(
+                        str(temporary), retained[stem_name], sample_rate, subtype="FLOAT"
+                    )
                 paths[str(stem_name)] = destination.relative_to(output_dir).as_posix()
             entry = {
                 "index": item_index,

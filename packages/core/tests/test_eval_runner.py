@@ -331,3 +331,54 @@ def test_retain_stems_is_rejected_for_synthetic_reference(tmp_path, capsys):
 
     assert "--retain-stems requires" in capsys.readouterr().err
     assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "bad_audio",
+    [
+        lambda: np.ones(32, dtype=np.float32),
+        lambda: np.full((32, 2), np.nan, dtype=np.float32),
+    ],
+)
+def test_retain_stems_does_not_index_invalid_separator_outputs(
+    tmp_path: Path, monkeypatch, bad_audio
+):
+    runner = _load_runner()
+    corpus = _retention_corpus(tmp_path)
+    monkeypatch.setattr(
+        runner.ReferenceCorpus,
+        "from_dir",
+        classmethod(lambda _cls, _path: ReferenceCorpus(corpus.items[:1])),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_real_separator",
+        lambda _args: lambda _path: (
+            {"Vocals": bad_audio()},
+            RunSettings(model="fake", sample_rate=22_050),
+        ),
+    )
+
+    output_dir = tmp_path / "invalid"
+    assert (
+        runner.main(
+            [
+                "--corpus",
+                "licensed-test",
+                "--variant",
+                "real-model",
+                "--sample-rate",
+                "22050",
+                "--output-dir",
+                str(output_dir),
+                "--model",
+                "fake",
+                "--retain-stems",
+            ]
+        )
+        == 1
+    )
+
+    index = json.loads((output_dir / "stems/index.json").read_text(encoding="utf-8"))
+    assert index["items"] == []
+    assert not (output_dir / "stems/0000").exists()
