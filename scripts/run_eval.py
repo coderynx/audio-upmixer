@@ -31,6 +31,7 @@ from upmixer.eval import (
     separate_tree_for_eval,
     synthetic_corpus,
 )
+from upmixer.separation.stem_plan import normalize_stems
 
 
 def _positive_int(value: str) -> int:
@@ -138,7 +139,6 @@ def _fresh_output_dir(path: Path, parser: argparse.ArgumentParser) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    _fresh_output_dir(args.output_dir, parser)
     if args.variant == "production-tree" and args.model is not None:
         parser.error(
             "production-tree does not accept --model; the plan owns model selection"
@@ -158,6 +158,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         ) or args.stem_ensemble or args.tta:
             parser.error("model settings require --variant real-model")
+    if args.stems is not None:
+        try:
+            args.stems = normalize_stems(args.stems)
+        except ValueError as exc:
+            parser.error(str(exc))
+
+    _fresh_output_dir(args.output_dir, parser)
 
     corpus = (
         synthetic_corpus(args.sample_rate, str(args.output_dir / "corpus"))

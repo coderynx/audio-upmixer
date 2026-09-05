@@ -113,86 +113,59 @@ def separate_for_eval(
         (stems, settings) — canonical stem name -> (n_samples, 2) float32
         array, and the effective settings observed during inference.
     """
-    model_arch = None
-    model_config_name = None
-    model_native_sample_rate = None
-    backend = None
     if stem_ensemble:
         if model != DEFAULT_MODEL:
             raise ValueError(
                 "stem_ensemble uses the registered BS-Roformer-SW primary model"
             )
-        from upmixer.config import UpmixConfig
-        from upmixer.separation.stem_pipeline import StemUpmixPipeline
-
-        pipeline = StemUpmixPipeline(UpmixConfig(
-            output_sample_rate=sample_rate,
-            stem_batch_size=batch_size,
-            stem_segment_size=segment_size,
-            stem_chunk_duration_s=chunk_duration_s,
-            stem_overlap=overlap,
-            stem_tta=tta,
-            stem_pitch_shift=pitch_shift,
-            stem_ensemble=True,
-        ))
-        try:
-            stems = pipeline._separate(
-                mixture_path, None, lambda _message, _fraction: None
-            ).all_stems
-        finally:
-            pipeline.close()
-    else:
-        separator = StemSeparator(
-            model=model,
-            sample_rate=sample_rate,
-            batch_size=batch_size,
-            segment_size=segment_size,
-            chunk_duration_s=chunk_duration_s,
-            overlap=overlap,
-            tta=tta,
-            pitch_shift=pitch_shift,
+        return separate_tree_for_eval(
+            mixture_path,
+            sample_rate,
+            UpmixConfig(
+                output_sample_rate=sample_rate,
+                stem_batch_size=batch_size,
+                stem_segment_size=segment_size,
+                stem_chunk_duration_s=chunk_duration_s,
+                stem_overlap=overlap,
+                stem_tta=tta,
+                stem_pitch_shift=pitch_shift,
+                stem_ensemble=True,
+            ),
         )
-        try:
-            stems = separator.separate(mixture_path)
-            snapshot = getattr(separator, "run_settings", None)
-        finally:
-            separator.close()
-        if snapshot is None:
-            raise RuntimeError(
-                "StemSeparator completed without a run-settings snapshot"
-            )
-        settings = RunSettings(
-            model=snapshot.model,
-            sample_rate=snapshot.sample_rate,
-            segment_size=snapshot.segment_size,
-            overlap=snapshot.overlap,
-            batch_size=snapshot.batch_size,
-            chunk_duration_s=snapshot.chunk_duration_s,
-            tta=snapshot.tta,
-            pitch_shift=snapshot.pitch_shift,
-            backend=snapshot.backend,
-            model_arch=snapshot.model_arch,
-            model_config_name=snapshot.model_config_name,
-            model_native_sample_rate=snapshot.model_native_sample_rate,
-            stage_settings=(snapshot,),
-            device=snapshot.device,
-        )
-        return stems, settings
-    settings = RunSettings(
+    separator = StemSeparator(
         model=model,
         sample_rate=sample_rate,
-        segment_size=segment_size,
         batch_size=batch_size,
-        overlap=overlap,
-        ensemble_algorithm=ENSEMBLE_ALGORITHM if stem_ensemble else None,
-        ensemble_models=(model, MODEL_ENSEMBLE) if stem_ensemble else None,
+        segment_size=segment_size,
         chunk_duration_s=chunk_duration_s,
+        overlap=overlap,
         tta=tta,
         pitch_shift=pitch_shift,
-        backend=backend,
-        model_arch=model_arch,
-        model_config_name=model_config_name,
-        model_native_sample_rate=model_native_sample_rate,
+    )
+    try:
+        stems = separator.separate(mixture_path)
+        snapshot = getattr(separator, "run_settings", None)
+    finally:
+        separator.close()
+    if snapshot is None:
+        raise RuntimeError(
+            "StemSeparator completed without a run-settings snapshot"
+        )
+    settings = RunSettings(
+        model=snapshot.model,
+        sample_rate=snapshot.sample_rate,
+        segment_size=snapshot.segment_size,
+        overlap=snapshot.overlap,
+        batch_size=snapshot.batch_size,
+        chunk_duration_s=snapshot.chunk_duration_s,
+        tta=snapshot.tta,
+        pitch_shift=snapshot.pitch_shift,
+        backend=snapshot.backend,
+        model_arch=snapshot.model_arch,
+        model_config_name=snapshot.model_config_name,
+        model_native_sample_rate=snapshot.model_native_sample_rate,
+        stage_settings=(snapshot,),
+        device=snapshot.device,
     )
     return stems, settings
 

@@ -16,8 +16,9 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from upmixer.config import UpmixConfig
 from upmixer.eval.corpus import synthetic_corpus
-from upmixer.eval.harness import evaluate_corpus, separate_for_eval
+from upmixer.eval.harness import RunSettings, evaluate_corpus, separate_for_eval
 from upmixer.eval.report import EvalReport, StemScore, format_report
 from upmixer.separation.separator import DEFAULT_MODEL, SeparationSettings
 
@@ -127,6 +128,47 @@ def test_separate_for_eval_records_completed_run_settings_without_registry_reloa
     assert settings.batch_size == 3
     assert settings.device == "cpu"
     assert settings.stage_settings == (separator.run_settings,)
+
+
+def test_separate_for_eval_ensemble_uses_public_tree_without_model_loading():
+    expected_settings = RunSettings(model="production-tree", sample_rate=44_100)
+    captured = {}
+
+    def fake_tree(mixture_path, sample_rate, config):
+        captured.update(
+            mixture_path=mixture_path,
+            sample_rate=sample_rate,
+            config=config,
+        )
+        return {"Bass": np.zeros((8, 2), dtype=np.float32)}, expected_settings
+
+    with patch("upmixer.eval.harness.separate_tree_for_eval", fake_tree):
+        stems, settings = separate_for_eval(
+            "mixture.wav",
+            sample_rate=44_100,
+            batch_size=2,
+            segment_size=128,
+            chunk_duration_s=30.0,
+            overlap=4,
+            stem_ensemble=True,
+            tta=True,
+            pitch_shift=0.75,
+        )
+
+    assert stems["Bass"].shape == (8, 2)
+    assert settings is expected_settings
+    assert captured["mixture_path"] == "mixture.wav"
+    assert captured["sample_rate"] == 44_100
+    config = captured["config"]
+    assert isinstance(config, UpmixConfig)
+    assert config.output_sample_rate == 44_100
+    assert config.stem_batch_size == 2
+    assert config.stem_segment_size == 128
+    assert config.stem_chunk_duration_s == 30.0
+    assert config.stem_overlap == 4
+    assert config.stem_ensemble is True
+    assert config.stem_tta is True
+    assert config.stem_pitch_shift == 0.75
 
 
 def test_format_report_accepts_legacy_settings_shape():

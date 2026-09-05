@@ -128,6 +128,7 @@ def test_production_tree_routes_runner_options_without_model_loading(tmp_path):
             "vocals,bass",
         ]
     )
+    args.stems = runner.normalize_stems(args.stems)
     captured = {}
 
     def fake_tree(mixture_path, sample_rate, config):
@@ -145,7 +146,7 @@ def test_production_tree_routes_runner_options_without_model_loading(tmp_path):
     assert captured["mixture_path"] == "mix.wav"
     assert captured["sample_rate"] == 48000
     assert config.output_sample_rate == 48000
-    assert config.stems == ["vocals", "bass"]
+    assert config.stems == ["Vocals", "Bass"]
     assert config.stem_batch_size == 2
     assert config.stem_segment_size == 128
     assert config.stem_chunk_duration_s == 30.0
@@ -173,6 +174,7 @@ def test_production_tree_rejects_model_option(tmp_path, capsys):
         )
 
     assert "does not accept --model" in capsys.readouterr().err
+    assert not (tmp_path / "model").exists()
 
 
 def test_stems_option_is_restricted_to_production_tree(tmp_path, capsys):
@@ -193,3 +195,26 @@ def test_stems_option_is_restricted_to_production_tree(tmp_path, capsys):
         )
 
     assert "requires --variant production-tree" in capsys.readouterr().err
+    assert not (tmp_path / "stems").exists()
+
+
+def test_unknown_stem_is_rejected_before_output_or_corpus_creation(tmp_path, capsys):
+    runner = _load_runner()
+    output_dir = tmp_path / "unknown"
+
+    with pytest.raises(SystemExit):
+        runner.main(
+            [
+                "--corpus",
+                "synthetic",
+                "--variant",
+                "production-tree",
+                "--stems",
+                "vocals,theremin",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+
+    assert "Unknown stem name 'theremin'" in capsys.readouterr().err
+    assert not output_dir.exists()
