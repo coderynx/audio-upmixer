@@ -13,7 +13,7 @@ This is the resumable implementation handoff for the frozen
 | Key | Value |
 | --- | --- |
 | Research baseline | `2877054` (`287705467f65a2bdc52b09ceffeccd4f17821548`) |
-| Current code revision | `ebb6ba8` (`ebb6ba8213886a1fb3a08bd566a6e912970d9684`) |
+| Current code revision | `4b0e1e0` (`4b0e1e07e1852707b05811c3accd7bebfa06fdf0`) |
 | Protocol | `upmixer-separation-q00-v1` |
 | Synthetic corpus | `upmixer-synthetic-v1` |
 | Licensed split | unavailable; no real split is claimed |
@@ -68,26 +68,40 @@ Q01 remains evaluation plumbing only. The slices currently present are:
 | Q01a | `ed73831` | Stable recording/item/split identities; strict required-estimate, rate, shape, channel, length, finite-value, and settings validation; public metric-helper truncation preserved. |
 | Q01b | `55e4fa6` | Actual model metadata and TTA/pitch settings are recorded while legacy report formatting and public imports remain compatible. |
 | Q01c | `98ed432` | Explicit unavailable references and identity-bearing coverage rows; manifest parsing and unavailable-only items report coverage without fake metric rows; required/scored failures remain strict. |
-| Q01d | `6aadb85` + correctness follow-up `ebb6ba8` | Recording means and fixed-seed paired bootstrap over recording groups, with split-aware identities/groups, unavailable coverage, and per-group `n_recordings`, status, and `None` CI bounds. Later Q01 serialization, diagnostics, and runner work remains. |
+| Q01d | `6aadb85` + correctness follow-up `ebb6ba8` | Recording means and fixed-seed paired bootstrap over recording groups, with split-aware identities/groups, unavailable coverage, and per-group `n_recordings`, status, and `None` CI bounds. |
+| Serialization | `cbe4f5f` | Versioned `EvalReport` JSON and readable text serialization through the public report APIs. |
+| Coverage counts | `42e7aaa` | Report-level scored/unavailable coverage counts are serialized and formatted. |
+| Offline runner | `789ed99` + `7050407` | Stdlib runner accepts corpus/variant/output arguments, requires fresh output, reproduces synthetic-reference reports, documents real-model smoke, and rejects non-finite/non-positive chunk and pitch settings. |
+| Effective settings | `fc446d5` + `c60ba68` + `4b0e1e0` | Separator snapshots capture resolved settings; the public pipeline retains ordered settings across the requested tree and reports effective batch/segment behavior. |
 
 Q01 source and focused test files are
-`packages/core/src/eval/{__init__,corpus,harness,report}.py` and
-`packages/core/tests/{test_eval_boundaries,test_eval_harness,test_eval_report}.py`.
+`packages/core/src/eval/{__init__,corpus,harness,report}.py`,
+`packages/core/src/separation/{separator,stem_pipeline}.py`, and
+`scripts/run_eval.py`, with focused coverage in
+`packages/core/tests/{test_eval_boundaries,test_eval_harness,test_eval_metrics,test_eval_report,test_eval_runner,test_batch_separation,test_separator_optimization,test_stem_prepare}.py`.
 The handoff evidence is:
 
-- Q01a focused boundary/metric checks: `24 passed`; full core: `1204 passed,
-  38 deselected`.
-- Through Q01c: eval slice `30 passed, 1 deselected`; full core
-  `1210 passed, 38 deselected`; Ruff and `git diff --check` passed.
-- Q01d-focused check after the correctness follow-up: `40 passed, 1 deselected`.
-  Full core after Q01d has not been rerun in this handoff.
+- Root Q01 focused suite:
+  `uv run pytest packages/core/tests/test_separator_optimization.py packages/core/tests/test_batch_separation.py packages/core/tests/test_stem_prepare.py packages/core/tests/test_eval_runner.py packages/core/tests/test_eval_report.py packages/core/tests/test_eval_boundaries.py packages/core/tests/test_eval_harness.py packages/core/tests/test_eval_metrics.py -q`
+  reported `93 passed, 1 deselected` (14 existing warnings; 10.38s).
+- Offline runner artifact:
+  `uv run python scripts/run_eval.py --corpus synthetic --variant synthetic-reference --sample-rate 44100 --output-dir /tmp/upmixer-q01-synthetic.54jqlf`
+  wrote schema v1 with `8` scores and `8` coverage rows, `4` stems and `3`
+  categories; all `8` coverage rows were `scored`.
+- Prior real-model synthetic smoke:
+  `uv run pytest packages/core/tests -m perf -k eval -s` reported `1 passed,
+  1247 deselected` in `41.12s` on MPS with `BS-Roformer-SW.ckpt` at 44.1 kHz.
+  The existing metric table below is retained for that smoke only.
+- The full core suite is pending after the current Q01 slices; no full-suite
+  result is claimed here.
 
-No production separation algorithm, default, cache, store, or cross-package
-API was changed. Existing constructors retain compatible defaults, and the
-strict boundary stays at `evaluate_corpus`; rollback is by reverting the
-individual eval slice commits.
+Q01 remains evaluation plumbing only. The full-tree adapter through public
+`StemUpmixPipeline.prepare_stems` and `PlainStemStore`, richer stage/plan
+provenance, and failure/skip summaries remain. No production audio algorithm or
+default changed; the strict boundary stays at `evaluate_corpus` and existing
+public constructors/imports retain compatible defaults.
 
-## Recorded synthetic smoke
+## Prior real-model synthetic smoke metrics
 
 The recorded handoff invocation was:
 
@@ -122,14 +136,15 @@ claim an optimization or a quality change.
 
 ## Next eligible work and restart
 
-1. Finish and validate the remaining Q01 slices, including serialization,
-   diagnostics, and the corpus/variant runner, then record their exact command
-   and results.
-2. Run Q02 deterministic incumbent/candidate regression checks against the Q01
+1. Finish and validate the remaining Q01 full-tree adapter, richer provenance,
+   and failure/skip summaries, then record their exact commands and results.
+2. Run `uv run pytest packages/core/tests -q` after the pending Q01 slices are
+   green; this full-suite result is still pending.
+3. Run Q02 deterministic incumbent/candidate regression checks against the Q01
    interfaces.
-3. Run Q03 full-tree baseline and listening/defect review once the two Q00
+4. Run Q03 full-tree baseline and listening/defect review once the two Q00
    gates are supplied; keep the status blocked if either is still missing.
-4. Start Q10 only after Q03, with duplicate-forward equivalence plus measured
+5. Start Q10 only after Q03, with duplicate-forward equivalence plus measured
    runtime and peak-memory evidence.
 
 Resume from the shared branch and preserve any in-progress eval work:
@@ -139,9 +154,10 @@ git switch feature/improve-stem-separation
 git log --oneline --decorate -6
 git status --short
 uv run pytest packages/core/tests/test_eval_boundaries.py packages/core/tests/test_eval_harness.py packages/core/tests/test_eval_metrics.py packages/core/tests/test_eval_report.py -q
+uv run python scripts/run_eval.py --corpus synthetic --variant synthetic-reference --sample-rate 44100 --output-dir /tmp/upmixer-q01-synthetic-next
 uv run pytest packages/core/tests -m perf -k eval -s
 ```
 
 Run `uv run pytest packages/core/tests -q` after the pending Q01 slices are
-green, then repeat the protocol smoke and record the actual settings, metrics,
-runtime, and peak memory in a new dated report.
+green, then repeat the runner and protocol smoke and record the actual settings,
+metrics, runtime, and peak memory in a new dated report.
