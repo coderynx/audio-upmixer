@@ -417,6 +417,31 @@ def _validate_bootstrap_args(n_resamples: int, confidence: float, seed: int) -> 
         raise ValueError("seed must be a non-negative integer")
 
 
+def _format_settings(settings: object, *, include_ensemble: bool = False) -> str:
+    text = (
+        f"model={getattr(settings, 'model', None)} "
+        f"sample_rate={getattr(settings, 'sample_rate', None)} "
+        f"segment_size={getattr(settings, 'segment_size', None)} "
+        f"overlap={getattr(settings, 'overlap', None)} "
+        f"batch_size={getattr(settings, 'batch_size', None)} "
+        f"chunk_duration_s={getattr(settings, 'chunk_duration_s', None)} "
+        f"tta={getattr(settings, 'tta', None)} "
+        f"pitch_shift={getattr(settings, 'pitch_shift', None)} "
+        f"backend={getattr(settings, 'backend', None)} "
+        f"model_arch={getattr(settings, 'model_arch', None)} "
+        f"model_config_name={getattr(settings, 'model_config_name', None)} "
+        "model_native_sample_rate="
+        f"{getattr(settings, 'model_native_sample_rate', None)} "
+        f"device={getattr(settings, 'device', None)}"
+    )
+    if include_ensemble:
+        text += (
+            f" ensemble_algorithm={getattr(settings, 'ensemble_algorithm', None)}"
+            f" ensemble_models={getattr(settings, 'ensemble_models', None)}"
+        )
+    return text
+
+
 def format_report(report: EvalReport) -> str:
     """Render a report as metric tables followed by coverage counts.
 
@@ -424,24 +449,12 @@ def format_report(report: EvalReport) -> str:
     and prefixes the table with the recorded controls and model metadata.
     """
     settings = report.settings
+    stage_settings = getattr(settings, "stage_settings", ()) or ()
     lines = [
-        (
-            f"Settings: model={getattr(settings, 'model', None)} "
-            f"sample_rate={getattr(settings, 'sample_rate', None)} "
-            f"segment_size={getattr(settings, 'segment_size', None)} "
-            f"overlap={getattr(settings, 'overlap', None)} "
-            f"batch_size={getattr(settings, 'batch_size', None)} "
-            f"chunk_duration_s={getattr(settings, 'chunk_duration_s', None)} "
-            f"tta={getattr(settings, 'tta', None)} "
-            f"pitch_shift={getattr(settings, 'pitch_shift', None)} "
-            f"backend={getattr(settings, 'backend', None)} "
-            f"model_arch={getattr(settings, 'model_arch', None)} "
-            f"model_config_name={getattr(settings, 'model_config_name', None)} "
-            "model_native_sample_rate="
-            f"{getattr(settings, 'model_native_sample_rate', None)} "
-            f"device={getattr(settings, 'device', None)} "
-            f"ensemble_algorithm={getattr(settings, 'ensemble_algorithm', None)} "
-            f"ensemble_models={getattr(settings, 'ensemble_models', None)}"
+        f"Settings: {_format_settings(settings, include_ensemble=True)}",
+        *(
+            f"Stage {index}: {_format_settings(stage)}"
+            for index, stage in enumerate(stage_settings, 1)
         ),
         "",
         "Per-stem (mean SDR dB / fullness / bleedless):",

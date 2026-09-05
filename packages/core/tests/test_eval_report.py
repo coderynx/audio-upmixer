@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 
 from upmixer.eval.report import CoverageRow, EvalReport, StemScore, format_report
+from upmixer.eval.harness import RunSettings
+from upmixer.separation.separator import SeparationSettings
 
 
 def _score(
@@ -448,6 +450,62 @@ def test_format_report_summarizes_empty_coverage():
     assert "Coverage: total=0" in text
     assert "Per-stem (mean SDR dB / fullness / bleedless):" in text
     assert "Per-category (mean SDR dB / fullness / bleedless):" in text
+
+
+def test_format_report_includes_every_effective_stage_setting():
+    stage_settings = (
+        SeparationSettings(
+            model="first.ckpt",
+            sample_rate=44_100,
+            batch_size=2,
+            segment_size=128,
+            chunk_duration_s=30.0,
+            overlap=4,
+            tta=True,
+            pitch_shift=0.75,
+            backend="cpu",
+            model_arch="bs_roformer",
+            model_config_name="first-config",
+            model_native_sample_rate=44_100,
+            device="cpu",
+        ),
+        SeparationSettings(
+            model="second.ckpt",
+            sample_rate=48_000,
+            batch_size=1,
+            segment_size=None,
+            chunk_duration_s=None,
+            overlap=2,
+            tta=False,
+            pitch_shift=None,
+            backend="mps",
+            model_arch="scnet",
+            model_config_name="second-config",
+            model_native_sample_rate=48_000,
+            device="mps:0",
+        ),
+    )
+    report = _report(
+        _score(None, None, 1.0),
+        settings=RunSettings(
+            model="production-tree",
+            sample_rate=44_100,
+            stage_settings=stage_settings,
+        ),
+    )
+
+    lines = [line for line in format_report(report).splitlines() if line.startswith("Stage ")]
+
+    assert lines == [
+        "Stage 1: model=first.ckpt sample_rate=44100 segment_size=128 overlap=4 "
+        "batch_size=2 chunk_duration_s=30.0 tta=True pitch_shift=0.75 backend=cpu "
+        "model_arch=bs_roformer model_config_name=first-config "
+        "model_native_sample_rate=44100 device=cpu",
+        "Stage 2: model=second.ckpt sample_rate=48000 segment_size=None overlap=2 "
+        "batch_size=1 chunk_duration_s=None tta=False pitch_shift=None backend=mps "
+        "model_arch=scnet model_config_name=second-config "
+        "model_native_sample_rate=48000 device=mps:0",
+    ]
 
 
 @pytest.mark.parametrize(
