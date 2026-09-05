@@ -9,17 +9,27 @@ stand-in without downloading model weights.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from tempfile import TemporaryDirectory
 from typing import Callable
 
 import numpy as np
 import soundfile as sf
 
+from upmixer.config import UpmixConfig
 from upmixer.eval.corpus import ReferenceCorpus
 from upmixer.eval.metrics import bleedless, fullness, sdr
 from upmixer.eval.report import CoverageRow, EvalReport, StemScore
-from upmixer.separation.separator import DEFAULT_MODEL, StemSeparator
-from upmixer.separation.stem_plan import ENSEMBLE_ALGORITHM, MODEL_ENSEMBLE
+from upmixer.separation.separator import (
+    DEFAULT_MODEL,
+    SeparationSettings,
+    StemSeparator,
+)
+from upmixer.separation.stem_plan import (
+    ENSEMBLE_ALGORITHM,
+    MODEL_ENSEMBLE,
+    MODEL_PRIMARY,
+)
 
 SeparateFn = Callable[[str], tuple[dict[str, np.ndarray], "RunSettings"]]
 
@@ -57,6 +67,7 @@ class RunSettings:
     model_arch: str | None = None
     model_config_name: str | None = None
     model_native_sample_rate: int | None = None
+    stage_settings: tuple[SeparationSettings, ...] = ()
 
 
 def separate_for_eval(
@@ -159,6 +170,72 @@ def separate_for_eval(
         model_native_sample_rate=model_native_sample_rate,
     )
     return stems, settings
+
+
+def separate_tree_for_eval(
+    mixture_path: str,
+    sample_rate: int,
+    config: UpmixConfig,
+) -> tuple[dict[str, np.ndarray], RunSettings]:
+    """Run the production stem tree and return its prepared stem audio.
+
+    The pipeline's public preparation method returns a stem summary while its
+    plain stem store owns the actual arrays.  Evaluation runs therefore use a
+    fresh, isolated store and disable every cache/input shortcut before
+    reading the store back.
+    """
+    from upmixer.separation.stem_pipeline import StemUpmixPipeline
+    from upmixer.separation.stem_store import PlainStemStore
+
+    with TemporaryDirectory(prefix="upmixer_eval_stems_") as stem_output_dir:
+        eval_config = replace(
+            config,
+            stem_cache_dir=None,
+            stem_input_dir=None,
+            stem_output_dir=stem_output_dir,
+        )
+        with StemUpmixPipeline(eval_config) as pipeline:
+            result = pipeline.prepare_stems(mixture_path)
+            loaded = PlainStemStore(stem_output_dir).load()
+            stage_settings = tuple(pipeline.last_separation_settings)
+
+        if loaded is None:
+            raise RuntimeError(
+                f"evaluation stem store is missing or unreadable: {stem_output_dir}"
+            )
+        all_stems, stored_sample_rate = loaded
+        if stored_sample_rate != sample_rate:
+            raise ValueError(
+                f"stem store sample rate {stored_sample_rate} does not match "
+                f"evaluation sample rate {sample_rate}"
+            )
+        requested_stems = frozenset(result.stems or ())
+        stems = {
+            key: audio
+            for key, audio in all_stems.items()
+            if key.split("@", 1)[0] in requested_stems
+        }
+        if not stems:
+            requested = ", ".join(sorted(requested_stems)) or "none"
+            raise RuntimeError(
+                f"evaluation stem store has no requested stems (requested: {requested})"
+            )
+
+    return stems, RunSettings(
+        model="production-tree",
+        sample_rate=sample_rate,
+        batch_size=config.stem_batch_size,
+        segment_size=config.stem_segment_size,
+        chunk_duration_s=config.stem_chunk_duration_s,
+        overlap=config.stem_overlap,
+        ensemble_algorithm=ENSEMBLE_ALGORITHM if config.stem_ensemble else None,
+        ensemble_models=(MODEL_PRIMARY, MODEL_ENSEMBLE)
+        if config.stem_ensemble
+        else None,
+        tta=config.stem_tta,
+        pitch_shift=config.stem_pitch_shift,
+        stage_settings=stage_settings,
+    )
 
 
 def evaluate_corpus(
