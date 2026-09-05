@@ -189,6 +189,7 @@ def _retaining_separator(
     separate_fn: Callable,
     corpus: ReferenceCorpus,
     output_dir: Path,
+    evaluation_sample_rate: int,
 ) -> Callable:
     """Persist successful separator returns while evaluation advances in order."""
     stems_dir = output_dir / "stems"
@@ -208,9 +209,13 @@ def _retaining_separator(
         stems, settings = separate_fn(mixture_path)
         if not isinstance(stems, dict) or not stems:
             return stems, settings
-        sample_rate = getattr(settings, "sample_rate", None)
+        if not isinstance(settings, RunSettings):
+            return stems, settings
+        sample_rate = settings.sample_rate
         if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate < 1:
             raise ValueError("retained stems require a positive settings sample rate")
+        if sample_rate != evaluation_sample_rate:
+            return stems, settings
         if item.stems and not set(item.stems).issubset(stems):
             return stems, settings
         retained: dict[str, np.ndarray] = {}
@@ -320,7 +325,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         separate_fn = _real_separator(args)
     if args.retain_stems:
-        separate_fn = _retaining_separator(separate_fn, corpus, args.output_dir)
+        separate_fn = _retaining_separator(
+            separate_fn, corpus, args.output_dir, args.sample_rate
+        )
 
     report = evaluate_corpus(
         corpus,

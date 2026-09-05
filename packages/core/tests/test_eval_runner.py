@@ -382,3 +382,28 @@ def test_retain_stems_does_not_index_invalid_separator_outputs(
     index = json.loads((output_dir / "stems/index.json").read_text(encoding="utf-8"))
     assert index["items"] == []
     assert not (output_dir / "stems/0000").exists()
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [object(), RunSettings(model="fake", sample_rate=48_000)],
+)
+def test_retain_stems_does_not_index_invalid_settings(tmp_path: Path, settings):
+    runner = _load_runner()
+    corpus = _retention_corpus(tmp_path)
+    output_dir = tmp_path / "invalid-settings"
+    retaining = runner._retaining_separator(
+        lambda _path: (
+            {"Vocals": np.zeros((32, 2), dtype=np.float32)},
+            settings,
+        ),
+        ReferenceCorpus(corpus.items[:1]),
+        output_dir,
+        22_050,
+    )
+
+    retaining(corpus.items[0].mixture)
+
+    index = json.loads((output_dir / "stems/index.json").read_text(encoding="utf-8"))
+    assert index["items"] == []
+    assert not (output_dir / "stems/0000").exists()
