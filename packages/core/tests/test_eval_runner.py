@@ -263,6 +263,7 @@ def test_retain_stems_indexes_completed_items_without_copying_corpus_audio(tmp_p
         return {"Vocals": audio}, RunSettings(
             model="fake",
             sample_rate=22_050,
+            model_native_sample_rate=44_100,
             input_sample_rate=44_100,
             separation_sample_rate=22_050,
             output_sample_rate=48_000,
@@ -305,6 +306,7 @@ def test_retain_stems_indexes_completed_items_without_copying_corpus_audio(tmp_p
         field: index["items"][0][field]
         for field in (
             "model",
+            "model_native_sample_rate",
             "input_sample_rate",
             "separation_sample_rate",
             "output_sample_rate",
@@ -317,6 +319,7 @@ def test_retain_stems_indexes_completed_items_without_copying_corpus_audio(tmp_p
         )
     } == {
         "model": "fake",
+        "model_native_sample_rate": 44_100,
         "input_sample_rate": 44_100,
         "separation_sample_rate": 22_050,
         "output_sample_rate": 48_000,
@@ -379,6 +382,7 @@ def test_retain_stems_keeps_extra_terminal_outputs(tmp_path):
         field not in index["items"][0]
         for field in (
             "input_sample_rate",
+            "model_native_sample_rate",
             "separation_sample_rate",
             "output_sample_rate",
             "scoring_sample_rate",

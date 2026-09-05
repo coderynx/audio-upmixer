@@ -49,6 +49,7 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _STEM_INDEX_SCHEMA = 1
 _RETAINED_SETTINGS_FIELDS = (
     "model",
+    "model_native_sample_rate",
     "input_sample_rate",
     "separation_sample_rate",
     "output_sample_rate",
