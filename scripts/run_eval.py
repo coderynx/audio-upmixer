@@ -192,6 +192,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError as exc:
             parser.error(str(exc))
 
+    code_revision = _git_revision()
     _fresh_output_dir(args.output_dir, parser)
 
     corpus = (
@@ -209,7 +210,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         separate_fn,
         sample_rate=args.sample_rate,
         protocol_id=_PROTOCOL_ID,
-        code_revision=_git_revision(),
+        code_revision=code_revision,
     )
     report.write_json(args.output_dir / "report.json")
     text = format_report(report)

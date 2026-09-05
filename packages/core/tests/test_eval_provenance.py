@@ -113,3 +113,43 @@ def test_runner_revision_marks_dirty_head():
 
     with patch.object(runner.subprocess, "run", side_effect=responses):
         assert runner._git_revision() == "0123456789abcdef-dirty"
+
+
+def test_runner_captures_revision_before_creating_output(tmp_path):
+    runner = _load_runner()
+    output_dir = tmp_path / "eval"
+    observed = {}
+
+    def fake_revision():
+        observed["output_exists_at_revision"] = output_dir.exists()
+        return "0123456789abcdef"
+
+    def fake_evaluate(*_args, **kwargs):
+        observed["code_revision"] = kwargs["code_revision"]
+        return SimpleNamespace(write_json=lambda _path: None)
+
+    with (
+        patch.object(runner, "_git_revision", side_effect=fake_revision),
+        patch.object(
+            runner,
+            "synthetic_corpus",
+            return_value=SimpleNamespace(items=[]),
+        ),
+        patch.object(runner, "evaluate_corpus", side_effect=fake_evaluate),
+        patch.object(runner, "format_report", return_value="report"),
+    ):
+        assert runner.main(
+            [
+                "--corpus",
+                "synthetic",
+                "--variant",
+                "synthetic-reference",
+                "--output-dir",
+                str(output_dir),
+            ]
+        ) == 0
+
+    assert observed == {
+        "output_exists_at_revision": False,
+        "code_revision": "0123456789abcdef",
+    }
