@@ -47,6 +47,18 @@ from upmixer.separation.separator import DEFAULT_MODEL
 _PROTOCOL_ID = "upmixer-separation-q00-v1"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _STEM_INDEX_SCHEMA = 1
+_RETAINED_SETTINGS_FIELDS = (
+    "model",
+    "input_sample_rate",
+    "separation_sample_rate",
+    "output_sample_rate",
+    "scoring_sample_rate",
+    "rate_arm",
+    "input_frame_count",
+    "separation_frame_count",
+    "output_frame_count",
+    "resampler",
+)
 
 
 def _positive_int(value: str) -> int:
@@ -321,13 +333,7 @@ def _retaining_separator(
                 "sample_rate": sample_rate,
                 "stems": paths,
             }
-            for field in (
-                "rate_arm",
-                "input_frame_count",
-                "separation_frame_count",
-                "output_frame_count",
-                "resampler",
-            ):
+            for field in _RETAINED_SETTINGS_FIELDS:
                 value = getattr(settings, field, None)
                 if value is not None:
                     entry[field] = value

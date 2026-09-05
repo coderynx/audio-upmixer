@@ -21,7 +21,11 @@ from upmixer.eval.rate_experiment import (
 )
 from upmixer.eval.report import EvalReport, StemScore, format_report
 from upmixer.resample import resample_channels
-from upmixer.separation.stem_plan import MODEL_ENSEMBLE, MODEL_PRIMARY
+from upmixer.separation.stem_plan import (
+    MODEL_ENSEMBLE,
+    MODEL_PRIMARY,
+    resolve_separation_plan,
+)
 
 
 def _load_runner():
@@ -315,6 +319,86 @@ def test_terminal_public_stems_exclude_consumed_parents(
     )
 
     assert set(terminal) == {f"{name}@front" for name in expected}
+
+
+def test_terminal_public_stems_keeps_crowd_and_drops_consumed_drums_parent():
+    config = UpmixConfig(stems=["Crowd", "Kick"])
+    plan = resolve_separation_plan(["Crowd", "Kick"])
+    assert [task.input_source for task in plan.tasks] == [
+        "original",
+        "_crowd_other",
+        "_deux_inst",
+        "Drums",
+    ]
+    audio = np.zeros((8, 2), dtype=np.float32)
+    stems = {
+        f"{name}@front": audio
+        for task in plan.tasks
+        for name in task.output_stems
+    }
+
+    terminal = _terminal_public_stems(stems, config)
+
+    assert "Crowd@front" in terminal
+    assert "Drums@front" not in terminal
+    assert "_crowd_other@front" not in terminal
+    assert set(terminal) == {
+        "Crowd@front",
+        "Vocals@front",
+        "Bass@front",
+        "Guitar@front",
+        "Piano@front",
+        "Other@front",
+        "Kick@front",
+        "Snare@front",
+        "Toms@front",
+        "Hi-Hat@front",
+        "Ride@front",
+        "Crash@front",
+    }
+
+
+def test_terminal_public_stems_keeps_scnet_fused_bass_and_drops_drums_parent():
+    config = UpmixConfig(stems=["Bass", "Kick"], stem_ensemble=True)
+    plan = resolve_separation_plan(["Bass", "Kick"], stem_ensemble=True)
+    assert plan.tasks[1].ensemble_models == (MODEL_ENSEMBLE,)
+    assert plan.tasks[1].ensemble_stems == frozenset({"Bass", "Drums"})
+    fused_bass = np.full((8, 2), 0.5, dtype=np.float32)
+    audio = np.zeros((8, 2), dtype=np.float32)
+    stems = {
+        "Vocals@front": audio,
+        "Bass@front": fused_bass,
+        "Drums@front": audio,
+        "Guitar@front": audio,
+        "Piano@front": audio,
+        "Other@front": audio,
+        "Kick@front": audio,
+        "Snare@front": audio,
+        "Toms@front": audio,
+        "Hi-Hat@front": audio,
+        "Ride@front": audio,
+        "Crash@front": audio,
+        "_deux_inst@front": audio,
+    }
+
+    terminal = _terminal_public_stems(stems, config)
+
+    assert terminal["Bass@front"] is fused_bass
+    assert "Drums@front" not in terminal
+    assert "_deux_inst@front" not in terminal
+    assert set(terminal) == {
+        "Vocals@front",
+        "Bass@front",
+        "Guitar@front",
+        "Piano@front",
+        "Other@front",
+        "Kick@front",
+        "Snare@front",
+        "Toms@front",
+        "Hi-Hat@front",
+        "Ride@front",
+        "Crash@front",
+    }
 
 
 @pytest.mark.parametrize("rate_arm", ["delivery", "native"])
