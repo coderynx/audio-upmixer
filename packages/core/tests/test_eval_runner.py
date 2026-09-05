@@ -60,6 +60,9 @@ def test_synthetic_runner_writes_reproducible_report_and_text(tmp_path):
     assert first_payload == second_payload
     assert first_payload["schema_version"] == 1
     assert first_payload["settings"]["model"] == "synthetic-reference"
+    assert first_payload["protocol_id"] == "upmixer-separation-q00-v1"
+    assert first_payload["corpus_id"] == "upmixer-synthetic-v1"
+    assert first_payload["code_revision"]
     assert first_payload["scores"]
 
     report_text = (first_dir / "report.txt").read_text(encoding="utf-8")

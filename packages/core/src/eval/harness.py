@@ -242,6 +242,9 @@ def evaluate_corpus(
     corpus: ReferenceCorpus,
     separate_fn: SeparateFn,
     sample_rate: int,
+    *,
+    protocol_id: str | None = None,
+    code_revision: str | None = None,
 ) -> EvalReport:
     """Score a separation run over every item in a corpus.
 
@@ -257,6 +260,8 @@ def evaluate_corpus(
             ``functools.partial``) for real inference, or a test double.
         sample_rate: Sample rate of the reference audio (used for the
             magnitude-STFT fullness/bleedless computation).
+        protocol_id: Optional evaluation protocol identifier.
+        code_revision: Optional exact code revision identifier.
 
     Returns:
         EvalReport with one StemScore per (item, shared stem), one effective
@@ -371,4 +376,7 @@ def evaluate_corpus(
         scores=scores,
         coverage=coverage,
         item_settings=settings_rows,
+        protocol_id=protocol_id,
+        corpus_id=corpus.corpus_id,
+        code_revision=code_revision,
     )

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import subprocess
 from functools import partial
 from pathlib import Path
 from typing import Callable, Sequence
@@ -32,6 +33,9 @@ from upmixer.eval import (
     synthetic_corpus,
 )
 from upmixer.separation.stem_plan import normalize_stems
+
+_PROTOCOL_ID = "upmixer-separation-q00-v1"
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _positive_int(value: str) -> int:
@@ -136,6 +140,30 @@ def _fresh_output_dir(path: Path, parser: argparse.ArgumentParser) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def _git_revision() -> str | None:
+    """Return the repository HEAD, marking a dirty working tree when known."""
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=_REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if not head:
+            return None
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=_REPOSITORY_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return f"{head}-dirty" if status.stdout else head
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
@@ -176,7 +204,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         separate_fn = _real_separator(args)
 
-    report = evaluate_corpus(corpus, separate_fn, sample_rate=args.sample_rate)
+    report = evaluate_corpus(
+        corpus,
+        separate_fn,
+        sample_rate=args.sample_rate,
+        protocol_id=_PROTOCOL_ID,
+        code_revision=_git_revision(),
+    )
     report.write_json(args.output_dir / "report.json")
     text = format_report(report)
     (args.output_dir / "report.txt").write_text(text + "\n", encoding="utf-8")

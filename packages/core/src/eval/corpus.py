@@ -45,9 +45,10 @@ class CorpusItem:
 
 @dataclass
 class ReferenceCorpus:
-    """Ordered collection of evaluation items."""
+    """Ordered collection of evaluation items and its stable corpus ID."""
 
     items: list[CorpusItem]
+    corpus_id: str | None = None
 
     @classmethod
     def from_dir(cls, path: str) -> "ReferenceCorpus":
@@ -56,6 +57,7 @@ class ReferenceCorpus:
         Manifest layout::
 
             {
+              "corpus_id": "licensed-v1",
               "items": [
                 {"mixture": "song1/mix.wav",
                  "stems": {"Vocals": "song1/vocals.wav", "Bass": "song1/bass.wav"},
@@ -85,7 +87,7 @@ class ReferenceCorpus:
                     unavailable_stems=tuple(raw.get("unavailable_stems") or ()),
                 )
             )
-        return cls(items=items)
+        return cls(items=items, corpus_id=manifest.get("corpus_id"))
 
 
 def _write_wav(path: Path, signal: np.ndarray, sample_rate: int) -> None:
@@ -205,4 +207,4 @@ def synthetic_corpus(sample_rate: int, out_dir: str) -> ReferenceCorpus:
         )
     )
 
-    return ReferenceCorpus(items=items)
+    return ReferenceCorpus(items=items, corpus_id="upmixer-synthetic-v1")

@@ -52,6 +52,9 @@ class EvalReport:
     scores: list[StemScore]
     coverage: list[CoverageRow] = field(default_factory=list)
     item_settings: list["ItemRunSettings"] = field(default_factory=list)
+    protocol_id: str | None = None
+    corpus_id: str | None = None
+    code_revision: str | None = None
 
     def by_stem(self) -> dict[str, tuple[float, float, float]]:
         """Mean (sdr, fullness, bleedless) grouped by canonical stem name."""
@@ -92,6 +95,9 @@ class EvalReport:
             settings = asdict(self.settings) if is_dataclass(self.settings) else vars(self.settings)
         payload: dict[str, object] = {
             "schema_version": 1,
+            "protocol_id": self.protocol_id,
+            "corpus_id": self.corpus_id,
+            "code_revision": self.code_revision,
             "settings": settings,
             "item_settings": [asdict(row) for row in self.item_settings],
             "scores": [asdict(score) for score in self.scores],
@@ -454,8 +460,13 @@ def format_report(report: EvalReport) -> str:
     and prefixes the table with the recorded controls and model metadata.
     """
     settings = report.settings
+    lines = [
+        f"Protocol: {report.protocol_id}",
+        f"Corpus: {report.corpus_id}",
+        f"Code revision: {report.code_revision}",
+    ]
     if settings is None:
-        lines = ["Settings vary by item:"]
+        lines.append("Settings vary by item:")
         for row in report.item_settings:
             row_settings = getattr(row, "settings", None)
             lines.append(
@@ -474,13 +485,15 @@ def format_report(report: EvalReport) -> str:
             )
     else:
         stage_settings = getattr(settings, "stage_settings", ()) or ()
-        lines = [
-            f"Settings: {_format_settings(settings, include_ensemble=True)}",
-            *(
-                f"Stage {index}: {_format_settings(stage)}"
-                for index, stage in enumerate(stage_settings, 1)
-            ),
-        ]
+        lines.extend(
+            [
+                f"Settings: {_format_settings(settings, include_ensemble=True)}",
+                *(
+                    f"Stage {index}: {_format_settings(stage)}"
+                    for index, stage in enumerate(stage_settings, 1)
+                ),
+            ]
+        )
     lines.extend(
         [
             "",
