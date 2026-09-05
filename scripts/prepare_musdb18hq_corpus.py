@@ -108,7 +108,12 @@ def _selection_manifest(path: Path) -> tuple[str, list[str], dict[str, Any]]:
         "archive_subset": value("archive_subset", "subset"),
         "archive_identity": value("archive_identity", "identity"),
         "benchmark_overlap": value("benchmark_overlap", "benchmark_overlap_statement"),
+        "source_partition": value(
+            "source_partition", "source_partition_name", "partition"
+        ),
     }
+    if metadata["source_partition"] == "unknown":
+        metadata["source_partition"] = metadata["archive_subset"]
     return selection_id.strip(), sorted(membership), metadata
 
 
@@ -238,6 +243,7 @@ def _inspect_recording(
         "common_gain": "unknown",
         "master_bus_processing": "unknown",
         "overlap_with_pretrained_benchmarks": "unknown",
+        "source_partition": "unknown",
         "available_references": [name for name, _ in REQUIRED_FILES[1:]],
         "files": {
             name: {
@@ -288,10 +294,12 @@ def prepare_corpus(
     membership_sha256 = _membership_hash(membership)
     selection_path = dataset_root / "selection.json"
     selection = None
+    selection_id = None
     selection_metadata = {
         "archive_subset": "unknown",
         "archive_identity": "MUSDB18-HQ@10.5281/zenodo.3338373",
         "benchmark_overlap": "unknown",
+        "source_partition": "unknown",
     }
     if selection_path.exists():
         selection_id, selected_membership, selected_metadata = _selection_manifest(
@@ -310,18 +318,16 @@ def prepare_corpus(
             raise ValueError(
                 "selection.json membership mismatch: " + "; ".join(details)
             )
-        corpus_id = selection_id
         selection_metadata.update(selected_metadata)
         selection = {
-            "selection_id": corpus_id,
+            "selection_id": selection_id,
             **selection_metadata,
         }
-    else:
-        corpus_id = f"musdb18-hq-{membership_sha256}"
 
     items = []
     recordings = []
     mixture_hashes: dict[str, str] = {}
+    content_parts = []
     for split in SPLITS:
         for track in tracks[split]:
             item, provenance = _inspect_recording(split, track, output_dir)
@@ -332,13 +338,29 @@ def prepare_corpus(
                     f"duplicate mixture SHA-256 for {previous} and {split}/{track.name}"
                 )
             mixture_hashes[mixture_hash] = f"{split}/{track.name}"
+            provenance["overlap_with_pretrained_benchmarks"] = selection_metadata[
+                "benchmark_overlap"
+            ]
+            provenance["source_partition"] = selection_metadata["source_partition"]
+            content_parts.extend(
+                f"{split}/{track.name}/{name}:{provenance['files'][name]['sha256']}"
+                for name, _ in REQUIRED_FILES
+            )
             items.append(item)
             recordings.append(provenance)
+
+    content_sha256 = _membership_hash(sorted(content_parts))
+    corpus_id = (
+        f"{selection_id}-{content_sha256[:12]}"
+        if selection_id is not None
+        else f"musdb18-hq-{content_sha256}"
+    )
 
     manifest = {
         "schema_version": 1,
         "corpus_id": corpus_id,
         "membership_sha256": membership_sha256,
+        "content_sha256": content_sha256,
         "items": items,
     }
     dataset_metadata = {
@@ -353,6 +375,7 @@ def prepare_corpus(
         "schema_version": 1,
         "corpus_id": corpus_id,
         "membership_sha256": membership_sha256,
+        "content_sha256": content_sha256,
         "dataset": dataset_metadata,
         "splits": {split: {"n_recordings": len(tracks[split])} for split in SPLITS},
         "recordings": recordings,

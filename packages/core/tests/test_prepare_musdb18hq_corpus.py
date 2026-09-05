@@ -104,6 +104,7 @@ def test_prepare_writes_reloadable_manifest_with_stable_relative_items(tmp_path)
         provenance["dataset"]["archive_identity"] == "MUSDB18-HQ@10.5281/zenodo.3338373"
     )
     assert provenance["membership_sha256"] == manifest["membership_sha256"]
+    assert provenance["content_sha256"] == manifest["content_sha256"]
     assert provenance["splits"] == {
         "heldout": {"n_recordings": 12},
         "tuning": {"n_recordings": 12},
@@ -131,6 +132,33 @@ def test_prepare_writes_reloadable_manifest_with_stable_relative_items(tmp_path)
     assert larger_manifest["corpus_id"] != manifest["corpus_id"]
 
 
+def test_prepare_corpus_id_changes_when_audio_content_changes(tmp_path):
+    dataset = _write_dataset(tmp_path / "dataset")
+    first_output = tmp_path / "prepared-first"
+    PREPARER.prepare_corpus(dataset, first_output)
+    first_id = json.loads((first_output / "corpus.json").read_text(encoding="utf-8"))[
+        "corpus_id"
+    ]
+
+    path = dataset / "subset" / "tuning" / "track-00" / "vocals.wav"
+    audio, sample_rate = sf.read(path, dtype="float32", always_2d=True)
+    audio[0, 0] += 0.01
+    sf.write(path, audio, sample_rate, subtype="FLOAT")
+
+    second_output = tmp_path / "prepared-second"
+    PREPARER.prepare_corpus(dataset, second_output)
+    second_manifest = json.loads(
+        (second_output / "corpus.json").read_text(encoding="utf-8")
+    )
+    assert second_manifest["corpus_id"] != first_id
+    assert (
+        second_manifest["content_sha256"]
+        != json.loads((first_output / "corpus.json").read_text(encoding="utf-8"))[
+            "content_sha256"
+        ]
+    )
+
+
 def test_prepare_uses_and_validates_selection_manifest_metadata(tmp_path):
     dataset = _write_dataset(tmp_path / "dataset")
     selection = {
@@ -142,6 +170,7 @@ def test_prepare_uses_and_validates_selection_manifest_metadata(tmp_path):
         "archive_subset": "test",
         "archive_identity": "musdb18-hq-test-archive-v1",
         "benchmark_overlap": "No overlap with SCNet training data.",
+        "source_partition": "MUSDB18 test",
     }
     (dataset / "selection.json").write_text(json.dumps(selection), encoding="utf-8")
 
@@ -150,15 +179,24 @@ def test_prepare_uses_and_validates_selection_manifest_metadata(tmp_path):
 
     manifest = json.loads((output / "corpus.json").read_text(encoding="utf-8"))
     provenance = json.loads((output / "provenance.json").read_text(encoding="utf-8"))
-    assert manifest["corpus_id"] == selection["selection_id"]
+    assert manifest["corpus_id"].startswith(selection["selection_id"] + "-")
     assert provenance["dataset"]["archive_subset"] == "test"
     assert provenance["dataset"]["archive_identity"] == "musdb18-hq-test-archive-v1"
     assert provenance["dataset"]["benchmark_overlap"] == selection["benchmark_overlap"]
+    assert provenance["dataset"]["source_partition"] == selection["source_partition"]
     assert provenance["selection"] == {
         "selection_id": selection["selection_id"],
         "archive_subset": "test",
         "archive_identity": "musdb18-hq-test-archive-v1",
         "benchmark_overlap": selection["benchmark_overlap"],
+        "source_partition": selection["source_partition"],
+    }
+    assert {
+        record["overlap_with_pretrained_benchmarks"]
+        for record in provenance["recordings"]
+    } == {selection["benchmark_overlap"]}
+    assert {record["source_partition"] for record in provenance["recordings"]} == {
+        selection["source_partition"]
     }
 
     selection["tracks"]["heldout"][-1] = "not-a-track"
