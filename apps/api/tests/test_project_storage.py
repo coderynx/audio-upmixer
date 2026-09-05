@@ -7,9 +7,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 import soundfile as sf
-from sqlalchemy import select
 
 pytest.importorskip("sqlalchemy")
+
+from sqlalchemy import select
 
 from upmixer_web.features.projects.storage import (
     _PREVIEW_VORBIS_COMPRESSION_LEVEL,
