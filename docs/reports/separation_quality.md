@@ -74,15 +74,18 @@ the heldout clean-music corpus.
 
 The selected MUSDB18-HQ subset clears access and broad corpus-size gates, but
 category coverage is not sufficient for every promoted target. No full
-24-recording baseline, heldout result, human listening panel, or listening
-asset set is claimed. Promotion and any default change remain open.
+24-recording baseline, heldout result, or human listening panel is claimed.
+Three blinded listening packs exist, but they are tuning-only and unrated.
+Promotion and any default change remain open.
 
 ### Q01/Q02 — complete plumbing and regression work
 
 The harness now validates corpus/report coverage, unavailable references,
 paired recording-group statistics, serialization, production-tree execution,
 rate/level/plan/zone/persistence/retry behavior, and execution provenance.
-The latest full Python suite reported `1584 passed`.
+The latest full Python suite at code revision `8683132` reported
+`1584 passed, 38 deselected, 24 warnings`; only documentation changes have
+followed.
 
 ### Q03 — 12-recording tuning baseline, partial
 
@@ -156,8 +159,8 @@ Paired bootstrap deltas are native minus delivery, with 10,000 resamples and
 
 The 96 kHz delivery arm is a different high-rate model condition; the native
 96 kHz arm is the same 44.1 kHz separation as native 48 kHz followed by a
- different output conversion. These numbers are tuning signals only and do
- not support promotion.
+different output conversion. These numbers are tuning signals only and do
+not support promotion.
 
 On this MPS run, native 48 kHz took 168.29 s versus 165.23 s for delivery
 (+1.9%) with a roughly +1.9% RSS change; native 96 kHz took 177.04 s versus
@@ -184,8 +187,87 @@ fullness/bleedless thresholds. These entries require blinded listening review:
 | 96 kHz | Bass | The Mountaineering Club — Mallory | fullness `-0.0427` |
 | 96 kHz | Bass | We Fell From The Sky — Not You | bleedless `-0.0923` |
 
-No human listening panel or defect ledger has been completed. A flag is a
-triage item, not a listening result.
+No human listening panel or defect ledger has been completed. The listening
+packs below are prepared but unrated; a flag is a triage item, not a listening
+result.
+
+The corrected branch-smoke matrix is at
+`$UPMIXER_EVAL_ROOT/q20/branch-smokes-8683132`, with analysis SHA-256
+`25b0b730c4d2c22e8f590ebbb90a4959b0014bc65ed80f4808a962f125507a48`.
+It covers five corrected tuning cases and nine scored rows per arm: the AM
+Contra and crowd-transfer items use 60–72 s, DrumSep uses WaveDrum02_01 at
+0–12 s, and the role proxy uses LizNelson_Rainfall at 220–232 s. Native minus
+delivery deltas are shown as SDR dB / fullness / bleedless:
+
+| Case | Scored deltas |
+| --- | --- |
+| `crowd-transfer` | Crowd `+1.252412 / +0.000784 / +0.027710` |
+| `drumsep-wavedrum02-01` | Hi-Hat `+0.176098 / -0.010573 / -0.001513`; Kick `+0.576593 / +0.026243 / -0.005729`; Snare `-0.222599 / +0.004664 / -0.058382` |
+| `ensemble-bass-drums` | Bass `+0.334726 / -0.011054 / -0.000821`; Drums `+0.956146 / +0.008842 / +0.001426` |
+| `lead-backing-role-proxy` | Backing Vocals `+0.050265 / -0.003361 / +0.001206`; Lead Vocals `+0.394745 / +0.001489 / +0.001253` |
+| `vocals-only` | Vocals `+0.552196 / +0.001663 / -0.002379` |
+
+The prior frame-0 artifacts are quarantined under
+`analysis-zero-to-12-invalid/`, `crowd-transfer-zero-to-12-invalid/`,
+`ensemble-bass-drums-zero-to-12-invalid/`, and
+`vocals-only-zero-to-12-invalid/`, each with `INVALID.json`; the contaminated
+overlap rerun is also quarantined under
+`vocals-only-contaminated-overlap-invalid/`. None is used for conclusions.
+Crowd transfer, DrumSep, and lead/backing are artificial or controlled role
+proxies, so proxy/synthetic evidence is not clean musical evidence. The
+vocals and ensemble cases remain tuning-only short excerpts.
+
+The context pilot is at
+`$UPMIXER_EVAL_ROOT/q20/context-pilot-8683132`, with analysis SHA-256
+`31f40a8eb7bff57798ab1b46616098b97dc46dd70de0866d95a033d15cc9bc74`.
+On one 60–90 s tuning excerpt, fixed-sample context (`segment_size=1724`)
+was retained. Matched-duration deltas (matched minus fixed; SDR dB / fullness /
+bleedless) were `48 kHz: -0.023188 / +0.000760 / -0.000862` and
+`96 kHz: -1.474285 / -0.068377 / -0.045346`; the 96 kHz matched-duration arm
+(`segment_size=3752`) was rejected. The 48/96 kHz variants are upsampled from
+44.1 kHz, so they are not upper-band evidence. No heldout inference ran.
+
+The CPU smoke is at
+`$UPMIXER_EVAL_ROOT/q20/backend-smoke-8683132/cpu`, with analysis SHA-256
+`d402fd66f236a8993ef3559b4026e8b60fa1ccaf666e4809cc51f2f6edc8ac3a`.
+It ran both 48 kHz production-tree arms on the AM Contra 60–72 s tuning
+excerpt, forced `cpu`, retained all six terminal outputs, and had zero OOM
+fallbacks. Native minus delivery deltas (SDR dB / fullness / bleedless) were:
+
+| Stem | Delta |
+| --- | --- |
+| Bass | `+0.542762 / +0.000039 / +0.005859` |
+| Drums | `+1.634830 / +0.010380 / +0.001137` |
+| Other | `-0.000569 / -0.001783 / +0.003653` |
+| Vocals | `+0.552195 / +0.001663 / -0.002379` |
+
+| Arm | Wall / user / sys | Maximum RSS / peak footprint |
+| --- | --- | --- |
+| delivery | `30.62 / 148.56 / 3.00 s` | `4,942,839,808 / 4,668,657,984 B` |
+| native | `30.91 / 150.20 / 2.97 s` | `4,940,709,888 / 4,832,153,920 B` |
+
+CUDA is unavailable on this Apple host and was not simulated; no device
+memory ceiling is frozen.
+
+Three blinded packs now exist under
+`$UPMIXER_EVAL_ROOT/q20/listening/`. All are tuning-only and unrated; their
+`ratings.csv` files are blank, answer keys are mode `0600`, and this ledger
+does not reveal A/B mappings.
+
+| Pack | Cases | Manifest SHA-256 | `SHA256SUMS` SHA-256 |
+| --- | ---: | --- | --- |
+| `tuning-rate-flags-v1` | 14 | `39babea46f084c4323a2b6b81fc589b0fcde0e180f499aa0dc6d721e44f8b929` | `d2cbba378a5bf0645f5c7f3c9e8ab0355aacd9ba4d60bb7df534764a2c01f513` |
+| `branch-smoke-flags-v1` | 1 proxy case | `49bb7ed95c42ba5154e8d764b5cc910ee39e74259507abee7b96219be2adc1b7` | `094bda9411236a06961d00cabcb15c693aacbae50918b8cceb6700bb945053c5` |
+| `residual-policy-v1` | 4 | `d09441bac064a3dbec6c0b90c3df43f3154ff4fa05e59a9ba1689c605165c38d` | `463390f2455cb742e882cde7cd5b4a3ad66685c72643d0cc46c2073648489a3e` |
+
+The residual pack's independent recomputation passed all four cases:
+separate reconstruction maximum absolute error
+`1.862645149230957e-09`; assigned-policy reconstruction maximum absolute error
+`5.960464477539063e-08`. The separate-Unassigned residual contract remains
+provisional: policy 1 leaves `Other` raw, while policy 2 adds the
+delivery-domain residual. Q21 and any default change remain blocked pending
+listening review, a policy freeze, and one single heldout run. Heldout
+inference has not run.
 
 The corrected one-item smoke artifacts are:
 
@@ -215,11 +297,12 @@ must not be used for conclusions. The corrected artifacts use the selected
 ## Gates still open
 
 - [ ] Run no heldout inference until the rate, residual, and listening policy is frozen; the generated heldout excerpts remain untouched.
-- [ ] Produce blinded randomized listening assets, answer key, playback conditions, and a defect ledger for leakage, fullness/detail, musical noise, attacks/decay, tonality/phase, stereo image, and continuity; review every numerical flag above.
+- [x] Prepare blinded randomized listening assets and answer keys; three tuning-only packs are recorded above.
+- [ ] Complete listening review with playback conditions and a defect ledger for leakage, fullness/detail, musical noise, attacks/decay, tonality/phase, stereo image, and continuity; review every numerical flag above.
 - [ ] Define and persist the separate unassigned source-zone remainder, including cache/store, preview/export, subset/solo/mute, alignment, rate, and level semantics. A source anchor is not residual preservation.
-- [ ] Run the fixed-sample-context versus matched-duration diagnostic.
-- [ ] Run real complete-tree descendants and alternate stages: Crowd, `_crowd_other`, SCNet, DrumSep, Karaoke, and the private `_deux_inst`/other leaves where references permit. The supplementary IDMT, MedleyDB, CrowdioSet, Freischütz, and Celtic sets do not substitute for aligned heldout music.
-- [ ] Measure real CPU and CUDA backends and freeze a numerical device memory ceiling.
+- [x] Run the fixed-sample-context versus matched-duration diagnostic; retain fixed-sample context and reject the 96 kHz matched-duration arm.
+- [ ] Complete remaining real descendants and alternate stages: SCNet, Karaoke, and the private `_deux_inst`/other leaves where references permit. The branch proxies and supplementary IDMT, MedleyDB, CrowdioSet, Freischütz, and Celtic sets do not substitute for aligned heldout music.
+- [ ] Measure CUDA when available and freeze a numerical device memory ceiling; the CPU smoke is recorded above.
 - [ ] Verify the normal source-anchor product path separately with anchoring off for the experiment.
 - [ ] Q21 native-rate production integration, bounded conversion, cache/resume identity, and any default promotion remain unstarted.
 
