@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 _SUCCESSFUL_BATCHES: dict[tuple[str, str], int] = {}
+_SHA256_CACHE: dict[tuple[str, int, int], str] = {}
 
 _MIN_CPU_SEGMENT_SIZE = 64
 _MIN_CPU_CHUNK_DURATION_S = 60.0
@@ -162,13 +163,26 @@ def _is_oom_error(exc: BaseException) -> bool:
 def _sha256_file(path: Path) -> str | None:
     """Return a file digest, or ``None`` when provenance is unavailable."""
     try:
-        digest = hashlib.sha256()
-        with path.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
+        resolved = path.resolve()
+        stat = resolved.stat()
     except OSError:
         return None
+
+    cache_key = (str(resolved), stat.st_size, stat.st_mtime_ns)
+    cached = _SHA256_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        digest = hashlib.sha256()
+        with resolved.open("rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        value = digest.hexdigest()
+    except OSError:
+        return None
+    _SHA256_CACHE[cache_key] = value
+    return value
 
 
 def _remove_empty_output_dirs(paths: list[str], root: str) -> None:

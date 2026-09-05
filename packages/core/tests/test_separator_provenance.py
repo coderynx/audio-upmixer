@@ -135,6 +135,60 @@ def test_hashes_wait_for_success_and_are_cached_per_separator(tmp_path):
         separator.close()
 
 
+def test_file_hash_cache_is_shared_and_invalidated_by_file_identity(tmp_path):
+    model_dir = tmp_path / "models"
+    checkpoint = model_dir / "model.ckpt"
+    checkpoint.parent.mkdir()
+    checkpoint.write_bytes(b"checkpoint")
+
+    class FakeEngine:
+        _arch = "unknown"
+
+        def separate(self, _audio_path):
+            return []
+
+    separators = [
+        StemSeparator(model=checkpoint.name, model_dir=str(model_dir), batch_size=1)
+        for _ in range(2)
+    ]
+    real_sha256 = hashlib.sha256
+    hash_calls: list[None] = []
+
+    def count_hash(*args, **kwargs):
+        hash_calls.append(None)
+        return real_sha256(*args, **kwargs)
+
+    try:
+        with patch.object(separator_module.hashlib, "sha256", side_effect=count_hash):
+            for separator in separators:
+                separator._engine = FakeEngine()
+                with patch.object(
+                    separator, "_get_separator", return_value=separator._engine
+                ):
+                    assert separator._separate_paths("input.wav") == []
+
+            assert len(hash_calls) == 1
+            first_digest = separators[0].run_settings.checkpoint_sha256
+
+            checkpoint.write_bytes(b"changed checkpoint")
+            changed = StemSeparator(
+                model=checkpoint.name, model_dir=str(model_dir), batch_size=1
+            )
+            changed._engine = FakeEngine()
+            try:
+                with patch.object(
+                    changed, "_get_separator", return_value=changed._engine
+                ):
+                    assert changed._separate_paths("input.wav") == []
+                assert len(hash_calls) == 2
+                assert changed.run_settings.checkpoint_sha256 != first_digest
+            finally:
+                changed.close()
+    finally:
+        for separator in separators:
+            separator.close()
+
+
 def test_retry_snapshot_keeps_failed_memory_settings_and_resets_next_run():
     separator = StemSeparator(
         model="model.ckpt",
