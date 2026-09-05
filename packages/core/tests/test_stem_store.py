@@ -61,3 +61,25 @@ def test_write_replaces_previous_contents(tmp_path):
 
     loaded, _ = store.load()
     assert set(loaded.keys()) == {"Vocals", "Drums@front"}
+
+
+def test_write_removes_old_manifest_wavs_but_keeps_unmanaged_files(tmp_path):
+    store = PlainStemStore(str(tmp_path))
+    store.write(
+        {
+            "Vocals": np.zeros((100, 2), dtype=np.float32),
+            "Bass": np.ones((100, 2), dtype=np.float32),
+        },
+        44100,
+    )
+    unmanaged = tmp_path / "unmanaged.wav"
+    unmanaged.write_bytes(b"leave me alone")
+
+    store.write(_make_stems(), 44100)
+
+    assert not (tmp_path / "Bass.wav").exists()
+    assert (tmp_path / "Vocals.wav").exists()
+    assert (tmp_path / "Drums__front.wav").exists()
+    assert unmanaged.read_bytes() == b"leave me alone"
+    loaded, _ = store.load()
+    assert set(loaded) == {"Vocals", "Drums@front"}

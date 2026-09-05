@@ -88,6 +88,22 @@ class PlainStemStore:
         import soundfile as sf  # type: ignore[import-untyped]
 
         self._root.mkdir(parents=True, exist_ok=True)
+        previous_stem_files: set[str] = set()
+        try:
+            previous_manifest = json.loads(
+                (self._root / _MANIFEST_FILE).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            previous_manifest = None
+        if isinstance(previous_manifest, dict):
+            previous_keys = previous_manifest.get("stem_keys")
+            if isinstance(previous_keys, list):
+                previous_stem_files = {
+                    _stem_filename(key)
+                    for key in previous_keys
+                    if isinstance(key, str)
+                }
+
         for stem_key, audio in stems.items():
             wav_path = self._root / _stem_filename(stem_key)
             arr = audio if audio.ndim == 2 else audio[:, np.newaxis]
@@ -105,3 +121,7 @@ class PlainStemStore:
         temp_manifest = self._root / f".{_MANIFEST_FILE}.tmp"
         temp_manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         os.replace(temp_manifest, manifest_path)
+
+        current_stem_files = {_stem_filename(stem_key) for stem_key in stems}
+        for filename in previous_stem_files - current_stem_files:
+            (self._root / filename).unlink(missing_ok=True)
