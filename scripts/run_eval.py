@@ -7,6 +7,9 @@ Examples:
     uv run python scripts/run_eval.py --corpus PATH \
         --variant real-model --output-dir /tmp/upmixer-eval \
         --model BS-Roformer-SW.ckpt
+    uv run python scripts/run_eval.py --corpus synthetic \
+        --variant production-tree --output-dir /tmp/upmixer-eval-tree \
+        --stems vocals,bass,drums,other
 """
 from __future__ import annotations
 
@@ -18,12 +21,14 @@ from typing import Callable, Sequence
 
 import soundfile as sf
 
+from upmixer.config import UpmixConfig
 from upmixer.eval import (
     ReferenceCorpus,
     RunSettings,
     evaluate_corpus,
     format_report,
     separate_for_eval,
+    separate_tree_for_eval,
     synthetic_corpus,
 )
 
@@ -42,13 +47,20 @@ def _finite_positive(value: str) -> float:
     return parsed
 
 
+def _comma_separated_stems(value: str) -> list[str]:
+    stems = [stem.strip() for stem in value.split(",") if stem.strip()]
+    if not stems:
+        raise argparse.ArgumentTypeError("must include at least one stem")
+    return stems
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", required=True, metavar="PATH|synthetic")
     parser.add_argument(
         "--variant",
         required=True,
-        choices=("synthetic-reference", "real-model"),
+        choices=("synthetic-reference", "real-model", "production-tree"),
     )
     parser.add_argument("--output-dir", required=True, type=Path, metavar="DIR")
     parser.add_argument("--sample-rate", type=_positive_int, default=44_100)
@@ -60,6 +72,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--stem-ensemble", action="store_true")
     parser.add_argument("--tta", action="store_true")
     parser.add_argument("--pitch-shift", type=_finite_positive, default=None)
+    parser.add_argument(
+        "--stems",
+        type=_comma_separated_stems,
+        default=None,
+        metavar="NAME[,NAME...]",
+        help="Requested production-tree stems; use manifest or canonical names.",
+    )
     return parser
 
 
@@ -78,6 +97,23 @@ def _reference_separator(corpus: ReferenceCorpus, sample_rate: int) -> Callable:
 
 
 def _real_separator(args: argparse.Namespace) -> Callable:
+    if args.variant == "production-tree":
+        config = UpmixConfig(
+            output_sample_rate=args.sample_rate,
+            stems=args.stems,
+            stem_batch_size=args.batch_size,
+            stem_segment_size=args.segment_size,
+            stem_chunk_duration_s=args.chunk_duration_s,
+            stem_overlap=args.overlap,
+            stem_ensemble=args.stem_ensemble,
+            stem_tta=args.tta,
+            stem_pitch_shift=args.pitch_shift,
+        )
+        return partial(
+            separate_tree_for_eval,
+            sample_rate=args.sample_rate,
+            config=config,
+        )
     options = {
         "sample_rate": args.sample_rate,
         "batch_size": args.batch_size,
@@ -103,6 +139,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     _fresh_output_dir(args.output_dir, parser)
+    if args.variant == "production-tree" and args.model is not None:
+        parser.error(
+            "production-tree does not accept --model; the plan owns model selection"
+        )
+    if args.stems is not None and args.variant != "production-tree":
+        parser.error("--stems requires --variant production-tree")
     if args.variant == "synthetic-reference":
         if any(
             value is not None

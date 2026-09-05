@@ -60,11 +60,14 @@ uv run python scripts/run_eval.py \
 uv run python scripts/run_eval.py \
   --corpus synthetic --variant real-model --sample-rate 44100 \
   --output-dir /tmp/upmixer-q01-real
+uv run python scripts/run_eval.py \
+  --corpus synthetic --variant production-tree --sample-rate 44100 \
+  --stems vocals,bass,drums,other --output-dir /tmp/upmixer-q01-tree
 ```
 
 Synthetic results validate deterministic harness plumbing only; they are not
-musical-quality evidence. The real-model command may download weights and is a
-smoke run, not a held-out music-quality result.
+musical-quality evidence. The real-model and production-tree commands may
+download weights and are smoke runs, not held-out music-quality results.
 
 ## Future corpus, provenance, and splits
 
