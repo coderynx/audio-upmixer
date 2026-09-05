@@ -11,9 +11,9 @@ import soundfile as sf
 
 torch = pytest.importorskip("torch")
 
-from upmixer.separation.inference.config import ModelConfig
-from upmixer.separation.inference.device import DeviceManager
-from upmixer.separation.inference.engine import SeparationEngine
+from upmixer.separation.inference.config import ModelConfig  # noqa: E402
+from upmixer.separation.inference.device import DeviceManager  # noqa: E402
+from upmixer.separation.inference.engine import SeparationEngine  # noqa: E402
 
 
 def _make_config() -> ModelConfig:
@@ -25,7 +25,7 @@ def _make_config() -> ModelConfig:
     )
 
 
-def _make_engine(output_dir: str) -> SeparationEngine:
+def _make_engine(output_dir: str, sample_rate: int = 44100) -> SeparationEngine:
     engine = SeparationEngine(
         model=torch.nn.Identity(),
         config=_make_config(),
@@ -33,7 +33,7 @@ def _make_engine(output_dir: str) -> SeparationEngine:
         model_filename="test.ckpt",
         device=DeviceManager("cpu"),
         output_dir=output_dir,
-        sample_rate=44100,
+        sample_rate=sample_rate,
         batch_size=1,
         segment_size=None,
         chunk_duration_s=None,
@@ -48,8 +48,8 @@ def _make_engine(output_dir: str) -> SeparationEngine:
     return engine
 
 
-def _write_source(path, audio: np.ndarray) -> str:
-    sf.write(str(path), audio.T, 44100, subtype="FLOAT")
+def _write_source(path, audio: np.ndarray, sample_rate: int = 44100) -> str:
+    sf.write(str(path), audio.T, sample_rate, subtype="FLOAT")
     return str(path)
 
 
@@ -70,12 +70,53 @@ def _loud_mix(n_samples: int = 2000) -> np.ndarray:
     return (mix / np.abs(mix).max() * 1.073).astype(np.float32)
 
 
-def test_stems_sum_to_input_level(tmp_path):
+def _diagnostic_mix(sample_rate: int, n_samples: int = 2001) -> np.ndarray:
+    t = np.arange(n_samples, dtype=np.float64) / sample_rate
+    high_hz = 18_000.0
+    mix = np.stack(
+        (
+            0.35 * np.sin(2 * np.pi * 220.0 * t)
+            + 0.18 * np.sin(2 * np.pi * high_hz * t),
+            0.22 * np.sin(2 * np.pi * 330.0 * t)
+            - 0.12 * np.sin(2 * np.pi * high_hz * t),
+        )
+    ).astype(np.float32)
+    mix[0, n_samples // 2] += 1.2
+    return mix
+
+
+def _tone_amplitude(audio: np.ndarray, sample_rate: int, frequency: float) -> float:
+    t = np.arange(audio.shape[-1], dtype=np.float64) / sample_rate
+    basis = np.stack(
+        (
+            np.sin(2 * np.pi * frequency * t),
+            np.cos(2 * np.pi * frequency * t),
+        ),
+        axis=1,
+    )
+    coefficients = np.linalg.lstsq(basis, audio, rcond=None)[0]
+    return float(np.hypot(*coefficients))
+
+
+_RATE_CASES = (
+    ("native-44k", 44_100, 44_100),
+    ("resampled-48k", 48_000, 44_100),
+    ("resampled-to-48k", 44_100, 48_000),
+    ("native-96k", 96_000, 96_000),
+    ("resampled-96k", 44_100, 96_000),
+)
+
+
+def test_hot_input_restores_gain_and_stems_sum_to_input_level(tmp_path):
     mix = _loud_mix()
     stems = _separate(tmp_path, "loud", mix)
 
-    total = sum(stems.values())
-    assert np.allclose(total, mix, atol=1e-5)
+    assert np.max(np.abs(mix)) > 0.9
+    vocals = next(audio for path, audio in stems.items() if "(vocals)" in path.casefold())
+    other = next(audio for path, audio in stems.items() if "(other)" in path.casefold())
+    np.testing.assert_allclose(vocals, mix * 0.25, atol=1e-5)
+    np.testing.assert_allclose(other, mix * 0.75, atol=1e-5)
+    np.testing.assert_allclose(vocals + other, mix, atol=1e-5)
 
 
 def test_halving_input_halves_output_exactly(tmp_path):
@@ -88,23 +129,42 @@ def test_halving_input_halves_output_exactly(tmp_path):
         assert np.allclose(half[half_path], full[full_path] * 0.5, atol=1e-6)
 
 
-def test_retains_exact_resampled_parent_in_restored_level_domain(tmp_path):
+@pytest.mark.parametrize(
+    ("case", "source_rate", "engine_rate"),
+    _RATE_CASES,
+    ids=[case[0] for case in _RATE_CASES],
+)
+def test_rate_length_parent_and_high_band_contract(
+    tmp_path, case: str, source_rate: int, engine_rate: int
+):
     from upmixer.separation.inference.audio_io import load_audio
 
-    input_rate = 48_000
-    t = np.arange(input_rate, dtype=np.float32) / input_rate
-    audio = np.stack([
-        1.05 * np.sin(2 * np.pi * 440.0 * t),
-        0.95 * np.sin(2 * np.pi * 660.0 * t),
-    ]).astype(np.float32)
-    source = tmp_path / "native-rate.wav"
-    sf.write(source, audio.T, input_rate, subtype="FLOAT")
-    engine = _make_engine(str(tmp_path / "out"))
+    source = _write_source(
+        tmp_path / f"{case}.wav",
+        _diagnostic_mix(source_rate),
+        source_rate,
+    )
+    engine = _make_engine(str(tmp_path / f"{case}_out"), engine_rate)
 
-    engine.separate(str(source), retain_parent=True)
+    paths = engine.separate(source, retain_parent=True)
     parent = engine.take_last_parent()
+    expected = load_audio(source, engine_rate)
 
-    assert np.array_equal(parent, load_audio(str(source), 44_100).T)
-    assert np.max(np.abs(parent)) > 0.9
+    np.testing.assert_array_equal(parent, expected.T)
+    outputs = {}
+    for path in paths:
+        data, output_rate = sf.read(path, dtype="float32", always_2d=True)
+        assert output_rate == engine_rate
+        assert data.shape == (expected.shape[1], 2)
+        outputs[path] = data.T
+
+    vocals = next(audio for path, audio in outputs.items() if "(vocals)" in path.casefold())
+    other = next(audio for path, audio in outputs.items() if "(other)" in path.casefold())
+    np.testing.assert_allclose(vocals, expected * 0.25, atol=2e-5)
+    np.testing.assert_allclose(other, expected * 0.75, atol=2e-5)
+    np.testing.assert_allclose(vocals + other, expected, atol=2e-5)
+    if source_rate == engine_rate == 96_000:
+        assert _tone_amplitude(vocals[0], engine_rate, 18_000.0) > 0.02
+
     with pytest.raises(RuntimeError, match="No completed separation input"):
         engine.take_last_parent()
