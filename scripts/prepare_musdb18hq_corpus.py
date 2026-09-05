@@ -76,6 +76,12 @@ def _selection_manifest(path: Path) -> tuple[str, list[str], dict[str, Any]]:
     tracks = selection.get("tracks")
     if not isinstance(tracks, dict):
         raise ValueError(f"selection manifest {path} requires tracks by split")
+    unexpected_splits = set(tracks) - set(SPLITS)
+    if unexpected_splits:
+        raise ValueError(
+            f"selection manifest {path} has unexpected splits: "
+            f"{sorted(unexpected_splits)}"
+        )
     membership = []
     for split in SPLITS:
         names = tracks.get(split)
