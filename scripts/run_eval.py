@@ -206,6 +206,8 @@ def _retaining_separator(
         item_index = next_index
         item = corpus.items[item_index]
         next_index += 1
+        if str(mixture_path) != item.mixture:
+            raise ValueError("separator mixture path does not match corpus item")
         stems, settings = separate_fn(mixture_path)
         if not isinstance(stems, dict) or not stems:
             return stems, settings
@@ -218,6 +220,13 @@ def _retaining_separator(
             return stems, settings
         if item.stems and not set(item.stems).issubset(stems):
             return stems, settings
+        reference_info = None
+        if item.stems:
+            try:
+                first_reference = item.stems[sorted(item.stems)[0]]
+                reference_info = sf.info(first_reference)
+            except (OSError, RuntimeError):
+                return stems, settings
         retained: dict[str, np.ndarray] = {}
         try:
             for stem_name, value in stems.items():
@@ -234,6 +243,12 @@ def _retaining_separator(
                     return stems, settings
                 audio = np.asarray(raw_audio, dtype=np.float32)
                 if not np.all(np.isfinite(audio)):
+                    return stems, settings
+                if reference_info is not None and (
+                    reference_info.samplerate != sample_rate
+                    or reference_info.frames != audio.shape[0]
+                    or reference_info.channels != audio.shape[1]
+                ):
                     return stems, settings
                 if stem_name in item.stems:
                     info = sf.info(item.stems[stem_name])

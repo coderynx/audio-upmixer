@@ -407,3 +407,49 @@ def test_retain_stems_does_not_index_invalid_settings(tmp_path: Path, settings):
     index = json.loads((output_dir / "stems/index.json").read_text(encoding="utf-8"))
     assert index["items"] == []
     assert not (output_dir / "stems/0000").exists()
+
+
+def test_retain_stems_rejects_mismatched_mixture_identity(tmp_path: Path):
+    runner = _load_runner()
+    corpus = _retention_corpus(tmp_path)
+    output_dir = tmp_path / "wrong-mixture"
+    called = False
+
+    def separator(_path):
+        nonlocal called
+        called = True
+        return {}, RunSettings(model="fake", sample_rate=22_050)
+
+    retaining = runner._retaining_separator(
+        separator, ReferenceCorpus(corpus.items[:1]), output_dir, 22_050
+    )
+    with pytest.raises(ValueError, match="does not match corpus item"):
+        retaining("some-other-mix.wav")
+
+    assert not called
+    index = json.loads((output_dir / "stems/index.json").read_text(encoding="utf-8"))
+    assert index["items"] == []
+
+
+def test_retain_stems_checks_extra_outputs_against_reference_boundary(tmp_path: Path):
+    runner = _load_runner()
+    corpus = _retention_corpus(tmp_path)
+    output_dir = tmp_path / "extra-mismatch"
+    retaining = runner._retaining_separator(
+        lambda _path: (
+            {
+                "Vocals": np.zeros((32, 2), dtype=np.float32),
+                "Guitar": np.zeros((31, 2), dtype=np.float32),
+            },
+            RunSettings(model="fake", sample_rate=22_050),
+        ),
+        ReferenceCorpus(corpus.items[:1]),
+        output_dir,
+        22_050,
+    )
+
+    retaining(corpus.items[0].mixture)
+
+    index = json.loads((output_dir / "stems/index.json").read_text(encoding="utf-8"))
+    assert index["items"] == []
+    assert not (output_dir / "stems/0000").exists()
