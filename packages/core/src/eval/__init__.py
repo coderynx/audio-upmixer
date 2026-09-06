@@ -29,6 +29,11 @@ from upmixer.eval.cascade import (
     CascadeEvaluationResult,
     separate_with_deux_cascade,
 )
+from upmixer.eval.q50_event_repair import (
+    AggregateDrumsRepairResult,
+    EventTransfer,
+    repair_aggregate_drums,
+)
 from upmixer.eval.types import ItemRunSettings, RunSettings
 from upmixer.eval.report import CoverageRow, EvalReport, StemScore, format_report
 
@@ -49,6 +54,9 @@ __all__ = [
     "CascadeArmOutput",
     "CascadeEvaluationResult",
     "separate_with_deux_cascade",
+    "AggregateDrumsRepairResult",
+    "EventTransfer",
+    "repair_aggregate_drums",
     "separate_tree_for_eval",
     "evaluate_corpus",
     "EvalReport",
