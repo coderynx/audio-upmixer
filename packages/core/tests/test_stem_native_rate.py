@@ -12,6 +12,7 @@ import soundfile as sf
 from upmixer.config import UpmixConfig
 from upmixer.separation.stem_pipeline import StemUpmixPipeline
 from upmixer.separation.stem_pipeline_separate import (
+    _load_cached_stems,
     _resample_stems,
     _resolve_separation_sample_rate,
 )
@@ -168,6 +169,29 @@ def test_native_cache_identity_includes_resolved_rate():
     )
     with pytest.raises(ValueError, match="native_sample_rate"):
         stem_cache_identity(plan, config)
+
+
+def test_native_policy_does_not_load_legacy_stem_hash_cache(tmp_path: Path):
+    from upmixer.separation.stem_cache import StemCache
+    from upmixer.separation.stem_identity import stem_cache_identity
+
+    source = _source(tmp_path / "source.wav")
+    cache_dir = tmp_path / "cache"
+    plan = resolve_separation_plan(["Vocals"])
+    cached = {"Vocals": np.ones((480, 2), dtype=np.float32)}
+    StemCache(str(cache_dir)).save(source, plan.stems_hash, 48_000, cached, 48_000)
+
+    native = UpmixConfig(
+        stems=["Vocals"], stem_native_rate=True, stem_cache_dir=str(cache_dir)
+    )
+    native_identity = stem_cache_identity(plan, native, 44_100)
+    assert _load_cached_stems(native, plan, source, 48_000, native_identity) is None
+
+    incumbent = UpmixConfig(stems=["Vocals"], stem_cache_dir=str(cache_dir))
+    incumbent_identity = stem_cache_identity(plan, incumbent, 48_000)
+    result = _load_cached_stems(incumbent, plan, source, 48_000, incumbent_identity)
+    assert result is not None
+    np.testing.assert_array_equal(result["Vocals"], cached["Vocals"])
 
 
 def test_native_boundary_resampling_uses_exact_rounded_lengths():
