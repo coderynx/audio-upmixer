@@ -113,9 +113,10 @@ class ProjectMutations:
     def reprepare(
         self, session: Session, project: Project, stems: Iterable[str] | None,
         stem_bleed_reduction: bool | None, stem_ensemble: bool | None,
+        stem_native_rate: bool | None,
     ) -> Project:
         project = reprepare_project_stems(
-            session, project, stems, stem_bleed_reduction, stem_ensemble
+            session, project, stems, stem_bleed_reduction, stem_ensemble, stem_native_rate
         )
         self.manager.notify()
         return project

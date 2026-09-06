@@ -27,6 +27,14 @@ def test_separation_settings_detects_ensemble_changes():
     assert separation_settings(off) != separation_settings(on)
 
 
+def test_separation_settings_detects_native_rate_changes():
+    from upmixer_web.features.projects.configuration import separation_settings
+
+    off = {"engine": {"mode": "stem", "stem_native_rate": False}}
+    on = {"engine": {"mode": "stem", "stem_native_rate": True}}
+    assert separation_settings(off) != separation_settings(on)
+
+
 def test_separation_settings_treats_missing_keys_as_client_defaults():
     """A freshly-prepared project may omit separation defaults such as
     `engine.stem_ensemble`
@@ -48,6 +56,7 @@ def test_separation_settings_treats_missing_keys_as_client_defaults():
             "stem_silence_crossfade_ms": 10,
             "stem_silence_pad_ms": 200,
             "stem_ensemble": False,
+            "stem_native_rate": False,
             "stem_bleed_reduction": False,
         }
     }
@@ -88,6 +97,7 @@ def test_project_lifecycle_persists_settings_and_expansion(tmp_path, monkeypatch
         assert project["status"] == "queued"
         assert project["manifest"]["engine"]["mode"] == "stem"
         assert project["manifest"]["engine"]["stem_ensemble"] is False
+        assert project["manifest"]["engine"]["stem_native_rate"] is False
         assert project["requested_stems"] == ["Vocals", "Kick"]
         assert len(project["tracks"]) == 1
         assert project["tracks"][0]["name"] == "tone"
@@ -318,6 +328,7 @@ def test_reprepare_project_stems_requeues_a_ready_project_and_rejects_in_flight(
             "stems": ["Vocals", "Bass"],
             "stem_bleed_reduction": True,
             "stem_ensemble": True,
+            "stem_native_rate": True,
         })
         assert response.status_code == 200
         body = response.json()
@@ -326,6 +337,7 @@ def test_reprepare_project_stems_requeues_a_ready_project_and_rejects_in_flight(
         assert body["requested_stems"] == ["Vocals", "Bass"]
         assert body["manifest"]["engine"]["stem_bleed_reduction"] is True
         assert body["manifest"]["engine"]["stem_ensemble"] is True
+        assert body["manifest"]["engine"]["stem_native_rate"] is True
         assert body["tracks"][0]["layout_overrides"]["7.1.4"]["engine"] == {
             "stems": ["Vocals", "Bass"],
             "stem_bleed_reduction": True,
@@ -362,6 +374,7 @@ def test_reprepare_project_stems_requeues_a_ready_project_and_rejects_in_flight(
         })
         assert omitted.status_code == 200
         assert omitted.json()["manifest"]["engine"]["stem_ensemble"] is True
+        assert omitted.json()["manifest"]["engine"]["stem_native_rate"] is True
 
         conflict = client.post(f"/api/v1/projects/{expanding_id}/stems/reprepare")
         assert conflict.status_code == 409

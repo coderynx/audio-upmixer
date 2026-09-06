@@ -155,6 +155,7 @@ class ReprepareProjectStemsRequest(BaseModel):
     stems: list[str] | None = Field(default=None, min_length=1)
     stem_bleed_reduction: bool | None = None
     stem_ensemble: bool | None = None
+    stem_native_rate: bool | None = None
 
 
 class AddProjectAssetsRequest(BaseModel):

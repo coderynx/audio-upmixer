@@ -29,7 +29,7 @@ _SEPARATION_ENGINE_KEYS = (
     "stem_batch_size", "stem_segment_size", "stem_chunk_duration_s",
     "stem_model_cache_size", "stem_silence_skip", "stem_silence_threshold_db",
     "stem_silence_min_duration_s", "stem_silence_crossfade_ms", "stem_silence_pad_ms",
-    "stem_ensemble", "stem_bleed_reduction",
+    "stem_ensemble", "stem_native_rate", "stem_bleed_reduction",
     "stem_drum_remask", "stem_primary_remask",
 )
 
@@ -84,6 +84,7 @@ def normalize_project_manifest(
     stems = normalize_project_stems(engine.get("stems") or [])
     engine["stems"] = stems
     engine.setdefault("stem_ensemble", UpmixConfig().stem_ensemble)
+    engine.setdefault("stem_native_rate", UpmixConfig().stem_native_rate)
     mixing = normalized.setdefault("mixing", {})
     if isinstance(mixing.get("stem_solo"), str):
         mixing["stem_solo"] = [mixing["stem_solo"]]
@@ -149,11 +150,13 @@ def resolve_scene_routing(
 
 def preparation_manifest(
     block: dict[str, Any], stems: list[str], stem_bleed_reduction: bool, layout: str,
-    stem_ensemble: bool | None = None,
+    stem_ensemble: bool | None = None, stem_native_rate: bool | None = None,
 ) -> dict[str, Any]:
     updated = copy.deepcopy(block)
     engine = updated.setdefault("engine", {})
     engine.update({"stems": stems, "stem_bleed_reduction": stem_bleed_reduction})
     if stem_ensemble is not None:
         engine["stem_ensemble"] = stem_ensemble
+    if stem_native_rate is not None:
+        engine["stem_native_rate"] = stem_native_rate
     return seed_balanced_mix(updated, layout, stems)

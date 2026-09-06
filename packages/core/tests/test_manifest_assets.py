@@ -127,6 +127,14 @@ class TestApplyAssetJob:
         apply_asset_job(cfg, job)
         assert cfg.output_format == "7.1.4"
 
+    def test_native_rate_applies_from_manifest(self):
+        _, jobs = parse_manifest(
+            _minimal(engine={"mode": "stem", "stem_native_rate": True})
+        )
+        cfg = UpmixConfig()
+        apply_asset_job(cfg, jobs[0])
+        assert cfg.stem_native_rate is True
+
     def test_lfe_cutoff_coerced(self):
         job = AssetJob(input="x", output="y", config={"lfe_cutoff": 100.0})
         cfg = UpmixConfig()
@@ -336,12 +344,17 @@ class TestListManifestKeys:
         keys = list_manifest_keys()
         for k in (
             "engine.mode", "engine.stems", "engine.stem_model_dir", "engine.input_format",
-            "engine.stem_ensemble",
+            "engine.stem_ensemble", "engine.stem_native_rate",
         ):
             assert k in keys
 
     def test_stem_ensemble_manifest_parameter_has_config_default(self):
         parameter = next(item for item in manifest_parameter_schema() if item["path"] == "engine.stem_ensemble")
+        assert parameter["type"] == "bool"
+        assert parameter["default"] is False
+
+    def test_stem_native_rate_manifest_parameter_has_config_default(self):
+        parameter = next(item for item in manifest_parameter_schema() if item["path"] == "engine.stem_native_rate")
         assert parameter["type"] == "bool"
         assert parameter["default"] is False
 

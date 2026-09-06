@@ -494,7 +494,7 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
             setActiveTab("mixing");
           }}
           onRetry={() => void retry()}
-          onReprepare={({ stems, stemBleedReduction, stemEnsemble }) => reprepareStems(stems, stemBleedReduction, stemEnsemble)}
+          onReprepare={({ stems, stemBleedReduction, stemEnsemble, stemNativeRate }) => reprepareStems(stems, stemBleedReduction, stemEnsemble, stemNativeRate)}
         />
       </section>
     ) : !ready ? (

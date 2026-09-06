@@ -132,10 +132,11 @@ describe("ProjectDetailPage tabs", () => {
 
     await user.click(screen.getByRole("button", { name: "Bass" }));
     await user.click(screen.getByRole("switch", { name: "Ensemble separation" }));
+    await user.click(screen.getByRole("switch", { name: "Native-rate separation" }));
     await user.click(screen.getByRole("button", { name: "Re-prepare stems" }));
 
     await waitFor(() => expect(api.reprepareProjectStems).toHaveBeenCalledWith("project-1", {
-      stems: ["Vocals", "Bass"], stem_bleed_reduction: false, stem_ensemble: true,
+      stems: ["Vocals", "Bass"], stem_bleed_reduction: false, stem_ensemble: true, stem_native_rate: true,
     }));
   });
 
