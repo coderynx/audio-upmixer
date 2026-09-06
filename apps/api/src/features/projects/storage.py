@@ -118,6 +118,26 @@ class ProjectStemStorage:
         directly written/read by `upmixer.separation.stem_store.PlainStemStore`."""
         return self.track_root(project_id, track_id) / "stems"
 
+    def generation_stem_dir(self, project_id: str, track_id: str, generation: int) -> Path:
+        """Return the immutable stem directory for one preparation generation."""
+        return self.track_root(project_id, track_id) / f"stems-{generation}"
+
+    def export_stem_dir(
+        self,
+        project_id: str,
+        track_id: str,
+        generation: int,
+        relative_paths: list[str] | None = None,
+    ) -> Path:
+        """Resolve the active stem directory, including pre-generation stores."""
+        for relative_path in relative_paths or []:
+            path = self.resolve(relative_path)
+            return path.parent
+        generation_dir = self.generation_stem_dir(project_id, track_id, generation)
+        if (generation_dir / "stems.json").is_file():
+            return generation_dir
+        return self.stem_dir(project_id, track_id)
+
     def delete_project(self, project_id: str) -> None:
         shutil.rmtree(self.root / project_id, ignore_errors=True)
 
@@ -134,9 +154,10 @@ class ProjectStemStorage:
         track: ProjectTrack,
         generation: int,
         quality: str = DEFAULT_PREVIEW_QUALITY,
+        stem_dir: Path | None = None,
     ) -> list[ProjectStem]:
         """Replace a track's stem rows from its plain stem store."""
-        entry = self.stem_dir(project.id, track.id)
+        entry = stem_dir or self.stem_dir(project.id, track.id)
         try:
             metadata = json.loads((entry / "stems.json").read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError) as exc:

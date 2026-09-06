@@ -332,8 +332,12 @@ def project_export_job(
             mixing_override = dict(overrides.get("mixing", {}))
             mixing_override.setdefault("stem_routing", routing)
             overrides["mixing"] = mixing_override
+        stem_paths = [stem.relative_path for stem in track.stems]
         snapshot_tracks[track.asset_id] = ProjectExportTrack(
-            overrides, str(project_stems.stem_dir(project.id, track.id))
+            overrides,
+            str(project_stems.export_stem_dir(
+                project.id, track.id, project.stem_generation, stem_paths
+            )),
         )
 
     # A project's tracks may not all share project.import_batch (or it may be

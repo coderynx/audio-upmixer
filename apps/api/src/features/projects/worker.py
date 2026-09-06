@@ -73,6 +73,7 @@ class ProjectRunnerMixin:
                 manifest = copy.deepcopy(project.manifest)
                 requested_stems = list(project.requested_stems)
                 preview_quality = project.preview_quality
+                next_generation = project.stem_generation + 1
             _log.info("project_preparation_started project_id=%s track_count=%d", project_id, len(track_ids))
 
             with ExitStack() as sources:
@@ -84,7 +85,11 @@ class ProjectRunnerMixin:
                     {
                         "input": str(input_path),
                         "output": str(work_dir / f"{index:02d}-prepare.wav"),
-                        "stem_output_dir": str(self.project_stems.stem_dir(project_id, track_id)),
+                        "stem_output_dir": str(
+                            self.project_stems.generation_stem_dir(
+                                project_id, track_id, next_generation
+                            )
+                        ),
                         # core's parse_manifest deep-merges any block key here
                         # (engine/format/mixing/...) over the manifest's global
                         # blocks per AssetJob — this is what makes a track's
@@ -175,9 +180,17 @@ class ProjectRunnerMixin:
                 project = get_project(session, project_id)
                 if not project:
                     return
-                next_generation = project.stem_generation + 1
                 for track in project.tracks:
-                    self.project_stems.catalogue_track(session, project, track, next_generation, quality=project.preview_quality)
+                    self.project_stems.catalogue_track(
+                        session,
+                        project,
+                        track,
+                        next_generation,
+                        quality=project.preview_quality,
+                        stem_dir=self.project_stems.generation_stem_dir(
+                            project.id, track.id, next_generation
+                        ),
+                    )
                 project.prepared_stems = list(project.requested_stems)
                 project.stem_generation = next_generation
                 project.status = "ready"

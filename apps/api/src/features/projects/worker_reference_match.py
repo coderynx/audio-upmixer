@@ -272,8 +272,11 @@ class ReferenceMatchMixin:
             track_overrides = copy.deepcopy(track.layout_overrides.get(layout, {}))
             source_key = track.asset.storage_key
             reference_key = reference.storage_key
+            stem_paths = [stem.relative_path for stem in track.stems]
 
-        stem_dir = self.project_stems.stem_dir(project_id, track_id)
+        stem_dir = self.project_stems.export_stem_dir(
+            project_id, track_id, project.stem_generation, stem_paths
+        )
 
         with ExitStack() as sources:
             input_path = sources.enter_context(self.source.materialize(source_key))
