@@ -8,9 +8,10 @@ This is the resumable handoff for the frozen
 
 Current status: Q01/Q02 plumbing and regression work is complete; Q03 has a
 12-recording tuning baseline; Q10 passes its objective equivalence and memory
-gate; Q20 remains partial and Q21 is unstarted/blocked; Q30 and Q40 experiments
-are complete but their candidates are rejected for production; Q31+ quality
-changes have not started.
+gate; Q20 remains partial, while the Q21 native-rate candidate passes its
+automatic production parity gate and awaits a quick owner listening OK; Q30 and
+Q40 experiments are complete but their candidates are rejected for production;
+Q31+ quality changes have not started.
 No production default has changed.
 
 ## Progress/stage
@@ -21,8 +22,8 @@ No production default has changed.
 | Q01/Q02 | Complete | — |
 | Q03 | Partial | — |
 | Q10 | Complete; objective gate passes | — |
-| Q20 | Partial | Finish its rate, residual, listening, and heldout prerequisites for Q21. |
-| Q21 | Unstarted; blocked by Q20 | Complete native-rate production integration only after Q20 passes. |
+| Q20 | Partial; native-rate automatic gate passed | Finish residual and heldout evidence as needed for later promotion. |
+| Q21 | Candidate implemented; automatic gate passes; quick owner listening pending | Get the owner OK, then consider the next candidate; default promotion remains separate. |
 | Q30 | Complete; rejected | No Q31; after Q21, Q50 or Q60 may be considered under their stated evidence gates. |
 | Q40 | Complete; rejected | No Q41. Q50, Q60, or Q80 remain conditional candidates; Q70 and Q90 require their follow-up prerequisites. |
 
@@ -302,9 +303,10 @@ separate reconstruction maximum absolute error
 `1.862645149230957e-09`; assigned-policy reconstruction maximum absolute error
 `5.960464477539063e-08`. The separate-Unassigned residual contract remains
 provisional: policy 1 leaves `Other` raw, while policy 2 adds the
-delivery-domain residual. Q21 remains unstarted and blocked, and any default
-change remains blocked pending listening review, a policy freeze, and one
-single heldout run. Heldout inference has not run.
+delivery-domain residual. The Q21 native-rate candidate is now implemented and
+its automatic parity gate passes; its quick owner listening gate is pending.
+Any default change remains blocked pending the applicable owner OK, policy
+freeze, and one single heldout run. Heldout inference has not run.
 
 The corrected one-item smoke artifacts are:
 
@@ -330,6 +332,42 @@ markers. Their comparison files (`short-12s/comparison-scipy-default-invalid.jso
 and `highrate-smoke/analysis-scipy-default-invalid.json`) are audit-only and
 must not be used for conclusions. The corrected artifacts use the selected
 120 dB FIR above.
+
+### Q21 — native-rate production candidate: automatic gate passes
+
+The opt-in production path is implemented by commits `6540f9a`, `9dafcf3`,
+`c8c7855`, and `81d4d79`. The final fix pre-resamples each non-native source
+zone with the selected 120 dB FIR before native inference, so the production
+path and Q20's native evaluator arm receive identical samples. Cache identity,
+resume identity, delivery conversion, exact rounded frame counts, supplied
+stems, and silence-skip paths are covered by the owning tests.
+The current pre-resample uses the zone array already loaded by the pipeline;
+bounded streaming conversion remains a follow-up before any broad default
+promotion.
+
+The direct production smoke used the genuine 48 kHz tuning input
+`freidi-48k/smoke/q20-conservation-12s`, not heldout material. It ran the
+Deux → BS-Roformer-SW tree on MPS with native inference at 44.1 kHz, delivery
+at 48 kHz, batch size 1, overlap 2, and the default silence-skip policy. The
+six public terminal WAVs were stereo, finite, 576,000 frames, and bit-identical
+to the retained Q20 native arm: maximum absolute and RMS differences were both
+`0.0`. Runtime was `27.46 s` wall time with maximum RSS
+`1,869,807,616` bytes; no OOM fallback occurred. The focused native-rate and
+rate-experiment suite passed `24` tests.
+
+Retained evidence is at
+`$UPMIXER_EVAL_ROOT/q21/production-native-smoke-freidi-48k-81d4d79`:
+`comparison.json` SHA-256
+`6dfd5863b6aac908f28df9325cc75d51de2d530891fdd6983406b42097597648` and
+`SHA256SUMS` SHA-256
+`d967f72d18853400bc2c7e27d25c23f5edd4f0ff03493af4eb2d591caafd6652`.
+The code revision is
+`81d4d79f7ff8df444734d39c47d8aaa52e02fa2a`.
+
+The automatic gate passes. Per the current project rule, the only remaining
+human gate for this candidate is a quick owner listening OK. No listener panel,
+ratings form, or manual human report is required; heldout inference remains
+untouched.
 
 ### Q30 — origin-view experiment complete; candidate rejected
 
@@ -440,9 +478,10 @@ pre-hardening archive remains at
 `/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1/results-pre-hardening-24a32dc`
 for audit only.
 
-The stop rule applies: no production change was made and the evaluation
+The stop rule applies: no production default change was made and the evaluation
 harness is retained. The combined Q20/Q21 stage remains partial: Q20 is
-incomplete and Q21 is unstarted and blocked. This Q40 result is diagnostic and
+incomplete and the Q21 native-rate candidate awaits quick owner listening.
+This Q40 result is diagnostic and
 promotion-prohibited; those entry prerequisites independently continue to block
 production. Per the plan, the next named candidates are Q50 event or
 repetition evidence after Q21 (or earlier only for a concrete DrumSep
@@ -483,13 +522,14 @@ cd /Users/coderynx/Projects/upmixer
 
 - [ ] Run no heldout inference until the rate, residual, and listening policy is frozen; the generated heldout excerpts remain untouched.
 - [x] Prepare blinded randomized listening assets and answer keys; three tuning-only packs are recorded above.
-- [ ] Complete listening review with playback conditions and a defect ledger for leakage, fullness/detail, musical noise, attacks/decay, tonality/phase, stereo image, and continuity; review every numerical flag above.
+- [ ] Obtain the quick owner listening OK for each automatically passing candidate; no listener panel, ratings form, or manual human report is required.
 - [ ] Define and persist the separate unassigned source-zone remainder, including cache/store, preview/export, subset/solo/mute, alignment, rate, and level semantics. A source anchor is not residual preservation.
 - [x] Run the fixed-sample-context versus matched-duration diagnostic; retain fixed-sample context and reject the 96 kHz matched-duration arm.
 - [ ] Expand and confirm eligible complete-tree real evidence where references permit. The corrected one-item branch smokes exercised the SCNet ensemble, Karaoke lead/backing path, and private `_deux_inst` on tuning/proxy material; broader coverage remains open, and the branch proxies plus supplementary IDMT, MedleyDB, CrowdioSet, Freischütz, and Celtic sets do not substitute for aligned heldout music.
 - [ ] Measure CUDA when available and freeze a numerical device memory ceiling; the CPU smoke is recorded above.
 - [ ] Verify the normal source-anchor product path separately with anchoring off for the experiment.
-- [ ] Q21 native-rate production integration, bounded conversion, cache/resume identity, and any default promotion remain unstarted and blocked by the Q20 gates.
+- [x] Q21 native-rate production integration, delivery conversion, cache/resume identity, and direct production parity are implemented and pass the automatic gate; bounded streaming conversion remains a follow-up.
+- [ ] Q21 quick owner listening OK is pending; default promotion remains a separate decision.
 
 ## Restart commands
 
