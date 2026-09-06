@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -327,6 +329,105 @@ def test_project_export_clones_tracks_spanning_multiple_imports(tmp_path, monkey
         assert len(job["tracks"]) == 2
         asset_ids = {track["asset"]["id"] for track in job["tracks"]}
         assert asset_ids == {first_asset.id, second_asset.id}
+
+
+def _seed_subset_export_project(tmp_path, second_requested, second_stored=None):
+    from upmixer_web.features.projects.storage import ProjectStemStorage
+    from upmixer_web.shared.database import create_database_engine, create_session_factory, upgrade_database
+    from upmixer_web.shared.models import ImportBatch, MediaAsset, Project, ProjectStem, ProjectTrack
+
+    database_url = f"sqlite:///{tmp_path / 'subset-export.db'}"
+    settings = Settings(data_dir=tmp_path, database_url=database_url, worker_count=1)
+    upgrade_database(database_url)
+    engine = create_database_engine(database_url)
+    factory = create_session_factory(engine)
+    project_stems = ProjectStemStorage(tmp_path / "project-stems")
+    stored = list(second_stored if second_stored is not None else second_requested)
+    with factory() as session:
+        batch = ImportBatch(kind="album", title="Subset export")
+        project = Project(
+            import_batch=batch,
+            name="Subset export",
+            manifest={
+                "version": "1.0.0",
+                "engine": {"mode": "stem", "stems": ["Vocals", "Bass"]},
+                "mixing": {"channel_layout": "5.1"},
+            },
+            status="ready",
+            requested_stems=["Vocals", "Bass"],
+            prepared_stems=["Vocals", "Bass"],
+            stem_generation=1,
+        )
+        tracks = [
+            ProjectTrack(
+                project=project,
+                asset=MediaAsset(
+                    import_batch=batch, filename="vocals.wav", relative_path="vocals.wav",
+                    storage_key="objects/vocals.wav", sha256="1" * 64, size_bytes=1,
+                ),
+                position=0,
+                layout_overrides={"5.1": {"engine": {"stems": ["Vocals"]}}},
+            ),
+            ProjectTrack(
+                project=project,
+                asset=MediaAsset(
+                    import_batch=batch, filename="full.wav", relative_path="full.wav",
+                    storage_key="objects/full.wav", sha256="2" * 64, size_bytes=1,
+                ),
+                position=1,
+                layout_overrides={"5.1": {"engine": {"stems": list(second_requested)}}},
+            ),
+        ]
+        session.add_all([batch, project, *tracks])
+        session.flush()
+        for track, stem_keys in zip(tracks, (["Vocals"], stored), strict=True):
+            entry = project_stems.generation_stem_dir(project.id, track.id, 1)
+            entry.mkdir(parents=True, exist_ok=True)
+            for stem_key in stem_keys:
+                stem_path = entry / f"{stem_key}.wav"
+                stem_path.write_bytes(_wav_bytes())
+                session.add(ProjectStem(
+                    project=project,
+                    track=track,
+                    stem_key=stem_key,
+                    relative_path=str(stem_path.relative_to(project_stems.root)),
+                    sample_rate=48_000,
+                    channels=2,
+                    size_bytes=stem_path.stat().st_size,
+                    generation=1,
+                ))
+            (entry / "stems.json").write_text(
+                json.dumps({"schema": 1, "stem_keys": stem_keys, "sample_rate": 48_000}),
+                encoding="utf-8",
+            )
+        session.commit()
+        project_id = project.id
+    engine.dispose()
+    return settings, project_id
+
+
+def test_project_export_accepts_per_track_stem_subsets(tmp_path, monkeypatch):
+    settings, project_id = _seed_subset_export_project(tmp_path, ["Vocals", "Bass"])
+    monkeypatch.setattr("upmixer_web.worker.WorkerManager.start", lambda _self: None)
+    monkeypatch.setattr("upmixer_web.worker.WorkerManager.stop", lambda _self: None)
+
+    with TestClient(create_app(settings)) as client:
+        exported = client.post(f"/api/v1/projects/{project_id}/exports", json={"layout": "5.1"})
+        assert exported.status_code == 201, exported.text
+        assert len(exported.json()["tracks"]) == 2
+
+
+def test_project_export_rejects_a_missing_track_stem(tmp_path, monkeypatch):
+    settings, project_id = _seed_subset_export_project(
+        tmp_path, ["Vocals", "Bass"], second_stored=["Vocals"]
+    )
+    monkeypatch.setattr("upmixer_web.worker.WorkerManager.start", lambda _self: None)
+    monkeypatch.setattr("upmixer_web.worker.WorkerManager.stop", lambda _self: None)
+
+    with TestClient(create_app(settings)) as client:
+        exported = client.post(f"/api/v1/projects/{project_id}/exports", json={"layout": "5.1"})
+        assert exported.status_code == 409
+        assert "missing" in exported.json()["detail"]
 
 
 def test_add_project_assets_stores_per_file_overrides_and_unions_stems(tmp_path, monkeypatch):

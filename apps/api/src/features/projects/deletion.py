@@ -1,5 +1,6 @@
 """Project deletion state transition."""
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from upmixer_web.shared.models import Project
@@ -14,8 +15,11 @@ def mark_project_deleting(session: Session, project: Project) -> bool:
     is in-flight and has been flagged ``deleting`` for the worker to tear down.
     """
     if project.status in {"preparing", "expanding"}:
-        project.status = "deleting"
-        project.status_message = "Stopping worker before deletion"
+        updated = session.execute(
+            update(Project)
+            .where(Project.id == project.id, Project.status.in_(("preparing", "expanding")))
+            .values(status="deleting", status_message="Stopping worker before deletion")
+        )
         session.commit()
-        return False
+        return updated.rowcount == 0
     return True
