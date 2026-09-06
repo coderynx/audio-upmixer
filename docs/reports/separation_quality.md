@@ -10,9 +10,10 @@ Current status: Q01/Q02 plumbing and regression work is complete; Q03 has a
 12-recording tuning baseline; Q10 passes its objective equivalence and memory
 gate; Q20 remains partial, while the Q21 native-rate candidate passed its
 automatic production parity gate and was accepted after the owner's 2026-09-06
-quick listening OK; Q21 remains opt-in/default-off and Q50 is next; Q30 and Q40
-experiments are complete but their candidates are rejected for production; Q31+
-quality changes have not started.
+quick listening OK; Q21 remains opt-in/default-off. Q30, Q40, and Q50
+experiments are complete but their candidates are rejected for production;
+Q50's experimental helper has been removed after its automatic failure. Q31,
+Q60, and later quality changes have not started.
 No production default has changed.
 
 ## Progress/stage
@@ -24,9 +25,10 @@ No production default has changed.
 | Q03 | Partial | — |
 | Q10 | Complete; objective gate passes | — |
 | Q20 | Partial; native-rate automatic gate passed | Finish residual and heldout evidence as needed for later promotion. |
-| Q21 | Accepted after automatic gate and quick owner OK; opt-in/default-off | Q50 is next; default promotion remains separate. |
-| Q30 | Complete; rejected | No Q31; Q50 is next under the sequential candidate workflow. |
-| Q40 | Complete; rejected | No Q41. Q50 is next; Q60 and Q80 remain conditional candidates; Q70 and Q90 require their follow-up prerequisites. |
+| Q21 | Accepted after automatic gate and quick owner OK; opt-in/default-off | Q50 was evaluated next and rejected; default promotion remains separate. |
+| Q30 | Complete; rejected | No Q31; Q50 was evaluated next and rejected under the sequential candidate workflow. |
+| Q40 | Complete; rejected | No Q41. Q50 is complete and rejected; Q60 and Q80 remain conditional candidates; Q70 and Q90 require their follow-up prerequisites. |
+| Q50 | Complete; rejected | No Q51. Q60 and Q80 remain conditional candidates; Q70 and Q90 require their follow-up prerequisites. |
 
 ## Frozen identity and corpus
 
@@ -367,8 +369,8 @@ The code revision is
 
 The automatic gate passes. The owner's 2026-09-06 quick listening verdict was
 `OK`. Under the sequential candidate workflow, Q21 is accepted for opt-in use
-and Q50 is next. The path remains opt-in/default-off; no panel, ratings, defect
-ledger, or heldout inference is claimed.
+and Q50 was evaluated next and rejected. The path remains opt-in/default-off; no
+panel, ratings, defect ledger, or heldout inference is claimed.
 
 ### Q30 — origin-view experiment complete; candidate rejected
 
@@ -484,10 +486,11 @@ harness is retained. The combined Q20/Q21 stage remains partial: Q20 is
 incomplete; Q21 was accepted for opt-in use after the owner's 2026-09-06 quick
 listening `OK` and remains default-off. This Q40 result is diagnostic and
 promotion-prohibited; those entry prerequisites independently continue to block
-production. Under the sequential candidate workflow, Q50 is next. Q60 remains
-conditional on a measured spatial/residual defect, and Q80 on a Q03 quiet-input
-failure. Q70 remains gated on an accepted magnitude improvement and Q90 on a
-named Q40/Q50 ambiguity plus failed classical cues.
+production. Under the sequential candidate workflow, Q50 was evaluated next and
+rejected below. Q60 remains conditional on a measured spatial/residual defect,
+and Q80 on a Q03 quiet-input failure. Q70 remains gated on an accepted
+magnitude improvement and Q90 on a named Q40/Q50 ambiguity plus failed
+classical cues.
 There is no Q41.
 
 Exact rerun commands (use fresh output directories):
@@ -517,6 +520,25 @@ cd /Users/coderynx/Projects/upmixer
   --cascade-vocal-repair
 ```
 
+### Q50 — aggregate-Drums event/repetition repair: rejected
+
+The tuning-only candidate was implemented in commits `94bb197` and `b10eff2`.
+The prescreen artifact is
+`/Volumes/External SSD/upmixer-eval/separation-quality/q50/event-repair-v1/prescreen-12s`;
+`report.json` SHA-256 is
+`5dc4bf3137c0b8c0efcc61c92657b02afca9527e59b03cb675afd61f9450b099`, and
+`SHA256SUMS` SHA-256 is
+`bdda9dfed8da1f9f7562a540ea87c49e65450dcee3d98fec9e0e20bd893c2332`.
+
+The automatic 12-item tuning prescreen recorded `0` transfers, `12` no-op
+items, and median Drums deltas of `0.0 dB / 0.0 / 0.0` for SDR / fullness /
+bleedless. Conservation was exact (`0.0` maximum absolute error), but the
+material gate failed. Review also found unsafe false-transfer cases and
+unbounded full-track STFT allocation. The candidate is rejected: no heldout
+inference, listening gate, or production integration was run. The experimental
+helper, exports, tests, and runner were removed; the external artifact remains
+available and the two implementation commits preserve reproduction history.
+
 ## Gates still open
 
 - [ ] Run no heldout inference until the rate, residual, and listening policy is frozen; the generated heldout excerpts remain untouched.
@@ -528,7 +550,7 @@ cd /Users/coderynx/Projects/upmixer
 - [ ] Measure CUDA when available and freeze a numerical device memory ceiling; the CPU smoke is recorded above.
 - [ ] Verify the normal source-anchor product path separately with anchoring off for the experiment.
 - [x] Q21 native-rate production integration, delivery conversion, cache/resume identity, and direct production parity are implemented and pass the automatic gate; bounded streaming conversion remains a follow-up.
-- [x] Q21 quick owner listening OK recorded on 2026-09-06; Q21 accepted for opt-in use and remains default-off; Q50 is next.
+- [x] Q21 quick owner listening OK recorded on 2026-09-06; Q21 accepted for opt-in use and remains default-off; Q50 was evaluated next and rejected.
 
 ## Restart commands
 
