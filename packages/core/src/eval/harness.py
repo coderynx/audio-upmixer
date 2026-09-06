@@ -20,16 +20,15 @@ import soundfile as sf
 from upmixer.config import UpmixConfig
 from upmixer.eval.corpus import CorpusItem, ReferenceCorpus
 from upmixer.eval.cascade import CascadeEvaluationResult
-from upmixer.eval.metrics import bleedless, fullness, sdr
 from upmixer.eval.reference_targets import (
     estimate_components as _estimate_components,
     missing_estimates as _missing_estimates,
     sum_estimate_components as _sum_estimate_components,
-    validate_audio as _validate_audio,
     validate_mapping as _validate_mapping,
 )
 from upmixer.eval.origins import OriginEvaluationResult
 from upmixer.eval.report import CoverageRow, EvalReport, StemScore
+from upmixer.eval.scoring import _score_stem, score_cascade_arms
 from upmixer.eval.types import ItemRunSettings, RunSettings
 from upmixer.separation.separator import (
     DEFAULT_MODEL,
@@ -359,43 +358,6 @@ def _coverage_rows(
     return rows
 
 
-def _score_stem(
-    item: CorpusItem,
-    stem_name: str,
-    ref_path: str,
-    estimate: np.ndarray,
-    sample_rate: int,
-) -> StemScore:
-    reference, reference_rate = sf.read(ref_path, dtype="float32", always_2d=True)
-    if reference_rate != sample_rate:
-        raise ValueError(
-            f"reference {ref_path} sample rate {reference_rate} does not "
-            f"match evaluation sample rate {sample_rate}"
-        )
-    _validate_audio(reference, f"reference {ref_path}")
-    _validate_audio(estimate, f"estimate {stem_name}")
-    if reference.shape[1] != estimate.shape[1]:
-        raise ValueError(
-            f"channel count mismatch for {stem_name}: reference has "
-            f"{reference.shape[1]}, estimate has {estimate.shape[1]}"
-        )
-    if reference.shape[0] != estimate.shape[0]:
-        raise ValueError(
-            f"frame count mismatch for {stem_name}: reference has "
-            f"{reference.shape[0]}, estimate has {estimate.shape[0]}"
-        )
-    return StemScore(
-        stem=stem_name,
-        category=item.category,
-        sdr=sdr(reference, estimate),
-        fullness=fullness(reference, estimate, sample_rate),
-        bleedless=bleedless(reference, estimate, sample_rate),
-        recording_id=item.recording_id,
-        item_id=item.item_id,
-        split=item.split,
-    )
-
-
 def evaluate_corpus(
     corpus: ReferenceCorpus,
     separate_fn: SeparateFn,
@@ -415,6 +377,7 @@ def evaluate_corpus(
     settings_rows: list[ItemRunSettings] = []
     origin_provenance: list[dict[str, object]] = []
     cascade_provenance: list[dict[str, object]] = []
+    cascade_arm_scores: list[dict[str, object]] = []
     shared_settings: RunSettings | None = None
     settings_vary = False
 
@@ -544,6 +507,10 @@ def evaluate_corpus(
                 else:
                     scores.append(score)
                     statuses[stem_name] = "scored"
+            if cascade_result is not None:
+                cascade_arm_scores.extend(
+                    score_cascade_arms(item, cascade_result, sample_rate)
+                )
         except EvaluationSkipped as exc:
             if not report_failures:
                 raise
@@ -577,4 +544,5 @@ def evaluate_corpus(
         code_revision=code_revision,
         origin_provenance=origin_provenance,
         cascade_provenance=cascade_provenance,
+        cascade_arm_scores=cascade_arm_scores,
     )

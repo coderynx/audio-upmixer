@@ -62,6 +62,7 @@ class EvalReport:
     code_revision: str | None = None
     origin_provenance: list[dict[str, object]] = field(default_factory=list)
     cascade_provenance: list[dict[str, object]] = field(default_factory=list)
+    cascade_arm_scores: list[dict[str, object]] = field(default_factory=list)
 
     def by_stem(self) -> dict[str, tuple[float, float, float]]:
         """Mean (sdr, fullness, bleedless) grouped by canonical stem name."""
@@ -129,6 +130,8 @@ class EvalReport:
             payload["origin_provenance"] = self.origin_provenance
         if self.cascade_provenance:
             payload["cascade_provenance"] = self.cascade_provenance
+        if self.cascade_arm_scores:
+            payload["cascade_arm_scores"] = self.cascade_arm_scores
         if paired_bootstrap is not None:
             payload["paired_bootstrap"] = paired_bootstrap
         return _validated_json(_json_safe(payload))

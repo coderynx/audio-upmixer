@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -18,7 +20,8 @@ from upmixer.eval import (
     evaluate_corpus,
     separate_with_deux_cascade,
 )
-from upmixer.eval.report import EvalReport, StemScore
+from upmixer.eval.report import EvalReport, StemScore, format_report
+from upmixer.separation.separator import SeparationSettings
 
 
 def _runner():
@@ -30,15 +33,53 @@ def _runner():
     return module
 
 
-def _source(tmp_path: Path, frames: int = 8, sample_rate: int = 8_000):
+def _source(tmp_path: Path, frames: int = 8, sample_rate: int = 44_100):
     values = np.arange(frames * 2, dtype=np.float32).reshape(frames, 2) / 10
     path = tmp_path / "mixture.wav"
     sf.write(path, values, sample_rate, subtype="FLOAT")
     return path, values
 
 
-def _settings(sample_rate: int = 8_000) -> RunSettings:
-    return RunSettings(model="becruily_deux.ckpt", sample_rate=sample_rate)
+def _settings(sample_rate: int = 44_100, *, device: str | None = None) -> RunSettings:
+    stage = SeparationSettings(
+        model="becruily_deux.ckpt",
+        sample_rate=sample_rate,
+        batch_size=1,
+        segment_size=1601,
+        chunk_duration_s=None,
+        overlap=2,
+        tta=False,
+        pitch_shift=None,
+        backend="test",
+        model_arch="bs_roformer",
+        model_config_name="becruily_deux",
+        model_native_sample_rate=44_100,
+        device=device,
+        checkpoint_sha256=(
+            "10255c02295bf3e3865d4ee50ff752d7b19b124ed5fd93b147babc4333eda3aa"
+        ),
+        model_config_sha256=(
+            "0539c3ee9a4800ccb3a4bf7a507dfa97e77857649651169eb907087130d0ad77"
+        ),
+        runtime_precision="float32",
+        normalization_policy="peak-downscale-to-0.9; inverse-output-scale",
+    )
+    return RunSettings(
+        model="becruily_deux.ckpt",
+        sample_rate=sample_rate,
+        segment_size=1601,
+        overlap=2,
+        batch_size=1,
+        model_arch="bs_roformer",
+        model_config_name="becruily_deux",
+        model_native_sample_rate=44_100,
+        stage_settings=(stage,),
+        device=device,
+        input_sample_rate=sample_rate,
+        separation_sample_rate=sample_rate,
+        output_sample_rate=sample_rate,
+        scoring_sample_rate=sample_rate,
+    )
 
 
 def test_deux_cascade_uses_exact_counterfactual_and_declared_formulas(tmp_path):
@@ -147,7 +188,7 @@ def test_deux_cascade_requires_same_settings_and_sample_rate(tmp_path):
         return {
             "Vocals": np.zeros((8, 2), dtype=np.float32),
             "_deux_inst": np.zeros((8, 2), dtype=np.float32),
-        }, RunSettings(model="fake", sample_rate=8_000, batch_size=calls)
+        }, replace(_settings(), device=f"device-{calls}")
 
     with pytest.raises(ValueError, match="identical RunSettings"):
         separate_with_deux_cascade(str(mixture), changing_settings)
@@ -156,10 +197,38 @@ def test_deux_cascade_requires_same_settings_and_sample_rate(tmp_path):
         return {
             "Vocals": np.zeros((8, 2), dtype=np.float32),
             "_deux_inst": np.zeros((8, 2), dtype=np.float32),
-        }, RunSettings(model="fake", sample_rate=44_100)
+        }, _settings(48_000)
 
     with pytest.raises(ValueError, match="sample rate"):
         separate_with_deux_cascade(str(mixture), wrong_rate)
+
+
+def test_deux_cascade_rejects_non_frozen_observed_settings(tmp_path):
+    mixture, source = _source(tmp_path)
+    settings = _settings()
+    bad_settings = (
+        replace(settings, segment_size=1600),
+        replace(
+            settings,
+            stage_settings=(
+                replace(settings.stage_settings[0], checkpoint_sha256="wrong"),
+            ),
+        ),
+        replace(settings, tta=True),
+    )
+
+    for bad in bad_settings:
+        with pytest.raises(ValueError, match="frozen settings"):
+            separate_with_deux_cascade(
+                str(mixture),
+                lambda _path, bad=bad: (
+                    {
+                        "Vocals": source.copy(),
+                        "_deux_inst": np.zeros_like(source),
+                    },
+                    bad,
+                ),
+            )
 
 
 def test_deux_cascade_conserves_source_in_float32(tmp_path):
@@ -190,12 +259,15 @@ def test_deux_cascade_conserves_source_in_float32(tmp_path):
 def test_deux_cascade_provenance_and_report_field(tmp_path):
     mixture, source = _source(tmp_path)
     reference = tmp_path / "vocals.wav"
-    sf.write(reference, source, 8_000, subtype="FLOAT")
+    instrumental = tmp_path / "instrumental.wav"
+    sf.write(reference, source, 44_100, subtype="FLOAT")
+    sf.write(instrumental, source * 0.2, 44_100, subtype="FLOAT")
     corpus = ReferenceCorpus(
         [
             CorpusItem(
                 mixture=str(mixture),
-                stems={"Vocals": str(reference)},
+                stems={"Vocals": str(reference), "Instrumental": str(instrumental)},
+                estimate_stems={"Instrumental": ("_deux_inst",)},
                 recording_id="recording-0",
                 item_id="item-0",
             )
@@ -213,17 +285,43 @@ def test_deux_cascade_provenance_and_report_field(tmp_path):
     assert provenance["separation_call_count"] == 2
     assert len(provenance["arms"]) == 5
     assert provenance["memory_scope"] == "parent_process_lifetime_peak_rss"
+    runtimes = [arm["runtime_s"] for arm in provenance["arms"]]
+    assert runtimes == sorted(runtimes)
+    assert provenance["control_runtime_s"] == runtimes[1]
+    assert provenance["candidate_runtime_s"] == runtimes[-1]
+    assert provenance["candidate_to_control_runtime_ratio"] >= 1
     report = evaluate_corpus(
-        corpus, lambda path: separate_with_deux_cascade(path, separate), 8_000
+        corpus, lambda path: separate_with_deux_cascade(path, separate), 44_100
     )
     payload = report.to_dict()
     assert len(payload["cascade_provenance"]) == 1
+    assert len(payload["cascade_arm_scores"]) == 10
+    assert {row["arm_id"] for row in payload["cascade_arm_scores"]} == {
+        "independent-deux",
+        "complementary-v0",
+        "counterfactual-v1",
+        "refined-complement",
+        "fixed-half-recipe",
+    }
+    assert {row["stem"] for row in payload["cascade_arm_scores"]} == {
+        "Vocals",
+        "Instrumental",
+    }
+    assert all(
+        {"arm_id", "role", "input", "stem", "category", "sdr", "fullness", "bleedless"}
+        <= row.keys()
+        for row in payload["cascade_arm_scores"]
+    )
+    text = format_report(report)
+    assert "Cascade arm scores" in text
+    assert "fixed-half-recipe" in text
     assert "origin_provenance" not in payload
     ordinary = EvalReport(
         settings=settings,
         scores=[StemScore("Vocals", "default", 1.0, 1.0, 1.0, "recording-0", "item-0")],
     ).to_dict()
     assert "cascade_provenance" not in ordinary
+    assert "cascade_arm_scores" not in ordinary
     assert (
         json.loads(EvalReport(settings=settings, scores=[]).to_json())
         == EvalReport(settings=settings, scores=[]).to_dict()
@@ -277,7 +375,7 @@ def test_runner_retains_all_cascade_arm_paths_and_provenance(tmp_path):
     runner = _runner()
     mixture, source = _source(tmp_path)
     reference = tmp_path / "vocals.wav"
-    sf.write(reference, source, 8_000, subtype="FLOAT")
+    sf.write(reference, source, 44_100, subtype="FLOAT")
     corpus = ReferenceCorpus(
         [CorpusItem(mixture=str(mixture), stems={"Vocals": str(reference)})],
         corpus_id="q40-retention-v1",
@@ -295,7 +393,7 @@ def test_runner_retains_all_cascade_arm_paths_and_provenance(tmp_path):
         lambda path: separate_with_deux_cascade(path, separate),
         corpus,
         output_dir,
-        8_000,
+        44_100,
     )
     result = retaining(str(mixture))
     index = json.loads((output_dir / "stems/index.json").read_text())
@@ -347,7 +445,70 @@ def test_runner_rejects_non_frozen_cascade_options(tmp_path, capsys, option):
                 "--cascade-vocal-repair",
                 "--model",
                 "becruily_deux.ckpt",
+                "--retain-stems",
                 *option,
             ]
         )
     assert "cascade-vocal-repair" in capsys.readouterr().err
+
+
+def test_runner_requires_retained_stems_for_cascade(tmp_path, capsys):
+    runner = _runner()
+    with pytest.raises(SystemExit):
+        runner.main(
+            [
+                "--corpus",
+                "synthetic",
+                "--variant",
+                "real-model",
+                "--output-dir",
+                str(tmp_path / "report"),
+                "--cascade-vocal-repair",
+                "--model",
+                "becruily_deux.ckpt",
+            ]
+        )
+    assert "requires --retain-stems" in capsys.readouterr().err
+
+
+def test_runner_validates_frozen_corpus_identity(tmp_path, monkeypatch, capsys):
+    runner = _runner()
+    manifest = tmp_path / "corpus.json"
+    manifest.write_text("frozen", encoding="utf-8")
+    paths = {
+        "mixture": tmp_path / "mixture.wav",
+        "Vocals": tmp_path / "vocals.wav",
+        "Instrumental": tmp_path / "instrumental.wav",
+    }
+    item = CorpusItem(
+        mixture=str(paths["mixture"]),
+        stems={
+            "Vocals": str(paths["Vocals"]),
+            "Instrumental": str(paths["Instrumental"]),
+        },
+        category="q40-deux-counterfactual-half",
+        recording_id="musdb18-hq/Hollow Ground - Ill Fate",
+        item_id="musdb18-hq/tuning/Hollow Ground - Ill Fate#60s-72s",
+        split="tuning",
+        estimate_stems={"Instrumental": ("_deux_inst",)},
+    )
+    corpus = ReferenceCorpus(
+        [item], corpus_id="upmixer-musdb18hq-v1-q40-deux-counterfactual-half-v1"
+    )
+    hashes = {str(manifest): runner._CASCADE_CORPUS_SHA256}
+    hashes.update(
+        {str(paths[name]): value for name, value in runner._CASCADE_FILE_SHA256.items()}
+    )
+    monkeypatch.setattr(runner, "_sha256_file", lambda path: hashes[str(path)])
+    monkeypatch.setattr(
+        runner.sf,
+        "info",
+        lambda _path: SimpleNamespace(samplerate=44_100, channels=2, frames=529_200),
+    )
+    runner._validate_frozen_cascade_corpus(corpus, tmp_path, runner._parser())
+
+    with pytest.raises(SystemExit):
+        runner._validate_frozen_cascade_corpus(
+            replace(corpus, corpus_id="wrong"), tmp_path, runner._parser()
+        )
+    assert "requires corpus ID" in capsys.readouterr().err

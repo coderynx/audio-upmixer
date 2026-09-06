@@ -26,6 +26,15 @@ SeparateFn = Callable[[str], tuple[dict[str, np.ndarray], RunSettings]]
 CASCADE_RECIPE = "q40-deux-counterfactual-half-v1"
 CASCADE_STEM_NAMES = frozenset({"Vocals", "_deux_inst"})
 _CONSERVATION_TOLERANCE = 1e-6
+_CASCADE_MODEL = "becruily_deux.ckpt"
+_CASCADE_CONFIG = "becruily_deux"
+_CASCADE_CHECKPOINT_SHA256 = (
+    "10255c02295bf3e3865d4ee50ff752d7b19b124ed5fd93b147babc4333eda3aa"
+)
+_CASCADE_CONFIG_SHA256 = (
+    "0539c3ee9a4800ccb3a4bf7a507dfa97e77857649651169eb907087130d0ad77"
+)
+_CASCADE_NORMALIZATION = "peak-downscale-to-0.9; inverse-output-scale"
 
 
 @dataclass
@@ -121,6 +130,21 @@ class CascadeEvaluationResult:
             "arms": arm_rows,
             "totals": totals,
         }
+        control_runtime_s = next(
+            arm.runtime_s for arm in self.arms if arm.arm_id == "complementary-v0"
+        )
+        candidate_runtime_s = next(
+            arm.runtime_s for arm in self.arms if arm.arm_id == "fixed-half-recipe"
+        )
+        payload.update(
+            control_runtime_s=float(control_runtime_s),
+            candidate_runtime_s=float(candidate_runtime_s),
+            candidate_to_control_runtime_ratio=(
+                float(candidate_runtime_s / control_runtime_s)
+                if control_runtime_s > 0
+                else None
+            ),
+        )
         if recording_id is not None:
             payload.update(
                 recording_id=recording_id,
@@ -242,23 +266,89 @@ def _derived_arm(
     )
 
 
+def _validate_protocol_settings(settings: RunSettings, source_rate: int) -> None:
+    """Reject runs that do not match the frozen direct-Deux protocol."""
+    checks = (
+        (settings.model == _CASCADE_MODEL, "model must be becruily_deux.ckpt"),
+        (settings.sample_rate == 44_100, "sample rate must be 44100"),
+        (settings.sample_rate == source_rate, "sample rate must match mixture"),
+        (settings.batch_size == 1, "batch size must be 1"),
+        (settings.segment_size == 1601, "effective segment size must be 1601"),
+        (settings.overlap == 2, "overlap must be 2"),
+        (settings.chunk_duration_s is None, "outer chunking must be disabled"),
+        (settings.tta is False, "TTA must be disabled"),
+        (settings.pitch_shift is None, "pitch shift must be disabled"),
+        (settings.ensemble_algorithm is None, "ensemble must be disabled"),
+        (settings.ensemble_models is None, "ensemble must be disabled"),
+        (settings.plan is None, "production plan must be absent"),
+        (settings.rate_arm is None, "rate arm must be absent"),
+        (settings.resampler is None, "resampling must be disabled"),
+        (settings.input_sample_rate == 44_100, "input rate must be 44100"),
+        (settings.separation_sample_rate == 44_100, "separation rate must be 44100"),
+        (settings.output_sample_rate == 44_100, "output rate must be 44100"),
+        (settings.scoring_sample_rate == 44_100, "scoring rate must be 44100"),
+        (settings.model_native_sample_rate == 44_100, "model rate must be 44100"),
+        (settings.model_config_name == _CASCADE_CONFIG, "config must be becruily_deux"),
+        (settings.stem_primary_remask is None, "production remasking must be absent"),
+        (settings.stem_drum_remask is None, "production remasking must be absent"),
+        (settings.stem_bleed_reduction is None, "production remasking must be absent"),
+        (settings.stem_ensemble is None, "production ensemble must be absent"),
+    )
+    for valid, message in checks:
+        if not valid:
+            raise ValueError(f"Q40 cascade requires frozen settings: {message}")
+    if len(settings.stage_settings) != 1:
+        raise ValueError("Q40 cascade requires exactly one observed model stage")
+    stage = settings.stage_settings[0]
+    stage_checks = (
+        (stage.model == _CASCADE_MODEL, "stage model must be becruily_deux.ckpt"),
+        (stage.sample_rate == 44_100, "stage sample rate must be 44100"),
+        (stage.batch_size == 1, "stage batch size must be 1"),
+        (stage.segment_size == 1601, "stage segment size must be 1601"),
+        (stage.overlap == 2, "stage overlap must be 2"),
+        (stage.chunk_duration_s is None, "stage outer chunking must be disabled"),
+        (stage.tta is False, "stage TTA must be disabled"),
+        (stage.pitch_shift is None, "stage pitch shift must be disabled"),
+        (
+            stage.model_config_name == _CASCADE_CONFIG,
+            "stage config must be becruily_deux",
+        ),
+        (
+            stage.checkpoint_sha256 == _CASCADE_CHECKPOINT_SHA256,
+            "checkpoint hash does not match frozen protocol",
+        ),
+        (
+            stage.model_config_sha256 == _CASCADE_CONFIG_SHA256,
+            "model config hash does not match frozen protocol",
+        ),
+        (stage.runtime_precision == "float32", "runtime precision must be float32"),
+        (
+            stage.normalization_policy == _CASCADE_NORMALIZATION,
+            "normalization policy does not match frozen protocol",
+        ),
+        (not stage.oom_fallback_attempts, "OOM fallback must be disabled"),
+        (stage.oom_fallback_count == 0, "OOM fallback must be disabled"),
+    )
+    for valid, message in stage_checks:
+        if not valid:
+            raise ValueError(f"Q40 cascade requires frozen settings: {message}")
+
+
 def separate_with_deux_cascade(
     mixture_path: str,
     separate_fn: SeparateFn,
 ) -> CascadeEvaluationResult:
     """Run Deux on ``X`` and ``X - 0.5 * I0`` for the fixed Q40 recipe."""
+    total_started = time.perf_counter()
     source, source_rate = sf.read(mixture_path, dtype="float32", always_2d=True)
     source = np.asarray(source, dtype=np.float32).copy()
     _validate_audio(source, f"mixture {mixture_path}")
     if source.shape[1] != 2:
         raise ValueError("cascade mixture must be linked stereo")
     source_frames = source.shape[0]
-    total_started = time.perf_counter()
 
     def run(path: str, label: str):
-        started = time.perf_counter()
         result = separate_fn(path)
-        elapsed = time.perf_counter() - started
         if not isinstance(result, tuple) or len(result) != 2:
             raise ValueError(f"{label} separation returned invalid result")
         stems, settings = result
@@ -276,10 +366,19 @@ def separate_with_deux_cascade(
                 label=label,
             ),
             settings,
-            elapsed,
         )
 
-    baseline, settings, baseline_elapsed = run(mixture_path, "independent")
+    baseline, settings = run(mixture_path, "independent")
+    _validate_protocol_settings(settings, source_rate)
+    baseline_ready_s = time.perf_counter() - total_started
+    complementary = _derived_arm(
+        "complementary-v0",
+        "candidate control",
+        "X",
+        baseline["Vocals"],
+        source,
+    )
+    complementary.runtime_s = baseline_ready_s + complementary.runtime_s
     with np.errstate(over="ignore", invalid="ignore"):
         counterfactual_input = np.subtract(
             source,
@@ -295,12 +394,12 @@ def separate_with_deux_cascade(
             source_rate,
             subtype="FLOAT",
         )
-        refined, refined_settings, refined_elapsed = run(
-            str(counterfactual_path), "counterfactual"
-        )
+        refined, refined_settings = run(str(counterfactual_path), "counterfactual")
 
+    _validate_protocol_settings(refined_settings, source_rate)
     if refined_settings != settings:
         raise ValueError("cascade separation calls require identical RunSettings")
+    counterfactual_ready_s = time.perf_counter() - total_started
 
     independent = CascadeArmOutput(
         arm_id="independent-deux",
@@ -309,15 +408,8 @@ def separate_with_deux_cascade(
         stems=baseline,
         input_frame_count=source_frames,
         raw_output_frame_count=source_frames,
-        runtime_s=baseline_elapsed,
+        runtime_s=baseline_ready_s,
         inference=True,
-    )
-    complementary = _derived_arm(
-        "complementary-v0",
-        "candidate control",
-        "X",
-        baseline["Vocals"],
-        source,
     )
     counterfactual = CascadeArmOutput(
         arm_id="counterfactual-v1",
@@ -326,7 +418,7 @@ def separate_with_deux_cascade(
         stems=refined,
         input_frame_count=source_frames,
         raw_output_frame_count=source_frames,
-        runtime_s=refined_elapsed,
+        runtime_s=counterfactual_ready_s,
         inference=True,
     )
     refined_complement = _derived_arm(
@@ -336,7 +428,7 @@ def separate_with_deux_cascade(
         refined["Vocals"],
         source,
     )
-    started = time.perf_counter()
+    refined_complement.runtime_s = time.perf_counter() - total_started
     with np.errstate(over="ignore", invalid="ignore"):
         candidate_vocals = np.add(
             np.multiply(baseline["Vocals"], np.float32(0.5), dtype=np.float32),
@@ -350,7 +442,7 @@ def separate_with_deux_cascade(
         candidate_vocals,
         source,
     )
-    candidate.runtime_s = time.perf_counter() - started
+    candidate.runtime_s = time.perf_counter() - total_started
     arms = (
         independent,
         complementary,

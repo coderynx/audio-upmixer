@@ -207,4 +207,15 @@ def format_report(report: EvalReport) -> str:
                 f"split={row.split} category={row.category} stem={row.stem}"
             )
             lines.append(f"  {row.status} {identity}: {detail}")
+    if report.cascade_arm_scores:
+        lines.append("")
+        lines.append("Cascade arm scores (SDR dB / fullness / bleedless):")
+        for row in report.cascade_arm_scores:
+            lines.append(
+                f"  {row['arm_id']:<24} role={row['role']} input={row['input']} "
+                f"recording_id={row['recording_id']} item_id={row['item_id']} "
+                f"split={row['split']} category={row['category']} stem={row['stem']} "
+                f"SDR={row['sdr']:7.2f} fullness={row['fullness']:.3f} "
+                f"bleedless={row['bleedless']:.3f}"
+            )
     return "\n".join(lines)

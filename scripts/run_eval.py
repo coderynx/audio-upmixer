@@ -15,6 +15,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import math
 import subprocess
 from functools import partial
@@ -46,6 +47,18 @@ from upmixer.separation.separator import DEFAULT_MODEL
 
 _PROTOCOL_ID = "upmixer-separation-q00-v1"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+_CASCADE_CORPUS_SHA256 = (
+    "b835022cb61d8b61197f4d0521686e3f42628c864a36138f46921c0cef0c694e"
+)
+_CASCADE_CORPUS_ID = "upmixer-musdb18hq-v1-q40-deux-counterfactual-half-v1"
+_CASCADE_ITEM_ID = "musdb18-hq/tuning/Hollow Ground - Ill Fate#60s-72s"
+_CASCADE_RECORDING_ID = "musdb18-hq/Hollow Ground - Ill Fate"
+_CASCADE_CATEGORY = "q40-deux-counterfactual-half"
+_CASCADE_FILE_SHA256 = {
+    "mixture": "734b9aa62075732cc19e1eec8918e9b6f8e28cfe03340506e2f2d7ac28d46d7d",
+    "Vocals": "81e7f9322bfdb71bc68cadef053505ad611374373d26a4633790969e6a15b53b",
+    "Instrumental": "6cc635e43829471b3fdb81eca38c0971b8c91b3fd9b08776cb73886322ae46e7",
+}
 
 
 def _positive_int(value: str) -> int:
@@ -127,6 +140,10 @@ def _validate_cascade_args(
         return
     checks = (
         (
+            not args.retain_stems,
+            "--cascade-vocal-repair requires --retain-stems",
+        ),
+        (
             args.variant != "real-model",
             "--cascade-vocal-repair requires --variant real-model",
         ),
@@ -163,6 +180,65 @@ def _validate_cascade_args(
     for invalid, message in checks:
         if invalid:
             parser.error(message)
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _validate_frozen_cascade_corpus(
+    corpus: ReferenceCorpus, corpus_dir: Path, parser: argparse.ArgumentParser
+) -> None:
+    """Require the single licensed tuning item frozen by Q40."""
+    manifest = corpus_dir / "corpus.json"
+    try:
+        manifest_hash = _sha256_file(manifest)
+    except OSError as exc:
+        parser.error(f"--cascade-vocal-repair requires frozen corpus.json: {exc}")
+    if manifest_hash != _CASCADE_CORPUS_SHA256:
+        parser.error(
+            "--cascade-vocal-repair requires frozen corpus.json "
+            f"SHA256 {_CASCADE_CORPUS_SHA256}"
+        )
+    if corpus.corpus_id != _CASCADE_CORPUS_ID:
+        parser.error(
+            f"--cascade-vocal-repair requires corpus ID {_CASCADE_CORPUS_ID!r}"
+        )
+    if len(corpus.items) != 1:
+        parser.error("--cascade-vocal-repair requires exactly one tuning item")
+    item = corpus.items[0]
+    for field, expected in (
+        ("item_id", _CASCADE_ITEM_ID),
+        ("recording_id", _CASCADE_RECORDING_ID),
+        ("category", _CASCADE_CATEGORY),
+        ("split", "tuning"),
+    ):
+        if getattr(item, field) != expected:
+            parser.error(
+                f"--cascade-vocal-repair requires frozen item {field}={expected!r}"
+            )
+    if set(item.stems) != {"Vocals", "Instrumental"}:
+        parser.error(
+            "--cascade-vocal-repair requires Vocals and Instrumental references"
+        )
+    if item.estimate_stems != {"Instrumental": ("_deux_inst",)}:
+        parser.error(
+            "--cascade-vocal-repair requires Instrumental mapped to _deux_inst"
+        )
+    paths = {"mixture": item.mixture, **item.stems}
+    for name, expected_hash in _CASCADE_FILE_SHA256.items():
+        path = Path(paths[name])
+        try:
+            info = sf.info(str(path))
+            actual_hash = _sha256_file(path)
+        except (OSError, RuntimeError) as exc:
+            parser.error(f"--cascade-vocal-repair cannot read frozen {name}: {exc}")
+        if actual_hash != expected_hash:
+            parser.error(f"--cascade-vocal-repair requires frozen {name} content")
+        if (info.samplerate, info.channels, info.frames) != (44_100, 2, 529_200):
+            parser.error(
+                f"--cascade-vocal-repair requires {name} at 44100 Hz stereo/529200 frames"
+            )
 
 
 def _reference_separator(corpus: ReferenceCorpus, sample_rate: int) -> Callable:
@@ -353,6 +429,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.corpus == "synthetic"
         else ReferenceCorpus.from_dir(args.corpus)
     )
+    if args.cascade_vocal_repair:
+        _validate_frozen_cascade_corpus(corpus, Path(args.corpus), parser)
     if args.variant == "synthetic-reference":
         separate_fn = _reference_separator(corpus, args.sample_rate)
     else:
