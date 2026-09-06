@@ -104,6 +104,11 @@ def test_review_serves_manifest_audio_and_persists_replacements(tmp_path: Path) 
     }
     try:
         page = urlopen(f"{base}/").read().decode("utf-8")
+        state = json.loads(urlopen(f"{base}/api/state").read())
+        assert "rows" not in state
+        assert all(
+            value not in page for value in ("saved-listener", "saved-round", "keep")
+        )
         assert "/audio/case-a/A" in page and "/audio/case-b/B" in page
         assert all(column in page for column in _COLUMNS if column != "case_id")
         assert urlopen(f"{base}/audio/case-a/A").read() == b"AUDIO-A"

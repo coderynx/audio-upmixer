@@ -108,7 +108,7 @@ class ReviewStore:
             return list(csv.DictReader(file))
 
     def state(self) -> dict[str, object]:
-        return {"columns": self.columns, "cases": self.cases, "rows": self.rows()}
+        return {"columns": self.columns, "cases": self.cases}
 
     def audio_path(self, case_id: str, asset: str) -> Path:
         path = self.audio_paths.get((case_id, asset))
@@ -234,7 +234,7 @@ button{font:inherit;padding:.35rem .7rem} #status{min-height:1.5em}
         + state
         + """</script>
 <script>
-const data=JSON.parse(document.getElementById('review-data').textContent), form=document.getElementById('form'), status=document.getElementById('status');
+const data=JSON.parse(document.getElementById('review-data').textContent), form=document.getElementById('form'), status=document.getElementById('status'); data.rows=[];
 const caseSelect=document.getElementById('case'), audio=document.getElementById('audio'), meta=document.getElementById('meta');
 const fields=data.columns.filter(x=>x!=='case_id'); let index=0;
 for(const c of data.cases){const o=document.createElement('option');o.value=c.case_id;o.textContent=c.case_id;caseSelect.append(o)}
@@ -252,7 +252,7 @@ for(const el of form.elements){if(el.name==='case_id'||el.name==='listener_id'||
 function move(delta){index=(index+delta+data.cases.length)%data.cases.length;render()}
 caseSelect.onchange=()=>{index=data.cases.findIndex(c=>c.case_id===caseSelect.value);render()};previous.onclick=()=>move(-1);next.onclick=()=>move(1);
 document.getElementById('save').onclick=async()=>{const payload=Object.fromEntries(new FormData(form));payload.case_id=caseSelect.value;status.textContent='Saving…';
-try{const response=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw Error(result.error);data.rows=await (await fetch('/api/state')).json().then(x=>x.rows);status.textContent='Saved'}catch(error){status.textContent=error.message}}
+try{const response=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw Error(result.error);data.rows=data.rows.filter(r=>r.listener_id!==result.listener_id||r.round_id!==result.round_id||r.case_id!==result.case_id);data.rows.push(result);status.textContent='Saved'}catch(error){status.textContent=error.message}}
 render();
 </script></body></html>"""
     ).encode("utf-8")
