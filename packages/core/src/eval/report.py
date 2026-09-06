@@ -10,10 +10,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from upmixer.execution import write_report
-
 if TYPE_CHECKING:
     from upmixer.eval.types import ItemRunSettings, RunSettings
-
 
 _ScoreKey = tuple[str, str, str, str, str | None]
 
@@ -47,7 +45,6 @@ class CoverageRow:
     split: str | None = None
     detail: str | None = None
 
-
 @dataclass
 class EvalReport:
     """Full result of an evaluation run: settings plus per-item scores."""
@@ -60,6 +57,7 @@ class EvalReport:
     corpus_id: str | None = None
     code_revision: str | None = None
     origin_provenance: list[dict[str, object]] = field(default_factory=list)
+    cascade_provenance: list[dict[str, object]] = field(default_factory=list)
 
     def by_stem(self) -> dict[str, tuple[float, float, float]]:
         """Mean (sdr, fullness, bleedless) grouped by canonical stem name."""
@@ -113,6 +111,8 @@ class EvalReport:
         }
         if self.origin_provenance:
             payload["origin_provenance"] = self.origin_provenance
+        if self.cascade_provenance:
+            payload["cascade_provenance"] = self.cascade_provenance
         if paired_bootstrap is not None:
             payload["paired_bootstrap"] = paired_bootstrap
         return _validated_json(_json_safe(payload))

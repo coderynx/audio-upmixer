@@ -18,6 +18,7 @@ import soundfile as sf
 
 from upmixer.config import UpmixConfig
 from upmixer.eval.corpus import CorpusItem, ReferenceCorpus
+from upmixer.eval.cascade import CascadeEvaluationResult
 from upmixer.eval.metrics import bleedless, fullness, sdr
 from upmixer.eval.reference_targets import (
     estimate_components as _estimate_components,
@@ -416,6 +417,7 @@ def evaluate_corpus(
     coverage: list[CoverageRow] = []
     settings_rows: list[ItemRunSettings] = []
     origin_provenance: list[dict[str, object]] = []
+    cascade_provenance: list[dict[str, object]] = []
     shared_settings: RunSettings | None = None
     settings_vary = False
 
@@ -430,9 +432,16 @@ def evaluate_corpus(
                 if isinstance(separation_result, OriginEvaluationResult)
                 else None
             )
+            cascade_result = (
+                separation_result
+                if isinstance(separation_result, CascadeEvaluationResult)
+                else None
+            )
             estimate_stems, item_settings = (
                 (origin_result.stems, origin_result.settings)
                 if origin_result is not None
+                else (cascade_result.stems, cascade_result.settings)
+                if cascade_result is not None
                 else separation_result
             )
             if not isinstance(estimate_stems, dict):
@@ -478,6 +487,15 @@ def evaluate_corpus(
             if origin_result is not None:
                 origin_provenance.append(
                     origin_result.provenance(
+                        recording_id=item.recording_id,
+                        item_id=item.item_id,
+                        split=item.split,
+                        category=item.category,
+                    )
+                )
+            if cascade_result is not None:
+                cascade_provenance.append(
+                    cascade_result.provenance(
                         recording_id=item.recording_id,
                         item_id=item.item_id,
                         split=item.split,
@@ -561,4 +579,5 @@ def evaluate_corpus(
         corpus_id=corpus.corpus_id,
         code_revision=code_revision,
         origin_provenance=origin_provenance,
+        cascade_provenance=cascade_provenance,
     )

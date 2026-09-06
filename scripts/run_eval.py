@@ -27,16 +27,19 @@ import soundfile as sf
 from upmixer.config import UpmixConfig
 from upmixer.execution import write_report
 from upmixer.eval import (
+    CascadeEvaluationResult,
     OriginEvaluationResult,
     ReferenceCorpus,
     RunSettings,
     evaluate_corpus,
     format_report,
     separate_for_eval,
+    separate_with_deux_cascade,
     separate_with_extra_origin,
     separate_tree_for_eval,
     synthetic_corpus,
 )
+from upmixer.eval.cascade import write_cascade_arms
 from upmixer.eval.rate_experiment import (
     separate_model_for_rate_experiment,
     separate_tree_for_rate_experiment,
@@ -47,6 +50,7 @@ from upmixer.io.atomic import atomic_output_path
 from upmixer.separation.separator import DEFAULT_MODEL
 
 _PROTOCOL_ID = "upmixer-separation-q00-v1"
+_CASCADE_PROTOCOL_ID = "q40-deux-counterfactual-half-v1"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _STEM_INDEX_SCHEMA = 1
 _RETAINED_SETTINGS_FIELDS = (
@@ -70,20 +74,17 @@ def _positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be at least 1")
     return parsed
 
-
 def _finite_positive(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0.0:
         raise argparse.ArgumentTypeError("must be a finite positive number")
     return parsed
 
-
 def _comma_separated_stems(value: str) -> list[str]:
     stems = [stem.strip() for stem in value.split(",") if stem.strip()]
     if not stems:
         raise argparse.ArgumentTypeError("must include at least one stem")
     return stems
-
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -128,8 +129,33 @@ def _parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Q30: add one zero-padded origin offset by N mixture samples.",
     )
+    parser.add_argument(
+        "--cascade-vocal-repair",
+        action="store_true",
+        help="Q40: run the frozen direct-Deux counterfactual vocal recipe.",
+    )
     return parser
 
+def _validate_cascade_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if not args.cascade_vocal_repair:
+        return
+    checks = (
+        (args.variant != "real-model", "--cascade-vocal-repair requires --variant real-model"),
+        (args.model != "becruily_deux.ckpt", "--cascade-vocal-repair requires --model becruily_deux.ckpt"),
+        (args.sample_rate != 44_100, "--cascade-vocal-repair requires --sample-rate 44100"),
+        (args.batch_size not in (None, 1), "--cascade-vocal-repair requires batch size 1"),
+        (args.overlap not in (None, 2), "--cascade-vocal-repair requires overlap 2"),
+        (args.segment_size is not None, "--cascade-vocal-repair requires the default segment size"),
+        (args.chunk_duration_s is not None, "--cascade-vocal-repair forbids outer chunking"),
+        (args.tta, "--cascade-vocal-repair forbids TTA"),
+        (args.pitch_shift is not None, "--cascade-vocal-repair forbids pitch shift"),
+        (args.rate_arm is not None, "--cascade-vocal-repair forbids rate arms"),
+        (args.stem_ensemble, "--cascade-vocal-repair forbids stem ensembles"),
+        (args.extra_origin_samples is not None, "--cascade-vocal-repair cannot be combined with --extra-origin-samples"),
+    )
+    for invalid, message in checks:
+        if invalid:
+            parser.error(message)
 
 def _reference_separator(corpus: ReferenceCorpus, sample_rate: int) -> Callable:
     items = {item.mixture: item for item in corpus.items}
@@ -146,6 +172,22 @@ def _reference_separator(corpus: ReferenceCorpus, sample_rate: int) -> Callable:
 
 
 def _real_separator(args: argparse.Namespace) -> Callable:
+    if args.cascade_vocal_repair:
+        return partial(
+            separate_with_deux_cascade,
+            separate_fn=partial(
+                separate_for_eval,
+                model="becruily_deux.ckpt",
+                sample_rate=44_100,
+                batch_size=1,
+                segment_size=None,
+                chunk_duration_s=None,
+                overlap=2,
+                stem_ensemble=False,
+                tta=False,
+                pitch_shift=None,
+            ),
+        )
     if args.variant == "production-tree":
         config = UpmixConfig(
             output_sample_rate=args.sample_rate,
@@ -274,8 +316,14 @@ def _retaining_separator(
         if isinstance(result, OriginEvaluationResult):
             origin_result = result
             stems, settings = result.stems, result.settings
+            cascade_result = None
+        elif isinstance(result, CascadeEvaluationResult):
+            origin_result = None
+            cascade_result = result
+            stems, settings = result.stems, result.settings
         else:
             origin_result = None
+            cascade_result = None
             stems, settings = result
         if not isinstance(stems, dict) or not stems:
             return result
@@ -360,6 +408,30 @@ def _retaining_separator(
                     view_stems[stem_name] = audio
                 retained_views.append((view, view_stems))
 
+        retained_arms: list[tuple[object, dict[str, np.ndarray]]] = []
+        if cascade_result is not None:
+            arm_ids: set[str] = set()
+            for arm in cascade_result.arms:
+                if not isinstance(arm.arm_id, str) or arm.arm_id in arm_ids:
+                    return result
+                arm_ids.add(arm.arm_id)
+                if not isinstance(arm.stems, dict) or set(arm.stems) != set(retained):
+                    return result
+                arm_stems: dict[str, np.ndarray] = {}
+                for stem_name, value in arm.stems.items():
+                    audio = np.asarray(value, dtype=np.float32)
+                    if (
+                        not isinstance(stem_name, str)
+                        or audio.ndim != 2
+                        or not audio.size
+                        or not np.all(np.isfinite(audio))
+                        or set(arm.stems) != set(retained)
+                        or audio.shape != next(iter(retained.values())).shape
+                    ):
+                        return result
+                    arm_stems[stem_name] = audio
+                retained_arms.append((arm, arm_stems))
+
         item_dir = stems_dir / f"{item_index:04d}"
         paths: dict[str, str] = {}
         used_filenames: set[str] = set()
@@ -396,6 +468,13 @@ def _retaining_separator(
                 view_entries.append(
                     {"origin_samples": view.origin_samples, "stems": view_paths}
                 )
+            arm_entries = write_cascade_arms(
+                retained_arms,
+                item_dir=item_dir,
+                output_dir=output_dir,
+                sample_rate=sample_rate,
+                filename_for=_retained_filename,
+            )
             entry = {
                 "index": item_index,
                 "recording_id": item.recording_id,
@@ -407,6 +486,8 @@ def _retaining_separator(
             }
             if view_entries:
                 entry["view_outputs"] = view_entries
+            if arm_entries:
+                entry["cascade_arms"] = arm_entries
             for field in _RETAINED_SETTINGS_FIELDS:
                 value = getattr(settings, field, None)
                 if value is not None:
@@ -449,6 +530,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "--extra-origin-samples cannot be combined with --tta or --pitch-shift"
         )
+    _validate_cascade_args(args, parser)
     if args.variant == "synthetic-reference":
         if any(
             value is not None
@@ -493,7 +575,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         corpus,
         separate_fn,
         sample_rate=args.sample_rate,
-        protocol_id=_PROTOCOL_ID,
+        protocol_id=(
+            _CASCADE_PROTOCOL_ID if args.cascade_vocal_repair else _PROTOCOL_ID
+        ),
         code_revision=code_revision,
         report_failures=True,
     )

@@ -23,6 +23,11 @@ from upmixer.eval.origins import (
     OriginViewOutput,
     separate_with_extra_origin,
 )
+from upmixer.eval.cascade import (
+    CascadeArmOutput,
+    CascadeEvaluationResult,
+    separate_with_deux_cascade,
+)
 from upmixer.eval.types import ItemRunSettings, RunSettings
 from upmixer.eval.report import CoverageRow, EvalReport, StemScore, format_report
 
@@ -40,6 +45,9 @@ __all__ = [
     "OriginViewOutput",
     "separate_for_eval",
     "separate_with_extra_origin",
+    "CascadeArmOutput",
+    "CascadeEvaluationResult",
+    "separate_with_deux_cascade",
     "separate_tree_for_eval",
     "evaluate_corpus",
     "EvalReport",
