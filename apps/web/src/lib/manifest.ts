@@ -51,7 +51,6 @@ export type Manifest = {
     stem_silence_crossfade_ms: number;
     stem_silence_pad_ms: number;
     stem_ensemble: boolean;
-    stem_native_rate: boolean;
     stem_bleed_reduction: boolean;
   };
   mixing: {
@@ -190,7 +189,6 @@ export const defaultManifest: Manifest = {
     stem_silence_crossfade_ms: 10,
     stem_silence_pad_ms: 200,
     stem_ensemble: false,
-    stem_native_rate: false,
     stem_bleed_reduction: false,
   },
   mixing: {
@@ -276,11 +274,13 @@ export const defaultManifest: Manifest = {
 
 export function normalizeManifest(source: Record<string, unknown>): Manifest {
   const value = source as Partial<Manifest>;
+  const engine = { ...defaultManifest.engine, ...value.engine };
+  delete (engine as Record<string, unknown>).stem_native_rate;
   return {
     ...defaultManifest,
     ...value,
     metadata: { ...defaultManifest.metadata, ...value.metadata },
-    engine: { ...defaultManifest.engine, ...value.engine },
+    engine,
     mixing: {
       ...defaultManifest.mixing,
       ...value.mixing,

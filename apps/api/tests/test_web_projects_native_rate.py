@@ -81,7 +81,8 @@ def test_native_rate_project_prepares_delivers_and_exports(
                 "engine": {
                     "mode": "stem",
                     "stems": ["Vocals"],
-                    "stem_native_rate": True,
+                    # Legacy clients may still send this removed setting.
+                    "stem_native_rate": False,
                 },
                 "mixing": {"channel_layout": "5.1"},
                 "format": {
@@ -114,7 +115,7 @@ def test_native_rate_project_prepares_delivers_and_exports(
         raise AssertionError(body)
 
     prepared = wait_for_ready()
-    assert prepared["manifest"]["engine"]["stem_native_rate"] is True
+    assert "stem_native_rate" not in prepared["manifest"]["engine"]
     first_generation = prepared["stem_generation"]
     assert first_generation == 1
     track_id = prepared["tracks"][0]["id"]
@@ -139,7 +140,7 @@ def test_native_rate_project_prepares_delivers_and_exports(
     )
     assert exported.status_code == 201, exported.text
     job_id = exported.json()["id"]
-    assert exported.json()["manifest"]["engine"]["stem_native_rate"] is True
+    assert "stem_native_rate" not in exported.json()["manifest"]["engine"]
 
     reprepared = web_client.post(
         f"/api/v1/projects/{project_id}/stems/reprepare",
@@ -147,12 +148,12 @@ def test_native_rate_project_prepares_delivers_and_exports(
     )
     assert reprepared.status_code == 200, reprepared.text
     assert reprepared.json()["status"] == "expanding"
-    assert reprepared.json()["manifest"]["engine"]["stem_native_rate"] is False
+    assert "stem_native_rate" not in reprepared.json()["manifest"]["engine"]
 
     manager._run_project(project_id)
     prepared = wait_for_ready()
     assert prepared["stem_generation"] == first_generation + 1
-    assert prepared["manifest"]["engine"]["stem_native_rate"] is False
+    assert "stem_native_rate" not in prepared["manifest"]["engine"]
     stem = prepared["tracks"][0]["stems"][0]
     assert stem["sample_rate"] == 48_000
     full = web_client.get(stem["audio_url"])
@@ -171,7 +172,7 @@ def test_native_rate_project_prepares_delivers_and_exports(
     assert (new_stem_dir / "peaks.json").is_file()
     assert new_stem_rate == 48_000
     assert float(np.abs(new_stem_audio).max()) > old_stem_peak * 2
-    assert separation_calls == [(44_100, 44_100), (48_000, 48_000)]
+    assert separation_calls == [(44_100, 44_100), (44_100, 44_100)]
 
     export_inputs: list[tuple[str, float]] = []
     from upmixer.separation.stem_pipeline import StemUpmixPipeline
@@ -195,7 +196,7 @@ def test_native_rate_project_prepares_delivers_and_exports(
 
     job = web_client.get(f"/api/v1/jobs/{job_id}").json()
     assert job["status"] == "completed", job.get("error")
-    assert job["manifest"]["engine"]["stem_native_rate"] is True
+    assert "stem_native_rate" not in job["manifest"]["engine"]
     assert len(export_inputs) == 1
     assert export_inputs[0][0] == str(old_stem_dir)
     assert export_inputs[0][1] == pytest.approx(old_stem_peak, abs=2e-5)
@@ -262,10 +263,7 @@ def test_project_prepare_discards_stale_generation_and_requeues_current_settings
                     project = session.get(Project, project_id)
                     assert project is not None
                     manifest = dict(project.manifest)
-                    manifest["engine"] = {
-                        **manifest["engine"],
-                        "stem_native_rate": True,
-                    }
+                    manifest["race_marker"] = "legacy-setting-change"
                     project.manifest = manifest
                     project.revision += 1
                     session.commit()
@@ -277,7 +275,7 @@ def test_project_prepare_discards_stale_generation_and_requeues_current_settings
         body = client.get(f"/api/v1/projects/{project_id}").json()
         assert body["status"] == "queued"
         assert body["status_message"] == "Waiting to prepare project stems"
-        assert body["manifest"]["engine"]["stem_native_rate"] is True
+        assert body["manifest"]["race_marker"] == "legacy-setting-change"
         assert body["prepared_stems"] == []
         track_id = body["tracks"][0]["id"]
         assert not manager.project_stems.generation_stem_dir(

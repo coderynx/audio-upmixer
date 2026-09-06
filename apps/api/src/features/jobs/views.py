@@ -5,6 +5,7 @@ from __future__ import annotations
 from upmixer.codecs import DEFAULT_CODEC
 from upmixer_web.features.jobs.schemas import DeliveryFormatView, JobView
 from upmixer_web.shared.models import Job
+from upmixer_web.shared.manifests import remove_legacy_native_rate
 from upmixer_web.shared.project_snapshot import ProjectExportSnapshot
 
 
@@ -28,6 +29,7 @@ def _delivery_formats(job: Job) -> list[DeliveryFormatView]:
 
 def job_view(job: Job, root_path: str = "") -> JobView:
     view = JobView.model_validate(job)
+    remove_legacy_native_rate(view.manifest)
     view.delivery_formats = _delivery_formats(job)
     artifact_urls = {
         artifact.id: f"{root_path}/api/v1/artifacts/{artifact.id}/download"

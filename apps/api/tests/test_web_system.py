@@ -52,17 +52,14 @@ def test_configuration_lists_every_stem_and_runtime_capability(web_client):
     ]
     assert "vocal-presence" in configuration["choices"]["stem_eq_profiles"]
     assert configuration["manifest_keys"]["engine.stem_ensemble"] == "bool"
-    assert configuration["manifest_keys"]["engine.stem_native_rate"] == "bool"
+    assert "engine.stem_native_rate" not in configuration["manifest_keys"]
     ensemble_parameter = next(
         item for item in configuration["manifest_parameters"]
         if item["path"] == "engine.stem_ensemble"
     )
     assert ensemble_parameter["default"] is False
-    native_rate_parameter = next(
-        item for item in configuration["manifest_parameters"]
-        if item["path"] == "engine.stem_native_rate"
-    )
-    assert native_rate_parameter["default"] is False
+    assert all(item["path"] != "engine.stem_native_rate" for item in configuration["manifest_parameters"])
+    assert "stem_native_rate" not in configuration["defaults"]
     assert "stem_phase_fix_reference_models" not in configuration["choices"]
     assert "stem_debleed_models" not in configuration["choices"]
     capability = configuration["capabilities"]["stem_separation"]

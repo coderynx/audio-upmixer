@@ -8,6 +8,7 @@ from upmixer_web.features.projects.schemas import ProjectView, ReferenceMatchAss
 from upmixer_web.features.projects.layouts import track_layouts
 from upmixer_web.features.projects.storage import ProjectStemStorage
 from upmixer_web.shared.models import Project
+from upmixer_web.shared.manifests import remove_legacy_native_rate
 
 if TYPE_CHECKING:
     # Deferred: this module is reachable from upmixer_web.worker's import
@@ -23,6 +24,12 @@ def project_view(
     manager: WorkerManager | None = None,
 ) -> ProjectView:
     view = ProjectView.model_validate(project)
+    remove_legacy_native_rate(view.manifest)
+    for track in view.tracks:
+        for override in track.layout_overrides.values():
+            remove_legacy_native_rate(override)
+    for export in view.exports:
+        remove_legacy_native_rate(export.manifest)
     if manager is not None:
         view.reference_match_pending = manager.reference_match_pending(project.id)
     stem_by_id = {stem.id: stem for stem in project.stems}

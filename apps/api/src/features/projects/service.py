@@ -387,7 +387,6 @@ def reprepare_project_stems(
     stems: Iterable[str] | None = None,
     stem_bleed_reduction: bool | None = None,
     stem_ensemble: bool | None = None,
-    stem_native_rate: bool | None = None,
 ) -> Project:
     """Force a full stem re-separation for a project that already has
     prepared stems, optionally replacing its extraction targets, cleanup, and
@@ -419,14 +418,9 @@ def reprepare_project_stems(
         if stem_ensemble is not None
         else bool(engine.get("stem_ensemble", UpmixConfig().stem_ensemble))
     )
-    native_rate = (
-        stem_native_rate
-        if stem_native_rate is not None
-        else bool(engine.get("stem_native_rate", UpmixConfig().stem_native_rate))
-    )
     layout = str(project.manifest.get("mixing", {}).get("channel_layout", "7.1.4"))
     project.manifest = preparation_manifest(
-        project.manifest, requested_stems, cleanup, layout, ensemble, native_rate
+        project.manifest, requested_stems, cleanup, layout, ensemble
     )
     project.requested_stems = requested_stems
     project.status = "expanding" if project.prepared_stems else "queued"

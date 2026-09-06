@@ -183,10 +183,20 @@ def configuration_schema(capability: dict[str, Any]) -> dict[str, Any]:
 
     stems = list(dict.fromkeys(MANIFEST_TO_CANONICAL.values()))
 
+    defaults = asdict(UpmixConfig())
+    defaults.pop("stem_native_rate", None)
+    manifest_keys = {
+        key: value for key, value in list_manifest_keys().items()
+        if key != "engine.stem_native_rate"
+    }
+    manifest_parameters = [
+        item for item in manifest_parameter_schema()
+        if item["path"] != "engine.stem_native_rate"
+    ]
     return {
-        "defaults": asdict(UpmixConfig()),
-        "manifest_keys": list_manifest_keys(),
-        "manifest_parameters": manifest_parameter_schema(),
+        "defaults": defaults,
+        "manifest_keys": manifest_keys,
+        "manifest_parameters": manifest_parameters,
         "choices": {
             "channel_layouts": list(FORMAT_MAP),
             "output_types": ["multichannel", "adm-bwf", "binaural", "transaural"],

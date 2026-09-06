@@ -18,7 +18,6 @@ export type ReprepareSettings = {
   stems: string[];
   stemBleedReduction: boolean;
   stemEnsemble: boolean;
-  stemNativeRate: boolean;
 };
 
 export function ReprepareStemsDialog({
@@ -37,7 +36,6 @@ export function ReprepareStemsDialog({
   const [stems, setStems] = React.useState(project.requested_stems);
   const [stemBleedReduction, setStemBleedReduction] = React.useState(defaultManifest.engine.stem_bleed_reduction);
   const [stemEnsemble, setStemEnsemble] = React.useState(defaultManifest.engine.stem_ensemble);
-  const [stemNativeRate, setStemNativeRate] = React.useState(defaultManifest.engine.stem_native_rate);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const availableStems = configuration?.choices.stems || fallbackStems;
@@ -56,11 +54,6 @@ export function ReprepareStemsDialog({
         ? engine.stem_ensemble
         : defaultManifest.engine.stem_ensemble,
     );
-    setStemNativeRate(
-      typeof engine?.stem_native_rate === "boolean"
-        ? engine.stem_native_rate
-        : defaultManifest.engine.stem_native_rate,
-    );
     setError(null);
   }, [open, project]);
 
@@ -69,7 +62,7 @@ export function ReprepareStemsDialog({
     setBusy(true);
     setError(null);
     try {
-      await onReprepare({ stems, stemBleedReduction, stemEnsemble, stemNativeRate });
+      await onReprepare({ stems, stemBleedReduction, stemEnsemble });
       onOpenChange(false);
     } catch (reason) {
       setError((reason as Error).message);
@@ -94,12 +87,6 @@ export function ReprepareStemsDialog({
             description="Download another model for a slower separation pass."
             checked={stemEnsemble}
             onChange={setStemEnsemble}
-          />
-          <ToggleField
-            label="Native-rate separation"
-            description="Run each model at its declared sample rate before delivery conversion."
-            checked={stemNativeRate}
-            onChange={setStemNativeRate}
           />
           <details className="rounded-md border">
             <summary className="cursor-pointer px-3 py-2 text-[13px] font-medium">DSP stem cleanup</summary>

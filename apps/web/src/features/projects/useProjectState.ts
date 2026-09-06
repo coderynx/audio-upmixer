@@ -144,7 +144,7 @@ export function useProjectState(projectId: string | undefined, onFirstLoad: (pro
     if (shouldApplyProject(seq)) setProject(updated);
   }, [projectId, nextSeq, shouldApplyProject]);
 
-  const reprepareStems = React.useCallback(async (stems: string[], stemBleedReduction: boolean, stemEnsemble: boolean, stemNativeRate: boolean) => {
+  const reprepareStems = React.useCallback(async (stems: string[], stemBleedReduction: boolean, stemEnsemble: boolean) => {
     if (!projectId) return;
     const seq = nextSeq();
     try {
@@ -152,7 +152,6 @@ export function useProjectState(projectId: string | undefined, onFirstLoad: (pro
         stems,
         stem_bleed_reduction: stemBleedReduction,
         stem_ensemble: stemEnsemble,
-        stem_native_rate: stemNativeRate,
       });
       if (shouldApplyProject(seq)) setProject(updated);
     } catch (reason) {

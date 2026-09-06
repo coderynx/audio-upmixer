@@ -23,6 +23,13 @@ import upmixer.mastering.head  # noqa: F401 E402
 import upmixer.mastering.match_reference  # noqa: F401 E402
 
 
+def remove_legacy_native_rate(manifest: dict[str, Any]) -> None:
+    """Drop the removed native-rate switch from legacy manifest data."""
+    engine = manifest.get("engine")
+    if isinstance(engine, dict):
+        engine.pop("stem_native_rate", None)
+
+
 def ensure_stem_separation_available(
     manifest: dict[str, Any],
     capability: dict[str, Any],
@@ -39,6 +46,7 @@ def normalize_job_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     normalized = copy.deepcopy(manifest)
     normalized.setdefault("version", "1.0.0")
     normalized.pop("assets", None)
+    remove_legacy_native_rate(normalized)
     mastering = normalized.get("mastering")
     match_reference = (
         mastering.get("match_reference") if isinstance(mastering, dict) else None
@@ -66,6 +74,7 @@ def materialize_manifest(
     manifest overrides by asset id. Ordinary jobs use the shared stem cache.
     """
     data = copy.deepcopy(job.manifest)
+    remove_legacy_native_rate(data)
     root_codec = (data.get("format") or {}).get("codec", DEFAULT_CODEC)
     snapshot = ProjectExportSnapshot.from_data(job.project_snapshot)
     assets = []
@@ -81,7 +90,10 @@ def materialize_manifest(
             asset_data["stem_input_dir"] = track_snapshot.stem_input_dir
             for block, value in track_snapshot.manifest_overrides.items():
                 if isinstance(value, dict) and value:
-                    asset_data[block] = copy.deepcopy(value)
+                    override = copy.deepcopy(value)
+                    if block == "engine":
+                        override.pop("stem_native_rate", None)
+                    asset_data[block] = override
         else:
             asset_data["stem_cache_dir"] = str(stem_cache_dir)
         codec = (asset_data.get("format") or {}).get("codec", root_codec)
