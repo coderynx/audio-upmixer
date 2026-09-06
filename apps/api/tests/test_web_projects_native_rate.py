@@ -97,6 +97,8 @@ def test_native_rate_project_prepares_delivers_and_exports(
     old_stem_audio, old_stem_rate = sf.read(
         str(old_stem_dir / "Vocals.wav"), always_2d=True
     )
+    assert (old_stem_dir / "peaks.bin").is_file()
+    assert (old_stem_dir / "peaks.json").is_file()
     assert old_stem_rate == 48_000
     old_stem_peak = float(np.abs(old_stem_audio).max())
     assert separation_calls == [(44_100, 44_100)]
@@ -137,6 +139,8 @@ def test_native_rate_project_prepares_delivers_and_exports(
     new_stem_audio, new_stem_rate = sf.read(
         str(new_stem_dir / "Vocals.wav"), always_2d=True
     )
+    assert (new_stem_dir / "peaks.bin").is_file()
+    assert (new_stem_dir / "peaks.json").is_file()
     assert new_stem_rate == 48_000
     assert float(np.abs(new_stem_audio).max()) > old_stem_peak * 2
     assert separation_calls == [(44_100, 44_100), (48_000, 48_000)]
@@ -176,3 +180,78 @@ def test_native_rate_project_prepares_delivers_and_exports(
     assert delivery_info.samplerate == 48_000
     assert delivery_info.channels == 6
     assert delivery_info.frames == 4_800
+
+
+def test_project_prepare_discards_stale_generation_and_requeues_current_settings(
+    tmp_path, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    from upmixer_web.api import create_app
+    from upmixer_web.settings import Settings
+    from upmixer_web.shared.models import Project
+
+    database_url = f"sqlite:///{tmp_path / 'stale-project.db'}"
+    settings = Settings(data_dir=tmp_path, database_url=database_url, worker_count=1)
+    monkeypatch.setattr("upmixer_web.worker.WorkerManager.start", lambda _self: None)
+    monkeypatch.setattr("upmixer_web.worker.WorkerManager.stop", lambda _self: None)
+    monkeypatch.setattr(
+        "upmixer_web.features.projects.worker.JobSubprocess", InProcessJobRun
+    )
+
+    with TestClient(create_app(settings)) as client:
+        imported = client.post(
+            "/api/v1/imports",
+            files=[("files", ("tone.wav", _wav_bytes(), "audio/wav"))],
+            data={"relative_paths": "tone.wav"},
+        )
+        assert imported.status_code == 201, imported.text
+        created = client.post("/api/v1/projects", json={
+            "name": "Stale project",
+            "manifest": {
+                "version": "1.0.0",
+                "engine": {"mode": "stem", "stems": ["Vocals"]},
+                "mixing": {"channel_layout": "5.1"},
+            },
+        })
+        assert created.status_code == 201, created.text
+        project_id = created.json()["id"]
+        added = client.post(
+            f"/api/v1/projects/{project_id}/assets",
+            json={"import_id": imported.json()["id"]},
+        )
+        assert added.status_code == 201, added.text
+
+        manager = client.app.state.manager
+        original_fake_execute_plan = _helpers._fake_execute_plan
+        mutation_count = 0
+
+        def mutate_then_separate(*args, **kwargs):
+            nonlocal mutation_count
+            mutation_count += 1
+            if mutation_count == 1:
+                with manager.sessions() as session:
+                    project = session.get(Project, project_id)
+                    assert project is not None
+                    manifest = dict(project.manifest)
+                    manifest["engine"] = {
+                        **manifest["engine"],
+                        "stem_native_rate": True,
+                    }
+                    project.manifest = manifest
+                    project.revision += 1
+                    session.commit()
+            return original_fake_execute_plan(*args, **kwargs)
+
+        monkeypatch.setattr(_helpers, "_fake_execute_plan", mutate_then_separate)
+        manager._run_project(project_id)
+
+        body = client.get(f"/api/v1/projects/{project_id}").json()
+        assert body["status"] == "queued"
+        assert body["status_message"] == "Waiting to prepare project stems"
+        assert body["manifest"]["engine"]["stem_native_rate"] is True
+        assert body["prepared_stems"] == []
+        track_id = body["tracks"][0]["id"]
+        assert not manager.project_stems.generation_stem_dir(
+            project_id, track_id, 1
+        ).exists()

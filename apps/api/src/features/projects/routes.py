@@ -343,7 +343,9 @@ def register_project_routes(
         track = session.get(ProjectTrack, track_id)
         if not track or track.project_id != project_id:
             raise HTTPException(status_code=404, detail="Project track not found")
-        path = app.state.project_stems.track_peaks_path(project_id, track_id)
+        path = app.state.project_stems.track_peaks_path(
+            project_id, track_id, track.peaks_relative_path
+        )
         if not path:
             raise HTTPException(status_code=404, detail="Waveform peaks are not available")
         return FileResponse(path, media_type="application/octet-stream")

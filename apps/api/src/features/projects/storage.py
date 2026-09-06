@@ -128,15 +128,67 @@ class ProjectStemStorage:
         track_id: str,
         generation: int,
         relative_paths: list[str] | None = None,
+        requested_stems: list[str] | None = None,
     ) -> Path:
         """Resolve the active stem directory, including pre-generation stores."""
-        for relative_path in relative_paths or []:
-            path = self.resolve(relative_path)
-            return path.parent
+        if relative_paths:
+            try:
+                paths = [self.resolve(relative_path) for relative_path in relative_paths]
+            except FileNotFoundError as exc:
+                raise ValueError("Project stem snapshot is unavailable") from exc
+            parents = {path.parent for path in paths}
+            if len(parents) != 1:
+                raise ValueError("Project stem snapshot spans multiple directories")
+            directory = next(iter(parents))
+            self._validate_stem_store(directory, paths, requested_stems)
+            return directory
         generation_dir = self.generation_stem_dir(project_id, track_id, generation)
         if (generation_dir / "stems.json").is_file():
+            self._validate_stem_store(generation_dir, [], requested_stems)
             return generation_dir
         return self.stem_dir(project_id, track_id)
+
+    def _validate_stem_store(
+        self,
+        directory: Path,
+        requested_paths: list[Path],
+        requested_stems: list[str] | None,
+    ) -> None:
+        """Check the manifest and every file selected for an export."""
+        try:
+            metadata = json.loads((directory / "stems.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as exc:
+            raise ValueError("Project stem snapshot has no readable manifest") from exc
+        stem_keys = metadata.get("stem_keys") if isinstance(metadata, dict) else None
+        if not isinstance(stem_keys, list) or not stem_keys:
+            raise ValueError("Project stem snapshot has no stem entries")
+        manifest_paths: dict[Path, str] = {}
+        available_stems: set[str] = set()
+        for item in stem_keys:
+            if not isinstance(item, str):
+                raise ValueError("Project stem snapshot has an invalid stem entry")
+            available_stems.add(item.split("@", 1)[0])
+            filename = item.replace("@", "__").replace("/", "__").replace("\\", "__") + ".wav"
+            manifest_paths[directory / filename] = item
+        missing = set(requested_stems or ()) - available_stems
+        if missing:
+            raise ValueError(f"Project stem snapshot is missing: {', '.join(sorted(missing))}")
+        paths = requested_paths or list(manifest_paths)
+        if any(path not in manifest_paths for path in paths):
+            raise ValueError("Project stem snapshot does not match its manifest")
+        for path in paths:
+            try:
+                sf.info(str(path))
+            except (OSError, RuntimeError) as exc:
+                raise ValueError(f"Project stem snapshot is unreadable: {path.name}") from exc
+
+    def delete_generation(self, project_id: str, track_ids: list[str], generation: int) -> None:
+        """Remove one incomplete preparation generation and its sidecars."""
+        for track_id in track_ids:
+            shutil.rmtree(
+                self.root / project_id / track_id / f"stems-{generation}",
+                ignore_errors=True,
+            )
 
     def delete_project(self, project_id: str) -> None:
         shutil.rmtree(self.root / project_id, ignore_errors=True)
@@ -199,7 +251,10 @@ class ProjectStemStorage:
             ))
         session.execute(delete(ProjectStem).where(ProjectStem.track_id == track.id))
         session.add_all(rows)
-        self.write_track_peaks(track, stem_keys, peaks, generation, duration_seconds)
+        self.write_track_peaks(
+            track, stem_keys, peaks, generation, duration_seconds,
+            entry if stem_dir is not None else None,
+        )
         return rows
 
     def write_track_peaks(
@@ -209,6 +264,7 @@ class ProjectStemStorage:
         peaks: list[np.ndarray],
         generation: int,
         duration_seconds: float,
+        directory: Path | None = None,
     ) -> None:
         """Persist a track's waveform envelopes as one binary block per track.
 
@@ -216,7 +272,7 @@ class ProjectStemStorage:
         is repeated in the sidecar, so the browser slices the payload by index
         without the binary needing a header of its own.
         """
-        directory = self.track_root(track.project_id, track.id)
+        directory = directory or self.track_root(track.project_id, track.id)
         stacked = (
             np.concatenate(peaks, axis=0) if peaks
             else np.zeros((0, 2), dtype=np.int8)
@@ -232,17 +288,33 @@ class ProjectStemStorage:
         track.peaks_relative_path = str((directory / PEAKS_FILENAME).relative_to(self.root))
         track.peaks_duration_seconds = duration_seconds
 
-    def read_track_peaks_meta(self, project_id: str, track_id: str) -> dict | None:
-        path = self.root / project_id / track_id / PEAKS_META_FILENAME
+    def read_track_peaks_meta(
+        self, project_id: str, track_id: str, relative_path: str | None = None
+    ) -> dict | None:
+        path = self._peaks_path(project_id, track_id, relative_path, PEAKS_META_FILENAME)
+        if path is None:
+            return None
         try:
             meta = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
         return meta if meta.get("schema") == PEAKS_SCHEMA else None
 
-    def track_peaks_path(self, project_id: str, track_id: str) -> Path | None:
-        path = self.root / project_id / track_id / PEAKS_FILENAME
-        return path if path.is_file() else None
+    def track_peaks_path(
+        self, project_id: str, track_id: str, relative_path: str | None = None
+    ) -> Path | None:
+        path = self._peaks_path(project_id, track_id, relative_path, PEAKS_FILENAME)
+        return path if path is not None and path.is_file() else None
+
+    def _peaks_path(
+        self, project_id: str, track_id: str, relative_path: str | None, filename: str
+    ) -> Path | None:
+        if relative_path is None:
+            return self.root / project_id / track_id / filename
+        path = (self.root / relative_path).resolve()
+        if not path.is_relative_to(self.root):
+            return None
+        return path.with_name(filename)
 
     def rebuild_track_peaks(self, track: ProjectTrack, stems: list[ProjectStem], generation: int) -> None:
         """Backfill a track's peaks from its already-encoded preview proxies.
@@ -262,7 +334,12 @@ class ProjectStemStorage:
                 duration_seconds = max(duration_seconds, len(audio) / rate)
             stem_keys.append(stem.stem_key)
             peaks.append(_compute_peaks(audio))
-        self.write_track_peaks(track, stem_keys, peaks, generation, duration_seconds)
+        directory = None
+        if stems:
+            parent = self.resolve(stems[0].relative_path).parent
+            if parent.name.startswith("stems-"):
+                directory = parent
+        self.write_track_peaks(track, stem_keys, peaks, generation, duration_seconds, directory)
 
     def write_source_preview(self, track: ProjectTrack, source: Path, quality: str = DEFAULT_PREVIEW_QUALITY) -> None:
         """Create the compressed original-track proxy used by project preview."""

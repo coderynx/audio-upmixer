@@ -167,6 +167,47 @@ def test_catalogue_track_writes_track_peaks_for_every_stem(tmp_path):
     engine.dispose()
 
 
+def test_export_stem_dir_validates_all_paths_against_one_readable_store(tmp_path):
+    storage = ProjectStemStorage(tmp_path / "project-stems")
+    engine_url = f"sqlite:///{tmp_path / 'export-store.db'}"
+    upgrade_database(engine_url)
+    engine = create_database_engine(engine_url)
+    factory = create_session_factory(engine)
+
+    with factory() as session:
+        project, track = _seed_project_track(session, requested_stems=["Vocals"])
+        entry = _seed_stem_store(storage, project, track, ["Vocals"])
+        relative_paths = [str((entry / "Vocals.wav").relative_to(storage.root))]
+        assert storage.export_stem_dir(
+            project.id, track.id, 1, relative_paths, ["Vocals"]
+        ) == entry
+
+        orphan = entry / "Orphan.wav"
+        sf.write(str(orphan), np.zeros((100, 2)), 48_000, subtype="PCM_16")
+        with pytest.raises(ValueError, match="does not match"):
+            storage.export_stem_dir(
+                project.id,
+                track.id,
+                1,
+                [*relative_paths, str(orphan.relative_to(storage.root))],
+                ["Vocals"],
+            )
+
+        other = storage.root / "other" / "stem.wav"
+        other.parent.mkdir(parents=True)
+        sf.write(str(other), np.zeros((100, 2)), 48_000, subtype="PCM_16")
+        with pytest.raises(ValueError, match="multiple directories"):
+            storage.export_stem_dir(
+                project.id,
+                track.id,
+                1,
+                [relative_paths[0], str(other.relative_to(storage.root))],
+                ["Vocals"],
+            )
+
+    engine.dispose()
+
+
 def test_catalogue_track_rewrites_preview_after_stem_reprepare(tmp_path):
     engine_url = f"sqlite:///{tmp_path / 'reprepare.db'}"
     upgrade_database(engine_url)

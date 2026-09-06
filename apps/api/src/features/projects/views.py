@@ -42,7 +42,10 @@ def project_view(
         track.source_preview_url = (
             f"{root_path}/api/v1/projects/{project.id}/tracks/{track.id}/source-preview"
         )
-        peaks_meta = project_stems.read_track_peaks_meta(project.id, track.id) if project_stems else None
+        peaks_meta = (
+            project_stems.read_track_peaks_meta(project.id, track.id, track_orm.peaks_relative_path)
+            if project_stems else None
+        )
         if peaks_meta:
             # Versioned by the stem generation the envelopes were built from,
             # same cache-busting convention as `fir_url` below — the route

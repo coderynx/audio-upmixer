@@ -273,9 +273,10 @@ class ReferenceMatchMixin:
             source_key = track.asset.storage_key
             reference_key = reference.storage_key
             stem_paths = [stem.relative_path for stem in track.stems]
+            track_stems = [stem.stem_key.split("@", 1)[0] for stem in track.stems]
 
         stem_dir = self.project_stems.export_stem_dir(
-            project_id, track_id, project.stem_generation, stem_paths
+            project_id, track_id, project.stem_generation, stem_paths, track_stems
         )
 
         with ExitStack() as sources:

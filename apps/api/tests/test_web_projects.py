@@ -376,6 +376,22 @@ def test_reprepare_project_stems_requeues_a_ready_project_and_rejects_in_flight(
         assert omitted.json()["manifest"]["engine"]["stem_ensemble"] is True
         assert omitted.json()["manifest"]["engine"]["stem_native_rate"] is True
 
+        for status in ("expanding", "expansion_failed"):
+            with factory() as session:
+                row = session.get(Project, expanding_id)
+                assert row is not None
+                row.status = status
+                session.commit()
+            blocked_export = client.post(
+                f"/api/v1/projects/{expanding_id}/exports", json={"layout": "7.1.4"}
+            )
+            assert blocked_export.status_code == 409
+
+        with factory() as session:
+            row = session.get(Project, expanding_id)
+            assert row is not None
+            row.status = "expanding"
+            session.commit()
         conflict = client.post(f"/api/v1/projects/{expanding_id}/stems/reprepare")
         assert conflict.status_code == 409
 

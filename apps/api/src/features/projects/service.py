@@ -309,7 +309,7 @@ def project_export_job(
     see `shared.manifests.materialize_manifest`, which reads this snapshot as
     plain data.
     """
-    if not project.prepared_stems or project.status not in {"ready", "expanding", "expansion_failed"}:
+    if not project.prepared_stems or project.status != "ready":
         raise ValueError("Project stems are not ready for export")
     if not project.tracks:
         raise ValueError("Project has no tracks to export")
@@ -333,10 +333,11 @@ def project_export_job(
             mixing_override.setdefault("stem_routing", routing)
             overrides["mixing"] = mixing_override
         stem_paths = [stem.relative_path for stem in track.stems]
+        track_stems = [stem.stem_key.split("@", 1)[0] for stem in track.stems]
         snapshot_tracks[track.asset_id] = ProjectExportTrack(
             overrides,
             str(project_stems.export_stem_dir(
-                project.id, track.id, project.stem_generation, stem_paths
+                project.id, track.id, project.stem_generation, stem_paths, track_stems
             )),
         )
 
