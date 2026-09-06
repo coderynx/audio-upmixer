@@ -202,6 +202,21 @@ def _remove_empty_output_dirs(paths: list[str], root: str) -> None:
 DEFAULT_MODEL = "BS-Roformer-SW.ckpt"
 _SCNET_MPS_CPU_MODEL = "model_scnet_ep_36_sdr_10.0891.ckpt"
 
+
+def resolve_model_native_sample_rate(model: str) -> int:
+    """Return the native rate declared by a registered model config."""
+    try:
+        from .inference.config import load_model_config
+        from .inference.registry import get_model_spec
+
+        spec = get_model_spec(model)
+        return load_model_config(spec.config_name).sample_rate
+    except (ImportError, KeyError, FileNotFoundError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Model '{model}' has no valid native sample-rate metadata"
+        ) from exc
+
+
 STEM_NAME_MAP: dict[str, str] = {
     "Vocals": "Vocals",
     "Drums": "Drums",

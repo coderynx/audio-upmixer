@@ -13,6 +13,7 @@ from upmixer.separation.stem_plan import (
 
 
 _STEM_CLEANUP_REVISION = 1
+_NATIVE_RATE_POLICY = "native-rate-v1"
 
 
 def stem_cleanup_cache_component(config: UpmixConfig) -> str:
@@ -54,7 +55,12 @@ def stem_cache_identity(plan: SeparationPlan, config: UpmixConfig) -> str:
         else ""
     )
     remask = remask_cache_component(plan, config)
-    if all(value in (None, False) for value in options) and not cleanup and not remask:
+    if (
+        all(value in (None, False) for value in options)
+        and not cleanup
+        and not remask
+        and not config.stem_native_rate
+    ):
         return base
     raw = (
         f"{base}|batch={options[0]}|segment={options[1]}|chunk={options[2]}"
@@ -64,4 +70,6 @@ def stem_cache_identity(plan: SeparationPlan, config: UpmixConfig) -> str:
         raw += f"|{cleanup}"
     if remask:
         raw += f"|{remask}"
+    if config.stem_native_rate:
+        raw += f"|{_NATIVE_RATE_POLICY}"
     return hashlib.sha256(raw.encode()).hexdigest()[:20]

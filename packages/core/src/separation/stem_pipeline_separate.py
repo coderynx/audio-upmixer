@@ -20,6 +20,8 @@ from upmixer.formats import (
     detect_input_format,
 )
 from upmixer.io.reader import AudioReader
+from upmixer.resample import resample_channels
+from upmixer.separation.separator import resolve_model_native_sample_rate
 from upmixer.separation.stem_identity import stem_cache_identity
 from upmixer.separation.stem_pipeline_exec import (
     GetSeparator,
@@ -70,6 +72,46 @@ def _resolve_output_sample_rate(cfg: UpmixConfig, sr: int) -> int:
         if cfg.output_subtype != "PCM_24":
             raise ValueError("Dolby ADM-BWF requires output_subtype='PCM_24'")
     return out_sr
+
+
+def _resolve_separation_sample_rate(
+    cfg: UpmixConfig, plan: SeparationPlan, delivery_sr: int
+) -> int:
+    """Resolve one native working rate, rejecting unsupported mixed plans."""
+    if not cfg.stem_native_rate:
+        return delivery_sr
+    models = [task.model for task in plan.tasks]
+    models.extend(model for task in plan.tasks for model in task.ensemble_models)
+    rates = {model: resolve_model_native_sample_rate(model) for model in models}
+    unique_rates = set(rates.values())
+    if len(unique_rates) > 1:
+        details = ", ".join(f"{model}={rate}" for model, rate in rates.items())
+        raise ValueError(
+            "stem_native_rate does not support mixed-rate plans: " + details
+        )
+    return next(iter(unique_rates), delivery_sr)
+
+
+def _resample_stems(
+    stems: dict[str, np.ndarray],
+    source_sr: int,
+    target_sr: int,
+    target_length: int,
+) -> dict[str, np.ndarray]:
+    """Convert terminal stems once and enforce the source-duration frame count."""
+    converted: dict[str, np.ndarray] = {}
+    for name, audio in stems.items():
+        array = np.asarray(audio, dtype=np.float32)
+        if source_sr != target_sr:
+            array = resample_channels(
+                {"stem": array}, source_sr, target_sr
+            )["stem"].astype(np.float32, copy=False)
+        if len(array) != target_length:
+            sized = np.zeros((target_length, *array.shape[1:]), dtype=np.float32)
+            sized[: min(len(array), target_length)] = array[:target_length]
+            array = sized
+        converted[name] = array
+    return converted
 
 
 def _resolve_input_format(
@@ -152,6 +194,7 @@ def _load_cached_stems(
     if (
         result is None
         and not custom_inference_tuning
+        and not cfg.stem_native_rate
         and cache_identity != plan.stems_hash
     ):
         result = cache.load(input_path, plan.stems_hash, sep_sr, **silence_kwargs)
@@ -342,16 +385,21 @@ def separate(
         _log.info("input_folded_to_stereo input_format=%s", input_fmt.name)
 
     out_sr = _resolve_output_sample_rate(cfg, sr)
+    inference_sr = _resolve_separation_sample_rate(cfg, plan, out_sr)
+    # sep_sr is the public/cache/store rate consumed by routing and mastering.
     sep_sr = out_sr
+    target_frames = round(len(audio_full) * sep_sr / sr)
 
     cache_identity = ""
     cache_hit_stems: dict[str, np.ndarray] | None = None
+    cache_hit_sr: int | None = None
     if not retain_private and cfg.stem_input_dir:
         from upmixer.separation.stem_store import PlainStemStore
 
         stem_input_result = PlainStemStore(cfg.stem_input_dir).load()
         if stem_input_result is not None:
             cache_hit_stems = stem_input_result[0]
+            cache_hit_sr = stem_input_result[1]
     elif not retain_private and cfg.stem_cache_dir:
         # A folded run separates one "front" zone where the same file
         # unfolded yields "@zone"-keyed stems, so the two must not share
@@ -395,6 +443,15 @@ def separate(
     if cache_hit_stems is not None:
         all_stems = cache_hit_stems
         cache_hit_stems = None
+        if cfg.stem_native_rate or (
+            cache_hit_sr is not None and cache_hit_sr != sep_sr
+        ):
+            all_stems = _resample_stems(
+                all_stems,
+                cache_hit_sr or sep_sr,
+                sep_sr,
+                target_frames,
+            )
         _log.info("stem_cache_hit")
         progress("  Using cached stems...", 0.75)
     else:
@@ -405,14 +462,24 @@ def separate(
             sep_zones,
             audio_full,
             sr,
-            sep_sr,
+            inference_sr,
             stereo_mode,
             progress,
-            None if retain_private else _resume_key(cfg, input_path, cache_identity, sep_sr),
+            None
+            if retain_private
+            else _resume_key(cfg, input_path, cache_identity, inference_sr),
             retain_private=retain_private,
         )
 
-        if not retain_private and cfg.stem_cache_dir and not cfg.stem_input_dir and all_stems:
+        if cfg.stem_native_rate:
+            all_stems = _resample_stems(all_stems, inference_sr, sep_sr, target_frames)
+
+        if (
+            not retain_private
+            and cfg.stem_cache_dir
+            and not cfg.stem_input_dir
+            and all_stems
+        ):
             _save_cached_stems(cfg, input_path, cache_identity, sep_sr, all_stems)
 
         if cfg.stem_output_dir and all_stems:

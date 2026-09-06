@@ -53,6 +53,9 @@ class UpmixConfig:
     sample_rate: int | None = None
     output_sample_rate: int | None = None
 
+    # Opt-in Q21 candidate. False preserves requested-rate inference.
+    stem_native_rate: bool = False
+
     normalize_output: bool = True
     peak_limit_threshold: float = 0.95
 

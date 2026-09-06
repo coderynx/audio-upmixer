@@ -64,9 +64,17 @@ class ModelConfig:
     training: dict[str, Any]
     inference: dict[str, Any]
 
+    def __post_init__(self) -> None:
+        self.sample_rate
+
     @property
     def sample_rate(self) -> int:
-        return int(self.audio["sample_rate"])
+        value = self.audio.get("sample_rate")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(
+                "Model config audio.sample_rate must be a positive integer"
+            )
+        return value
 
     @property
     def instruments(self) -> list[str]:
