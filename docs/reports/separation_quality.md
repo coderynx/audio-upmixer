@@ -14,7 +14,9 @@ quick listening OK; Q21 remains opt-in/default-off. Q30 and Q40 experiments
 are complete but their candidates are rejected for production; both Q50
 candidates (aggregate-Drums v1 and kit-sibling v2) are complete and rejected
 after automatic failures, and their experimental helpers have been removed.
-Q31, Q60, and later quality changes have not started.
+The Q90 pitch-adviser preflight for the Q40/Q50 ambiguity is complete and
+rejected; Q60/Q80 are ineligible, Q70 is blocked, and Q100 for accepted Q21 is
+next. Q31 and later quality changes have not started.
 No production default has changed.
 
 ## Progress/stage
@@ -30,6 +32,11 @@ No production default has changed.
 | Q30 | Complete; rejected | No Q31; Q50 was evaluated next and rejected under the sequential candidate workflow. |
 | Q40 | Complete; rejected | No Q41. Q50 is complete/rejected for both candidate arms; Q60/Q80 lack prerequisites; Q70 is blocked; Q90 requires its follow-up preflight. |
 | Q50 | Complete; aggregate v1 and kit v2 rejected | No Q51. Q60/Q80 lack prerequisites; Q70 is blocked; Q90 may be considered only if the Q40/Q50 result is treated as a named ambiguity plus classical-cue failure and adviser provenance preflight passes. |
+| Q60 | Ineligible; no measured spatial/residual defect | No Q60 experiment. |
+| Q70 | Blocked; no accepted magnitude correction | Reopen only after an accepted correction. |
+| Q80 | Ineligible; no measured Q03 quiet-input failure | No Q80 experiment. |
+| Q90 | Preflight complete; pitch advisers rejected for the Q40/Q50 ambiguity | No Q90 implementation. Q100 for accepted Q21 is next. |
+| Q100 | Next for accepted Q21 | Complete delivery, parity, and rollback evidence before promotion. |
 
 ## Frozen identity and corpus
 
@@ -588,9 +595,27 @@ so false transfers remained possible. No heldout inference, listening gate, or
 production integration was run for v2.
 
 Q50 is complete/rejected only after these aggregate v1 and kit v2 results.
-Q60 and Q80 lack their measured prerequisites; Q70 remains blocked. Q90 may
-be considered only if this Q40/Q50 result is treated as a named ambiguity plus
-classical-cue failure and its adviser provenance preflight passes.
+Q60 and Q80 lack their measured prerequisites; Q70 remains blocked. The Q40/Q50
+result supplies the named ownership ambiguity and failed classical-cue evidence
+needed to enter Q90, so its adviser preflight was run below.
+
+### Q90 — adviser preflight rejected
+
+The Q40/Q50 results identify a concrete overlapping-kit ownership ambiguity and
+show that the existing onset, spectral, decay, and repetition cues did not
+repair it. The pitch-adviser candidates nevertheless failed the required
+modality, compatibility, and artifact-provenance checks:
+
+| Candidate | Preflight findings | Disposition |
+| --- | --- | --- |
+| Basic Pitch `0.4.0` | Polyphonic note/onset metadata only; internal mono 22.05 kHz; its Python `<=3.11`/TensorFlow path is incompatible with the host's Python 3.13 on macOS; no per-artifact upstream SHA was available. See the [official repository](https://github.com/spotify/basic-pitch), [bundled weights](https://github.com/spotify/basic-pitch/tree/main/basic_pitch/saved_models/icassp_2022), and [license](https://github.com/spotify/basic-pitch/blob/main/LICENSE). | Reject |
+| torchcrepe `0.0.24` | Monophonic F0 metadata only; mono 16 kHz; current environment lacks `torchaudio`, `resampy`, and `tqdm`; it supplies no kit identity or ownership masks; no per-weight upstream SHA was available. See the [official repository](https://github.com/maxrmorrison/torchcrepe), [weight assets](https://github.com/maxrmorrison/torchcrepe/tree/master/torchcrepe/assets), and [original CREPE license](https://github.com/marl/crepe/blob/master/LICENSE). | Reject |
+
+Neither adviser resolves the observed broadband Snare/Hi-Hat loss or
+overlapping kit ownership. No package or checkpoint was downloaded, no heldout
+inference was run, and no repository code changed. Q90 is therefore rejected
+for this ambiguity; retain the incumbent classical/no-adviser behavior. Q100
+for accepted Q21 is next.
 
 ## Gates still open
 
@@ -604,6 +629,7 @@ classical-cue failure and its adviser provenance preflight passes.
 - [ ] Verify the normal source-anchor product path separately with anchoring off for the experiment.
 - [x] Q21 native-rate production integration, delivery conversion, cache/resume identity, and direct production parity are implemented and pass the automatic gate; bounded streaming conversion remains a follow-up.
 - [x] Q21 quick owner listening OK recorded on 2026-09-06; Q21 accepted for opt-in use and remains default-off; Q50 was evaluated next and rejected.
+- [x] Q90 adviser preflight completed for the Q40/Q50 ambiguity and rejected on modality, compatibility, and provenance; no downloads, heldout inference, or code changes.
 
 ## Restart commands
 
