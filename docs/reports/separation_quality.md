@@ -10,10 +10,11 @@ Current status: Q01/Q02 plumbing and regression work is complete; Q03 has a
 12-recording tuning baseline; Q10 passes its objective equivalence and memory
 gate; Q20 remains partial, while the Q21 native-rate candidate passed its
 automatic production parity gate and was accepted after the owner's 2026-09-06
-quick listening OK; Q21 remains opt-in/default-off. Q30, Q40, and Q50
-experiments are complete but their candidates are rejected for production;
-Q50's experimental helper has been removed after its automatic failure. Q31,
-Q60, and later quality changes have not started.
+quick listening OK; Q21 remains opt-in/default-off. Q30 and Q40 experiments
+are complete but their candidates are rejected for production; both Q50
+candidates (aggregate-Drums v1 and kit-sibling v2) are complete and rejected
+after automatic failures, and their experimental helpers have been removed.
+Q31, Q60, and later quality changes have not started.
 No production default has changed.
 
 ## Progress/stage
@@ -27,8 +28,8 @@ No production default has changed.
 | Q20 | Partial; native-rate automatic gate passed | Finish residual and heldout evidence as needed for later promotion. |
 | Q21 | Accepted after automatic gate and quick owner OK; opt-in/default-off | Q50 was evaluated next and rejected; default promotion remains separate. |
 | Q30 | Complete; rejected | No Q31; Q50 was evaluated next and rejected under the sequential candidate workflow. |
-| Q40 | Complete; rejected | No Q41. Q50 is complete and rejected; Q60 and Q80 remain conditional candidates; Q70 and Q90 require their follow-up prerequisites. |
-| Q50 | Complete; rejected | No Q51. Q60 and Q80 remain conditional candidates; Q70 and Q90 require their follow-up prerequisites. |
+| Q40 | Complete; rejected | No Q41. Q50 is complete/rejected for both candidate arms; Q60/Q80 lack prerequisites; Q70 is blocked; Q90 requires its follow-up preflight. |
+| Q50 | Complete; aggregate v1 and kit v2 rejected | No Q51. Q60/Q80 lack prerequisites; Q70 is blocked; Q90 may be considered only if the Q40/Q50 result is treated as a named ambiguity plus classical-cue failure and adviser provenance preflight passes. |
 
 ## Frozen identity and corpus
 
@@ -520,7 +521,13 @@ cd /Users/coderynx/Projects/upmixer
   --cascade-vocal-repair
 ```
 
-### Q50 — aggregate-Drums event/repetition repair: rejected
+### Q50 — complete/rejected after both automatic claims
+
+Both Q50 claims failed their automatic gates and are closed: aggregate-Drums
+event/repetition repair v1 and kit-sibling transfer v2. Neither changed
+production behavior.
+
+#### Aggregate-Drums event/repetition repair v1
 
 The tuning-only candidate was implemented in commits `94bb197` and `b10eff2`.
 The prescreen artifact is
@@ -538,6 +545,52 @@ unbounded full-track STFT allocation. The candidate is rejected: no heldout
 inference, listening gate, or production integration was run. The experimental
 helper, exports, tests, and runner were removed; the external artifact remains
 available and the two implementation commits preserve reproduction history.
+
+#### Kit-sibling transfer v2
+
+The second claim was implemented by `04abebb` (`feat(eval): add Q50 kit repair
+arms`). That evaluation-only helper and its focused tests are removed from the
+current tree; commit `04abebb` preserves the implementation for audit. The
+external corpus is the 60-item, 44.1 kHz mono IDMT-SMT-Drums V2 selection at
+`/Volumes/External SSD/upmixer-datasets/idmt-smt-drums-q50`.
+
+| Metadata | Path | SHA-256 |
+| --- | --- | --- |
+| Corpus manifest | `/Volumes/External SSD/upmixer-datasets/idmt-smt-drums-q50/corpus.json` | `7dc04af796dc3a580bcf5dce9cb4effef7c7e3812729f9cfc3e5900c33dafe9c` |
+| Provenance | `/Volumes/External SSD/upmixer-datasets/idmt-smt-drums-q50/provenance.json` | `7282b884c42a7f0b1d270d27fe82975a1c998411f69dd5b53ea06464b2eb2fdd` |
+| Metadata checksums | `/Volumes/External SSD/upmixer-datasets/idmt-smt-drums-q50/SHA256SUMS` | `1bc1c99363cf6c17863170a027bff2fdefb9044b00d7ba2554d9080bfa0ba8a7` |
+| Source archive | `/Volumes/External SSD/upmixer-datasets/downloads/IDMT-SMT-DRUMS-V2.zip` | `8ee68f0cab1d66c800fa19f8be72a0b400f8e96919ac67182053f752e38697bb` |
+
+All 60 items are tuning-only: items 01–48 are the internal
+`tune-development` group and 49–60 are `tune-validation`; neither is formal
+heldout. The selection contains 240 reference WAVs for Kick, Snare, Hi-Hat,
+and mixture; Toms, Ride, and Crash are unavailable. The archive and exact
+reference paths remain external to the repository.
+
+An abandoned 60-item DrumSep inference exceeded six minutes on its first item,
+completed `0/60` items, and reached about `1.3 GB` RSS. Its retained log is
+`/Volumes/External SSD/upmixer-eval/separation-quality/q50/kit-v2/drumsep-raw.run.log`,
+SHA-256 `c3a929186d7ee09f0e6605483a63548736043cb7f9b04d8b08b8aeefd07db7a8`.
+
+The retained real `WaveDrum02_01` 12-second pre-screen produced `0` transfers
+and `0.0 dB / 0.0 / 0.0` SDR / fullness / bleedless deltas for both default
+arms (`cue-only` and `cue-plus-repetition`) in about `0.985 s` combined. A
+small threshold diagnostic was the best cue-only result: at gain `0.05` it
+made one `Kick → Snare` transfer, but worsened Kick SDR by `-0.099961 dB` and
+fullness by `-0.002374`, and Snare SDR by `-0.007407 dB` and bleedless by
+`-0.000360`; repetition made `0` transfers and RTF was `0.0513`. The automatic
+gate therefore failed.
+
+Reviewer safety findings were also promotion blockers: heuristic exemplar
+similarity did not prove ownership of a missing event at the target time, and
+the ownership check ignored unavailable kit siblings (Toms, Ride, and Crash),
+so false transfers remained possible. No heldout inference, listening gate, or
+production integration was run for v2.
+
+Q50 is complete/rejected only after these aggregate v1 and kit v2 results.
+Q60 and Q80 lack their measured prerequisites; Q70 remains blocked. Q90 may
+be considered only if this Q40/Q50 result is treated as a named ambiguity plus
+classical-cue failure and its adviser provenance preflight passes.
 
 ## Gates still open
 
