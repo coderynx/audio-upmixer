@@ -98,23 +98,6 @@ def test_stem_ensemble_flag_preserves_cli_precedence(manifest_value, argv, expec
 
 
 @pytest.mark.parametrize(
-    ("manifest_value", "argv", "expected"),
-    [
-        (False, ["--stem-native-rate"], True),
-        (True, ["--no-stem-native-rate"], False),
-        (True, [], True),
-    ],
-)
-def test_stem_native_rate_flag_preserves_cli_precedence(manifest_value, argv, expected):
-    config = UpmixConfig(stem_native_rate=manifest_value)
-    args = _parsed(argv)
-
-    _apply_cli_flags(config, args, sample_rate_set=False)
-
-    assert config.stem_native_rate is expected
-
-
-@pytest.mark.parametrize(
     "argv",
     [
         ["--stem-phase-fix-low-hz", "500"],
@@ -122,9 +105,11 @@ def test_stem_native_rate_flag_preserves_cli_precedence(manifest_value, argv, ex
         ["--stem-phase-fix-scale", "0.8"],
         ["--stem-phase-fix-reference-model", "model.ckpt"],
         ["--stem-debleed-model", "model.ckpt"],
+        ["--stem-native-rate"],
+        ["--no-stem-native-rate"],
     ],
 )
-def test_retired_stem_cleanup_flags_are_rejected(argv):
+def test_retired_stem_control_flags_are_rejected(argv):
     with pytest.raises(SystemExit):
         _parsed(argv)
 

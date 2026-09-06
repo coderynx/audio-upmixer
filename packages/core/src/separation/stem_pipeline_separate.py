@@ -75,11 +75,9 @@ def _resolve_output_sample_rate(cfg: UpmixConfig, sr: int) -> int:
 
 
 def _resolve_separation_sample_rate(
-    cfg: UpmixConfig, plan: SeparationPlan, delivery_sr: int
+    plan: SeparationPlan, delivery_sr: int
 ) -> int:
     """Resolve one native working rate, rejecting unsupported mixed plans."""
-    if not cfg.stem_native_rate:
-        return delivery_sr
     models = [task.model for task in plan.tasks]
     models.extend(model for task in plan.tasks for model in task.ensemble_models)
     rates = {model: resolve_model_native_sample_rate(model) for model in models}
@@ -87,7 +85,7 @@ def _resolve_separation_sample_rate(
     if len(unique_rates) > 1:
         details = ", ".join(f"{model}={rate}" for model, rate in rates.items())
         raise ValueError(
-            "stem_native_rate does not support mixed-rate plans: " + details
+            "Native-rate separation does not support mixed-rate plans: " + details
         )
     return next(iter(unique_rates), delivery_sr)
 
@@ -186,7 +184,6 @@ def _resume_key(
 
 def _load_cached_stems(
     cfg: UpmixConfig,
-    plan: SeparationPlan,
     input_path: str,
     sep_sr: int,
     cache_identity: str,
@@ -194,30 +191,9 @@ def _load_cached_stems(
     from upmixer.separation.stem_cache import StemCache
 
     silence_kwargs = _cache_key_kwargs(cfg)
-    custom_inference_tuning = any(
-        value not in (None, False)
-        for value in (
-            cfg.stem_batch_size,
-            cfg.stem_segment_size,
-            cfg.stem_chunk_duration_s,
-            cfg.stem_overlap,
-            cfg.stem_tta,
-            cfg.stem_pitch_shift,
-            cfg.stem_bleed_reduction,
-            cfg.stem_ensemble,
-        )
-    )
     cache = StemCache(cfg.stem_cache_dir)
     cache_started = time.monotonic()
     result = cache.load(input_path, cache_identity, sep_sr, **silence_kwargs)
-    # Read caches created before model-plan keys were introduced.
-    if (
-        result is None
-        and not custom_inference_tuning
-        and not cfg.stem_native_rate
-        and cache_identity != plan.stems_hash
-    ):
-        result = cache.load(input_path, plan.stems_hash, sep_sr, **silence_kwargs)
     _log.debug("  Timing cache-read=%.3fs", time.monotonic() - cache_started)
     return None if result is None else result[0]
 
@@ -275,7 +251,7 @@ def _run_zone_separation(
         for zone_idx, zone_name in enumerate(zone_names):
             pair_src = sep_zones[zone_name]
             zone_sr = sr
-            if cfg.stem_native_rate and sep_sr != sr:
+            if sep_sr != sr:
                 source_audio = audio_full if isinstance(pair_src, str) else pair_src
                 pair_src = _resample_audio(
                     source_audio,
@@ -415,7 +391,7 @@ def separate(
         _log.info("input_folded_to_stereo input_format=%s", input_fmt.name)
 
     out_sr = _resolve_output_sample_rate(cfg, sr)
-    inference_sr = _resolve_separation_sample_rate(cfg, plan, out_sr)
+    inference_sr = _resolve_separation_sample_rate(plan, out_sr)
     # sep_sr is the public/cache/store rate consumed by routing and mastering.
     sep_sr = out_sr
     target_frames = round(len(audio_full) * sep_sr / sr)
@@ -438,7 +414,7 @@ def separate(
             "|stereo" if stereo_folded_input else ""
         )
         cache_hit_stems = _load_cached_stems(
-            cfg, plan, input_path, sep_sr, cache_identity
+            cfg, input_path, sep_sr, cache_identity
         )
 
     if (audio_full.shape[1] if audio_full.ndim > 1 else 1) <= 2:
@@ -473,15 +449,12 @@ def separate(
     if cache_hit_stems is not None:
         all_stems = cache_hit_stems
         cache_hit_stems = None
-        if cfg.stem_native_rate or (
-            cache_hit_sr is not None and cache_hit_sr != sep_sr
-        ):
-            all_stems = _resample_stems(
-                all_stems,
-                cache_hit_sr or sep_sr,
-                sep_sr,
-                target_frames,
-            )
+        all_stems = _resample_stems(
+            all_stems,
+            cache_hit_sr or sep_sr,
+            sep_sr,
+            target_frames,
+        )
         _log.info("stem_cache_hit")
         progress("  Using cached stems...", 0.75)
     else:
@@ -501,8 +474,7 @@ def separate(
             retain_private=retain_private,
         )
 
-        if cfg.stem_native_rate:
-            all_stems = _resample_stems(all_stems, inference_sr, sep_sr, target_frames)
+        all_stems = _resample_stems(all_stems, inference_sr, sep_sr, target_frames)
 
         if (
             not retain_private

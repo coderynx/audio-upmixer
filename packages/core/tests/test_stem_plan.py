@@ -337,7 +337,7 @@ def test_stem_cache_identity_changes_for_inference_overrides():
     from upmixer.separation.stem_identity import stem_cache_identity
 
     plan = resolve_separation_plan(["Vocals", "Bass"])
-    default_identity = stem_cache_identity(plan, UpmixConfig())
+    default_identity = stem_cache_identity(plan, UpmixConfig(), 44_100)
     tuned_identity = stem_cache_identity(
         plan,
         UpmixConfig(
@@ -345,20 +345,21 @@ def test_stem_cache_identity_changes_for_inference_overrides():
             stem_segment_size=128,
             stem_chunk_duration_s=300.0,
         ),
+        44_100,
     )
     overlap_identity = stem_cache_identity(
-        plan, UpmixConfig(stem_overlap=8)
+        plan, UpmixConfig(stem_overlap=8), 44_100
     )
     tta_identity = stem_cache_identity(
-        plan, UpmixConfig(stem_tta=True)
+        plan, UpmixConfig(stem_tta=True), 44_100
     )
     pitch_identity = stem_cache_identity(
-        plan, UpmixConfig(stem_pitch_shift=0.75)
+        plan, UpmixConfig(stem_pitch_shift=0.75), 44_100
     )
 
     assert stem_cache_identity(
-        plan, UpmixConfig(stem_primary_remask=False)
-    ) == plan.inference_hash
+        plan, UpmixConfig(stem_primary_remask=False), 44_100
+    ) != plan.inference_hash
     assert tuned_identity != default_identity
     assert overlap_identity != default_identity
     assert tta_identity != default_identity
@@ -371,17 +372,17 @@ def test_stem_cache_identity_changes_for_dsp_stem_cleanup():
     from upmixer.separation.stem_identity import stem_cache_identity
 
     deux_plan = resolve_separation_plan(["Vocals"])
-    raw = stem_cache_identity(deux_plan, UpmixConfig())
+    raw = stem_cache_identity(deux_plan, UpmixConfig(), 44_100)
     cleaned = stem_cache_identity(
-        deux_plan, UpmixConfig(stem_bleed_reduction=True)
+        deux_plan, UpmixConfig(stem_bleed_reduction=True), 44_100
     )
     crowd_plan = resolve_separation_plan(["Crowd"])
 
-    assert raw == deux_plan.inference_hash
+    assert raw != deux_plan.inference_hash
     assert cleaned != raw
     assert stem_cache_identity(
-        crowd_plan, UpmixConfig(stem_bleed_reduction=True)
-    ) == crowd_plan.inference_hash
+        crowd_plan, UpmixConfig(stem_bleed_reduction=True), 44_100
+    ) != crowd_plan.inference_hash
 
 
 def test_stem_cache_identity_changes_for_remask():
@@ -393,20 +394,20 @@ def test_stem_cache_identity_changes_for_remask():
     vocals_plan = resolve_separation_plan(["Vocals"])
 
     both_off = UpmixConfig(stem_drum_remask=False, stem_primary_remask=False)
-    assert stem_cache_identity(drum_plan, both_off) == drum_plan.inference_hash
+    assert stem_cache_identity(drum_plan, both_off, 44_100) != drum_plan.inference_hash
     assert len(
         {
-            stem_cache_identity(drum_plan, UpmixConfig()),
-            stem_cache_identity(drum_plan, UpmixConfig(stem_drum_remask=False)),
-            stem_cache_identity(drum_plan, UpmixConfig(stem_primary_remask=False)),
-            stem_cache_identity(drum_plan, both_off),
+            stem_cache_identity(drum_plan, UpmixConfig(), 44_100),
+            stem_cache_identity(drum_plan, UpmixConfig(stem_drum_remask=False), 44_100),
+            stem_cache_identity(drum_plan, UpmixConfig(stem_primary_remask=False), 44_100),
+            stem_cache_identity(drum_plan, both_off, 44_100),
         }
     ) == 4
     # Each pass only counts for plans that run its own model stage.
     assert stem_cache_identity(
-        bass_plan, UpmixConfig(stem_drum_remask=False)
-    ) == stem_cache_identity(bass_plan, UpmixConfig())
-    assert stem_cache_identity(vocals_plan, UpmixConfig()) == vocals_plan.inference_hash
+        bass_plan, UpmixConfig(stem_drum_remask=False), 44_100
+    ) == stem_cache_identity(bass_plan, UpmixConfig(), 44_100)
+    assert stem_cache_identity(vocals_plan, UpmixConfig(), 44_100) != vocals_plan.inference_hash
 
 
 def _fake_multi_model_separator(tmp_path):

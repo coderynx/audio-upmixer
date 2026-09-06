@@ -117,7 +117,7 @@ def test_prepare_opt_in_bypasses_supplied_and_public_cached_stems(tmp_path):
     plan = resolve_separation_plan(["Vocals"], False)
     StemCache(str(cache_dir)).save(
         source,
-        stem_cache_identity(plan, cfg),
+        stem_cache_identity(plan, cfg, 44_100),
         SR,
         {"Vocals": cached},
         SR,

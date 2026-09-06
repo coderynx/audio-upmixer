@@ -13,7 +13,7 @@ from upmixer.utils import itu_downmix_stereo
 
 _EXEC_PLAN = "upmixer.separation.stem_pipeline_separate.execute_plan"
 _EXEC_PLAN_ENGINE = "upmixer.separation.stem_pipeline_exec.execute_plan"
-SR = 1_000
+SR = 44_100
 
 
 def _write_source(path, audio: np.ndarray, sample_rate: int = SR) -> None:
@@ -190,9 +190,9 @@ def test_pipeline_silence_skip_keeps_full_length(kind, expected_calls, tmp_path)
     if kind == "silent":
         assert np.all(result.all_stems["Vocals"] == 0.0)
     elif kind == "long_gap":
-        assert np.all(result.all_stems["Vocals"][SR * 5 + 50 : SR * 9 - 50] == 0.0)
+        assert np.all(result.all_stems["Vocals"][SR * 5 + 1_000 : SR * 9 - 1_000] == 0.0)
     else:
-        assert np.all(result.all_stems["Vocals"][SR * 8 + 50 :] == 0.0)
+        assert np.all(result.all_stems["Vocals"][SR * 8 + 1_000 :] == 0.0)
 
 
 def test_preview_separation_uses_explicit_trim_coordinates(tmp_path):

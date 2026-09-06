@@ -184,6 +184,8 @@ def _validate_block_fields(block: dict, mapping: BlockMapping, prefix: str) -> N
     for key, value in block.items():
         path = f"{prefix}.{key}"
         if key not in mapping:
+            if prefix.rsplit(".", 1)[-1] == "engine" and key == "stem_native_rate":
+                continue
             raise ManifestError(f"Unknown manifest field '{path}'.")
         entry = mapping[key]
         if isinstance(entry, dict):

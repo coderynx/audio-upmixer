@@ -46,7 +46,7 @@ def stem_cache_identity(
 ) -> str:
     """Return model-plan identity including output-affecting inference overrides."""
     base = plan.inference_hash or plan.stems_hash
-    if config.stem_native_rate and native_sample_rate is None:
+    if native_sample_rate is None:
         raise ValueError(
             "native_sample_rate is required for native-rate cache identity"
         )
@@ -64,21 +64,13 @@ def stem_cache_identity(
         else ""
     )
     remask = remask_cache_component(plan, config)
-    if (
-        all(value in (None, False) for value in options)
-        and not cleanup
-        and not remask
-        and not config.stem_native_rate
-    ):
-        return base
     raw = (
         f"{base}|batch={options[0]}|segment={options[1]}|chunk={options[2]}"
         f"|overlap={options[3]}|tta={options[4]}|pitch={options[5]}"
+        f"|{_NATIVE_RATE_POLICY}|sr={native_sample_rate}"
     )
     if cleanup:
         raw += f"|{cleanup}"
     if remask:
         raw += f"|{remask}"
-    if config.stem_native_rate:
-        raw += f"|{_NATIVE_RATE_POLICY}|sr={native_sample_rate}"
     return hashlib.sha256(raw.encode()).hexdigest()[:20]

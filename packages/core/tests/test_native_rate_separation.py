@@ -1,4 +1,4 @@
-"""Opt-in native-rate separation contract."""
+"""Native-rate separation contract."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def _source(path: Path, frames: int = 480, sample_rate: int = 48_000) -> str:
     return str(path)
 
 
-def test_native_policy_uses_model_config_rate_and_delivery_length(tmp_path: Path):
+def test_native_separation_uses_model_config_rate_and_delivery_length(tmp_path: Path):
     source = _source(tmp_path / "source.wav")
     seen: list[tuple[int, int]] = []
 
@@ -47,7 +47,6 @@ def test_native_policy_uses_model_config_rate_and_delivery_length(tmp_path: Path
     config = UpmixConfig(
         stems=["Vocals"],
         output_sample_rate=96_000,
-        stem_native_rate=True,
         stem_silence_skip=False,
     )
     pipeline = StemUpmixPipeline(config)
@@ -66,7 +65,7 @@ def test_native_policy_uses_model_config_rate_and_delivery_length(tmp_path: Path
     assert len(result.all_stems["Vocals"]) == round(480 * 96_000 / 48_000)
 
 
-def test_native_policy_keeps_silence_skip_zone_at_native_rate(tmp_path: Path):
+def test_native_separation_keeps_silence_skip_zone_at_native_rate(tmp_path: Path):
     source_path = tmp_path / "active-source.wav"
     source_audio = np.zeros((4_800, 2), dtype=np.float32)
     source_audio[1_000] = 1.0
@@ -84,7 +83,6 @@ def test_native_policy_keeps_silence_skip_zone_at_native_rate(tmp_path: Path):
     config = UpmixConfig(
         stems=["Vocals"],
         output_sample_rate=48_000,
-        stem_native_rate=True,
         stem_silence_skip=True,
     )
     pipeline = StemUpmixPipeline(config)
@@ -101,7 +99,7 @@ def test_native_policy_keeps_silence_skip_zone_at_native_rate(tmp_path: Path):
     assert len(result.all_stems["Vocals"]) == 4_800
 
 
-def test_native_policy_converts_supplied_stems_to_delivery_rate(tmp_path: Path):
+def test_native_separation_converts_supplied_stems_to_delivery_rate(tmp_path: Path):
     source = _source(tmp_path / "source.wav", frames=480)
     store = tmp_path / "prepared"
     PlainStemStore(str(store)).write(
@@ -110,7 +108,6 @@ def test_native_policy_converts_supplied_stems_to_delivery_rate(tmp_path: Path):
     config = UpmixConfig(
         stems=["Vocals"],
         output_sample_rate=48_000,
-        stem_native_rate=True,
         stem_input_dir=str(store),
     )
     pipeline = StemUpmixPipeline(config)
@@ -127,7 +124,7 @@ def test_native_policy_converts_supplied_stems_to_delivery_rate(tmp_path: Path):
     assert len(result.all_stems["Vocals"]) == 480
 
 
-def test_native_policy_rejects_mixed_model_rates(monkeypatch):
+def test_native_separation_rejects_mixed_model_rates(monkeypatch):
     plan = SeparationPlan(
         tasks=[
             SeparationTask(
@@ -146,24 +143,15 @@ def test_native_policy_rejects_mixed_model_rates(monkeypatch):
 
     with pytest.raises(ValueError, match="mixed-rate plans"):
         _resolve_separation_sample_rate(
-            UpmixConfig(stem_native_rate=True), plan, 48_000
+            plan, 48_000
         )
 
 
-def test_native_policy_changes_cache_identity():
+def test_native_cache_identity_is_unconditional():
     from upmixer.separation.stem_identity import stem_cache_identity
 
     plan = resolve_separation_plan(["Vocals"])
-    assert stem_cache_identity(plan, UpmixConfig()) != stem_cache_identity(
-        plan, UpmixConfig(stem_native_rate=True), 44_100
-    )
-
-
-def test_native_cache_identity_includes_resolved_rate():
-    from upmixer.separation.stem_identity import stem_cache_identity
-
-    plan = resolve_separation_plan(["Vocals"])
-    config = UpmixConfig(stem_native_rate=True)
+    config = UpmixConfig()
     assert stem_cache_identity(plan, config, 44_100) != stem_cache_identity(
         plan, config, 48_000
     )
@@ -171,7 +159,7 @@ def test_native_cache_identity_includes_resolved_rate():
         stem_cache_identity(plan, config)
 
 
-def test_native_policy_does_not_load_legacy_stem_hash_cache(tmp_path: Path):
+def test_native_cache_identity_does_not_load_legacy_stem_hash_cache(tmp_path: Path):
     from upmixer.separation.stem_cache import StemCache
     from upmixer.separation.stem_identity import stem_cache_identity
 
@@ -181,17 +169,9 @@ def test_native_policy_does_not_load_legacy_stem_hash_cache(tmp_path: Path):
     cached = {"Vocals": np.ones((480, 2), dtype=np.float32)}
     StemCache(str(cache_dir)).save(source, plan.stems_hash, 48_000, cached, 48_000)
 
-    native = UpmixConfig(
-        stems=["Vocals"], stem_native_rate=True, stem_cache_dir=str(cache_dir)
-    )
-    native_identity = stem_cache_identity(plan, native, 44_100)
-    assert _load_cached_stems(native, plan, source, 48_000, native_identity) is None
-
-    incumbent = UpmixConfig(stems=["Vocals"], stem_cache_dir=str(cache_dir))
-    incumbent_identity = stem_cache_identity(plan, incumbent, 48_000)
-    result = _load_cached_stems(incumbent, plan, source, 48_000, incumbent_identity)
-    assert result is not None
-    np.testing.assert_array_equal(result["Vocals"], cached["Vocals"])
+    config = UpmixConfig(stems=["Vocals"], stem_cache_dir=str(cache_dir))
+    native_identity = stem_cache_identity(plan, config, 44_100)
+    assert _load_cached_stems(config, source, 48_000, native_identity) is None
 
 
 def test_native_boundary_resampling_uses_exact_rounded_lengths():

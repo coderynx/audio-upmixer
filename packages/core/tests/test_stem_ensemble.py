@@ -111,7 +111,7 @@ def test_disabled_plan_and_cache_identity_are_unchanged():
     plain = resolve_separation_plan(["Bass", "Drums"])
     explicit_off = resolve_separation_plan(["Bass", "Drums"], False)
     assert plain == explicit_off
-    assert stem_cache_identity(plain, UpmixConfig(stem_primary_remask=False)) == (
+    assert stem_cache_identity(plain, UpmixConfig(stem_primary_remask=False), SR) != (
         plain.inference_hash
     )
 
@@ -126,9 +126,9 @@ def test_enabled_plan_and_cache_identity_include_ensemble_details():
     assert enabled.ensemble_models == (MODEL_SCNET,)
     assert enabled.ensemble_stems == frozenset({"Bass", "Drums"})
     assert stem_cache_identity(
-        enabled, UpmixConfig(stem_ensemble=True, stem_primary_remask=False)
+        enabled, UpmixConfig(stem_ensemble=True, stem_primary_remask=False), SR
     ) != stem_cache_identity(
-        disabled, UpmixConfig(stem_primary_remask=False)
+        disabled, UpmixConfig(stem_primary_remask=False), SR
     )
 
 
