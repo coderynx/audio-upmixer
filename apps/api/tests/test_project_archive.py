@@ -1,5 +1,8 @@
 """Project archive (Save/Open) export -> import round-trip."""
 
+import json
+import zipfile
+
 import pytest
 
 pytest.importorskip("fastapi")
@@ -43,7 +46,11 @@ def test_export_then_import_reconstructs_an_identical_workspace(tmp_path):
         )
         manifest = {
             "version": "1.0.0",
-            "engine": {"mode": "stem", "stems": ["Vocals"]},
+            "engine": {
+                "mode": "stem",
+                "stems": ["Vocals"],
+                "stem_native_rate": False,
+            },
             "mixing": {"channel_layout": "5.1"},
         }
         project = Project(
@@ -54,7 +61,12 @@ def test_export_then_import_reconstructs_an_identical_workspace(tmp_path):
         )
         track = ProjectTrack(
             project=project, asset=asset, position=0,
-            layout_overrides={"5.1": {"mastering": {"loudness": {"target": -16.0}}}},
+            layout_overrides={
+                "5.1": {
+                    "engine": {"mode": "stem", "stem_native_rate": True},
+                    "mastering": {"loudness": {"target": -16.0}},
+                },
+            },
         )
         session.add_all([batch, asset, project, track])
         session.flush()
@@ -73,6 +85,10 @@ def test_export_then_import_reconstructs_an_identical_workspace(tmp_path):
         archive_path = tmp_path / "export.upmix.zip"
         export_project_archive(project, storage, project_stems, archive_path)
         assert archive_path.is_file()
+        with zipfile.ZipFile(archive_path) as archive:
+            archived = json.loads(archive.read("project.json"))
+        assert "stem_native_rate" not in archived["project"]["manifest"]["engine"]
+        assert "stem_native_rate" not in archived["tracks"][0]["layout_overrides"]["5.1"]["engine"]
 
         imported = import_project_archive(session, storage, project_stems, work_root, archive_path)
 
@@ -88,7 +104,12 @@ def test_export_then_import_reconstructs_an_identical_workspace(tmp_path):
 
         imported_track = imported.tracks[0]
         assert imported_track.id != track.id
-        assert imported_track.layout_overrides == {"5.1": {"mastering": {"loudness": {"target": -16.0}}}}
+        assert imported_track.layout_overrides == {
+            "5.1": {
+                "engine": {"mode": "stem"},
+                "mastering": {"loudness": {"target": -16.0}},
+            },
+        }
         assert imported_track.asset.filename == "source.wav"
         assert imported_track.asset.import_id != asset.import_id
         assert len(imported_track.stems) == 1

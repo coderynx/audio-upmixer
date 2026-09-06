@@ -5,6 +5,7 @@ minted ids, on this server or another one."""
 
 from __future__ import annotations
 
+import copy
 import json
 import shutil
 import uuid
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 from upmixer_web.features.projects.configuration import normalize_project_manifest
 from upmixer_web.features.projects.service import get_project
 from upmixer_web.features.projects.storage import REFERENCE_MATCH_META_SUFFIX, ProjectStemStorage
+from upmixer_web.shared.manifests import remove_legacy_native_rate
 from upmixer_web.shared.models import ImportBatch, MasteringReference, MediaAsset, Project, ProjectStem, ProjectTrack
 from upmixer_web.shared.storage import ObjectStorage
 
@@ -80,6 +82,8 @@ def export_project_archive(
     actual breaking change.
     """
     manifest_tracks: list[dict[str, Any]] = []
+    project_manifest = copy.deepcopy(project.manifest)
+    remove_legacy_native_rate(project_manifest)
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
         for index, track in enumerate(project.tracks):
             track_dir = f"tracks/{index:03d}"
@@ -117,9 +121,14 @@ def export_project_archive(
                 source_preview_entry = f"{track_dir}/source_preview.ogg"
                 archive.write(project_stems.resolve(track.source_preview_relative_path), source_preview_entry)
 
+            layout_overrides = copy.deepcopy(track.layout_overrides)
+            for override in layout_overrides.values():
+                if isinstance(override, dict):
+                    remove_legacy_native_rate(override)
+
             manifest_tracks.append({
                 "position": track.position,
-                "layout_overrides": track.layout_overrides,
+                "layout_overrides": layout_overrides,
                 "scene_overrides": track.scene_overrides,
                 "asset": {
                     "filename": asset.filename,
@@ -166,7 +175,7 @@ def export_project_archive(
             "project": {
                 "name": project.name,
                 "notes": project.notes,
-                "manifest": project.manifest,
+                "manifest": project_manifest,
                 "scene": project.scene,
                 "view_state": project.view_state,
                 "requested_stems": project.requested_stems,

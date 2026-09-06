@@ -11,6 +11,7 @@ project-specific execution.
 
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -80,6 +81,24 @@ class _ManagerCore:
                 for track in project.tracks:
                     if track.status == "running":
                         track.status = "queued"
+            for project in session.scalars(select(Project)):
+                engine = project.manifest.get("engine")
+                if not isinstance(engine, dict) or "stem_native_rate" not in engine:
+                    continue
+                legacy_native_rate = engine["stem_native_rate"]
+                manifest = copy.deepcopy(project.manifest)
+                manifest["engine"].pop("stem_native_rate", None)
+                project.manifest = manifest
+                if legacy_native_rate is False and project.prepared_stems and project.status != "deleting":
+                    project.status = "expanding"
+                    project.progress = 0.0
+                    project.error = None
+                    project.status_message = "Waiting to rebuild project stems"
+                    for track in project.tracks:
+                        track.status = "queued"
+                        track.progress = 0.0
+                        track.error = None
+                    project.revision += 1
             session.commit()
         self._executor = ThreadPoolExecutor(max_workers=self.worker_count, thread_name_prefix="upmixer-job")
         self._refmatch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="upmixer-refmatch")
