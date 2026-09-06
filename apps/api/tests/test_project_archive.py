@@ -88,7 +88,20 @@ def test_export_then_import_reconstructs_an_identical_workspace(tmp_path):
         with zipfile.ZipFile(archive_path) as archive:
             archived = json.loads(archive.read("project.json"))
         assert "stem_native_rate" not in archived["project"]["manifest"]["engine"]
+        assert archived["project"]["separation_policy"] == "native-rate-v1"
         assert "stem_native_rate" not in archived["tracks"][0]["layout_overrides"]["5.1"]["engine"]
+
+        project.status = "expanding"
+        unready_archive_path = tmp_path / "export-unready.upmix.zip"
+        export_project_archive(project, storage, project_stems, unready_archive_path)
+        with zipfile.ZipFile(unready_archive_path) as archive:
+            unready = json.loads(archive.read("project.json"))
+        assert "separation_policy" not in unready["project"]
+        unready_imported = import_project_archive(
+            session, storage, project_stems, work_root, unready_archive_path
+        )
+        assert unready_imported.status == "expanding"
+        assert unready_imported.tracks[0].status == "queued"
 
         imported = import_project_archive(session, storage, project_stems, work_root, archive_path)
 
@@ -134,6 +147,35 @@ def test_export_then_import_reconstructs_an_identical_workspace(tmp_path):
         reloaded = get_project(session, imported.id)
         assert reloaded is not None
         assert len(reloaded.tracks) == 1
+
+        def write_archive_variant(path, update_project):
+            with zipfile.ZipFile(archive_path) as source:
+                payload = json.loads(source.read("project.json"))
+                update_project(payload["project"])
+                with zipfile.ZipFile(path, "w") as target:
+                    for entry in source.infolist():
+                        contents = (
+                            json.dumps(payload).encode()
+                            if entry.filename == "project.json"
+                            else source.read(entry)
+                        )
+                        target.writestr(entry.filename, contents)
+
+        legacy_true_archive_path = tmp_path / "legacy-native.upmix.zip"
+
+        def mark_legacy_native(project_data):
+            project_data.pop("separation_policy")
+            project_data["manifest"]["engine"]["stem_native_rate"] = True
+
+        write_archive_variant(
+            legacy_true_archive_path,
+            mark_legacy_native,
+        )
+        legacy_true_imported = import_project_archive(
+            session, storage, project_stems, work_root, legacy_true_archive_path
+        )
+        assert legacy_true_imported.status == "ready"
+        assert legacy_true_imported.tracks[0].status == "ready"
 
     engine.dispose()
 

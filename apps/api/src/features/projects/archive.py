@@ -26,6 +26,7 @@ from upmixer_web.shared.storage import ObjectStorage
 
 ARCHIVE_FORMAT_VERSION = 2
 MANIFEST_FILENAME = "project.json"
+SEPARATION_POLICY = "native-rate-v1"
 
 
 def safe_component(name: str) -> str:
@@ -170,19 +171,23 @@ def export_project_archive(
             for layout in project_stems.reference_match_layouts(project.id)
         }
 
+        project_data = {
+            "name": project.name,
+            "notes": project.notes,
+            "manifest": project_manifest,
+            "scene": project.scene,
+            "view_state": project.view_state,
+            "requested_stems": project.requested_stems,
+            "prepared_stems": project.prepared_stems,
+            "stem_generation": project.stem_generation,
+            "preview_quality": project.preview_quality,
+        }
+        if project.status == "ready":
+            project_data["separation_policy"] = SEPARATION_POLICY
+
         manifest = {
             "format_version": ARCHIVE_FORMAT_VERSION,
-            "project": {
-                "name": project.name,
-                "notes": project.notes,
-                "manifest": project_manifest,
-                "scene": project.scene,
-                "view_state": project.view_state,
-                "requested_stems": project.requested_stems,
-                "prepared_stems": project.prepared_stems,
-                "stem_generation": project.stem_generation,
-                "preview_quality": project.preview_quality,
-            },
+            "project": project_data,
             "mastering_reference": reference_meta,
             "reference_match": reference_match_meta,
             "tracks": manifest_tracks,
@@ -261,6 +266,21 @@ def import_project_archive(
                 raise ValueError(f"Unsupported project archive version: {archive_version}")
             project_data = manifest["project"]
             tracks_data = manifest.get("tracks", [])
+            source_manifest = project_data.get("manifest", {})
+            source_engine = (
+                source_manifest.get("engine")
+                if isinstance(source_manifest, dict)
+                else None
+            )
+            has_native_stem_provenance = (
+                project_data.get("separation_policy") == SEPARATION_POLICY
+                or (
+                    isinstance(source_engine, dict)
+                    and source_engine.get("stem_native_rate") is True
+                )
+            )
+            prepared_stems = project_data.get("prepared_stems", [])
+            requires_stem_reprepare = bool(prepared_stems) and not has_native_stem_provenance
 
             import_batch = ImportBatch(
                 kind="album" if len(tracks_data) > 1 else "track",
@@ -277,11 +297,15 @@ def import_project_archive(
                 scene=project_data.get("scene", {}),
                 view_state=project_data.get("view_state", {}),
                 requested_stems=project_data.get("requested_stems", []),
-                prepared_stems=project_data.get("prepared_stems", []),
+                prepared_stems=prepared_stems,
                 stem_generation=project_data.get("stem_generation", 0),
                 preview_quality=project_data.get("preview_quality", "high"),
-                status="ready",
-                status_message="Imported project",
+                status="expanding" if requires_stem_reprepare else "ready",
+                status_message=(
+                    "Waiting to rebuild project stems"
+                    if requires_stem_reprepare
+                    else "Imported project"
+                ),
             )
             session.add(project)
             session.flush()
@@ -325,10 +349,15 @@ def import_project_archive(
                 session.add(asset)
                 session.flush()
 
+                layout_overrides = _track_layout_overrides(track_data, project.manifest)
+                for override in layout_overrides.values():
+                    if isinstance(override, dict):
+                        remove_legacy_native_rate(override)
                 track = ProjectTrack(
                     asset_id=asset.id, position=track_data.get("position", index),
-                    status="ready", progress=1.0,
-                    layout_overrides=_track_layout_overrides(track_data, project.manifest),
+                    status="queued" if requires_stem_reprepare else "ready",
+                    progress=0.0 if requires_stem_reprepare else 1.0,
+                    layout_overrides=layout_overrides,
                     scene_overrides=track_data.get("scene_overrides", {}),
                 )
                 project.tracks.append(track)
