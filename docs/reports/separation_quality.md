@@ -15,8 +15,8 @@ are complete but their candidates are rejected for production; both Q50
 candidates (aggregate-Drums v1 and kit-sibling v2) are complete and rejected
 after automatic failures, and their experimental helpers have been removed.
 The Q90 pitch-adviser preflight for the Q40/Q50 ambiguity is complete and
-rejected; Q60/Q80 are ineligible, Q70 is blocked, and Q100 for accepted Q21 is
-next. Q31 and later quality changes have not started.
+rejected; Q60/Q80 are ineligible, Q70 is blocked, and Q100 delivery hardening
+for accepted Q21 is complete. Q31 and later quality changes have not started.
 No production default has changed.
 
 ## Progress/stage
@@ -35,8 +35,8 @@ No production default has changed.
 | Q60 | Ineligible; no measured spatial/residual defect | No Q60 experiment. |
 | Q70 | Blocked; no accepted magnitude correction | Reopen only after an accepted correction. |
 | Q80 | Ineligible; no measured Q03 quiet-input failure | No Q80 experiment. |
-| Q90 | Preflight complete; pitch advisers rejected for the Q40/Q50 ambiguity | No Q90 implementation. Q100 for accepted Q21 is next. |
-| Q100 | Next for accepted Q21 | Complete delivery, parity, and rollback evidence before promotion. |
+| Q90 | Preflight complete; pitch advisers rejected for the Q40/Q50 ambiguity | No Q90 implementation. Q100 for accepted Q21 is complete. |
+| Q100 | Complete for accepted Q21; opt-in/default-off | Default promotion remains blocked by the untouched paired 48 kHz heldout and CUDA memory ceiling; generation GC is deferred. |
 
 ## Frozen identity and corpus
 
@@ -615,13 +615,32 @@ Neither adviser resolves the observed broadband Snare/Hi-Hat loss or
 overlapping kit ownership. No package or checkpoint was downloaded, no heldout
 inference was run, and no repository code changed. Q90 is therefore rejected
 for this ambiguity; retain the incumbent classical/no-adviser behavior. Q100
-for accepted Q21 is next.
+for accepted Q21 is complete below.
+
+### Q100 — accepted Q21 delivery hardening complete
+
+Q100 delivery hardening for the accepted Q21 native-rate candidate is recorded
+in commits `ac75a91`, `88be214`, `e0a8bb1`, `3cb0106`, `f7dd7a4`, `1fe573e`, and
+`ed2fd13`. Native-rate separation remains opt-in across the CLI, API, and web.
+Project stems and peaks are immutable per generation; queued exports are
+isolated; revision/generation publication is atomic; stale and failed
+preparations are cleaned up; deletion is conditional; per-track subsets are
+validated; and legacy/archive compatibility is retained.
+
+Final validation passed: focused Q100 coverage `36 passed`; API `129 passed`;
+full Python `1643 passed, 38 deselected, 24 warnings`; web `434 passed`;
+`npm run build`; and the macOS Tauri app build. The production native smoke's
+exact parity and the owner's quick listening `OK` are recorded in Q21 above.
+
+The default remains off. Default promotion is blocked by the untouched paired
+48 kHz heldout and the CUDA memory ceiling. Old successful project generations
+are retained; garbage collection is deferred.
 
 ## Gates still open
 
 - [ ] Run no heldout inference until the rate, residual, and listening policy is frozen; the generated heldout excerpts remain untouched.
 - [x] Prepare blinded randomized listening assets and answer keys; three tuning-only packs are recorded above.
-- [ ] Obtain the quick owner listening OK for each automatically passing candidate; no listener panel, ratings form, or manual human report is required.
+- [ ] Obtain the quick owner listening OK for each remaining automatically passing candidate; Q21's OK is recorded above; no listener panel, ratings form, or manual human report is required.
 - [ ] Define and persist the separate unassigned source-zone remainder, including cache/store, preview/export, subset/solo/mute, alignment, rate, and level semantics. A source anchor is not residual preservation.
 - [x] Run the fixed-sample-context versus matched-duration diagnostic; retain fixed-sample context and reject the 96 kHz matched-duration arm.
 - [ ] Expand and confirm eligible complete-tree real evidence where references permit. The corrected one-item branch smokes exercised the SCNet ensemble, Karaoke lead/backing path, and private `_deux_inst` on tuning/proxy material; broader coverage remains open, and the branch proxies plus supplementary IDMT, MedleyDB, CrowdioSet, Freischütz, and Celtic sets do not substitute for aligned heldout music.
@@ -629,6 +648,7 @@ for accepted Q21 is next.
 - [ ] Verify the normal source-anchor product path separately with anchoring off for the experiment.
 - [x] Q21 native-rate production integration, delivery conversion, cache/resume identity, and direct production parity are implemented and pass the automatic gate; bounded streaming conversion remains a follow-up.
 - [x] Q21 quick owner listening OK recorded on 2026-09-06; Q21 accepted for opt-in use and remains default-off; Q50 was evaluated next and rejected.
+- [x] Q100 delivery hardening for accepted Q21 is complete across the CLI/API/web path; generation isolation/publication, export and cleanup races, conditional deletion, subset validation, and compatibility checks are recorded above.
 - [x] Q90 adviser preflight completed for the Q40/Q50 ambiguity and rejected on modality, compatibility, and provenance; no downloads, heldout inference, or code changes.
 
 ## Restart commands
@@ -689,4 +709,4 @@ uv run python "$UPMIXER_Q20_ROOT/analyze_smokes.py"
 uv run pytest packages/core/tests apps/api/tests apps/cli/tests -q
 ```
 
-Do not run the heldout arm until the open gates above are frozen and recorded.
+Q100 is complete for accepted Q21, but keep native-rate behavior opt-in/default-off. Do not run the heldout arm or promote the default until the open gates above are frozen and recorded.
