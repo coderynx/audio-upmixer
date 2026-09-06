@@ -8,10 +8,11 @@ This is the resumable handoff for the frozen
 
 Current status: Q01/Q02 plumbing and regression work is complete; Q03 has a
 12-recording tuning baseline; Q10 passes its objective equivalence and memory
-gate; Q20 remains partial, while the Q21 native-rate candidate passes its
-automatic production parity gate and awaits a quick owner listening OK; Q30 and
-Q40 experiments are complete but their candidates are rejected for production;
-Q31+ quality changes have not started.
+gate; Q20 remains partial, while the Q21 native-rate candidate passed its
+automatic production parity gate and was accepted after the owner's 2026-09-06
+quick listening OK; Q21 remains opt-in/default-off and Q50 is next; Q30 and Q40
+experiments are complete but their candidates are rejected for production; Q31+
+quality changes have not started.
 No production default has changed.
 
 ## Progress/stage
@@ -23,9 +24,9 @@ No production default has changed.
 | Q03 | Partial | — |
 | Q10 | Complete; objective gate passes | — |
 | Q20 | Partial; native-rate automatic gate passed | Finish residual and heldout evidence as needed for later promotion. |
-| Q21 | Candidate implemented; automatic gate passes; quick owner listening pending | Get the owner OK, then consider the next candidate; default promotion remains separate. |
-| Q30 | Complete; rejected | No Q31; after Q21, Q50 or Q60 may be considered under their stated evidence gates. |
-| Q40 | Complete; rejected | No Q41. Q50, Q60, or Q80 remain conditional candidates; Q70 and Q90 require their follow-up prerequisites. |
+| Q21 | Accepted after automatic gate and quick owner OK; opt-in/default-off | Q50 is next; default promotion remains separate. |
+| Q30 | Complete; rejected | No Q31; Q50 is next under the sequential candidate workflow. |
+| Q40 | Complete; rejected | No Q41. Q50 is next; Q60 and Q80 remain conditional candidates; Q70 and Q90 require their follow-up prerequisites. |
 
 ## Frozen identity and corpus
 
@@ -303,10 +304,10 @@ separate reconstruction maximum absolute error
 `1.862645149230957e-09`; assigned-policy reconstruction maximum absolute error
 `5.960464477539063e-08`. The separate-Unassigned residual contract remains
 provisional: policy 1 leaves `Other` raw, while policy 2 adds the
-delivery-domain residual. The Q21 native-rate candidate is now implemented and
-its automatic parity gate passes; its quick owner listening gate is pending.
-Any default change remains blocked pending the applicable owner OK, policy
-freeze, and one single heldout run. Heldout inference has not run.
+delivery-domain residual. The Q21 native-rate candidate is now implemented,
+its automatic parity gate passes, and its quick owner listening verdict was
+`OK` on 2026-09-06. Any default change remains blocked pending policy freeze
+and one single heldout run. Heldout inference has not run.
 
 The corrected one-item smoke artifacts are:
 
@@ -333,7 +334,7 @@ and `highrate-smoke/analysis-scipy-default-invalid.json`) are audit-only and
 must not be used for conclusions. The corrected artifacts use the selected
 120 dB FIR above.
 
-### Q21 — native-rate production candidate: automatic gate passes
+### Q21 — native-rate production candidate: accepted for opt-in use
 
 The opt-in production path is implemented by commits `6540f9a`, `9dafcf3`,
 `c8c7855`, and `81d4d79`. The final fix pre-resamples each non-native source
@@ -364,10 +365,10 @@ Retained evidence is at
 The code revision is
 `81d4d79f7ff8df444734d39c47d8aaa52e02fa2a`.
 
-The automatic gate passes. Per the current project rule, the only remaining
-human gate for this candidate is a quick owner listening OK. No listener panel,
-ratings form, or manual human report is required; heldout inference remains
-untouched.
+The automatic gate passes. The owner's 2026-09-06 quick listening verdict was
+`OK`. Under the sequential candidate workflow, Q21 is accepted for opt-in use
+and Q50 is next. The path remains opt-in/default-off; no panel, ratings, defect
+ledger, or heldout inference is claimed.
 
 ### Q30 — origin-view experiment complete; candidate rejected
 
@@ -480,15 +481,13 @@ for audit only.
 
 The stop rule applies: no production default change was made and the evaluation
 harness is retained. The combined Q20/Q21 stage remains partial: Q20 is
-incomplete and the Q21 native-rate candidate awaits quick owner listening.
-This Q40 result is diagnostic and
+incomplete; Q21 was accepted for opt-in use after the owner's 2026-09-06 quick
+listening `OK` and remains default-off. This Q40 result is diagnostic and
 promotion-prohibited; those entry prerequisites independently continue to block
-production. Per the plan, the next named candidates are Q50 event or
-repetition evidence after Q21 (or earlier only for a concrete DrumSep
-ownership complaint), Q60 stereo-aware residual allocation after Q21 plus a
-measured spatial/residual defect, and Q80 reversible level conditioning after
-Q21 plus a Q03 quiet-input failure. Q70 remains gated on an accepted magnitude
-improvement and Q90 on a named Q40/Q50 ambiguity plus failed classical cues.
+production. Under the sequential candidate workflow, Q50 is next. Q60 remains
+conditional on a measured spatial/residual defect, and Q80 on a Q03 quiet-input
+failure. Q70 remains gated on an accepted magnitude improvement and Q90 on a
+named Q40/Q50 ambiguity plus failed classical cues.
 There is no Q41.
 
 Exact rerun commands (use fresh output directories):
@@ -529,7 +528,7 @@ cd /Users/coderynx/Projects/upmixer
 - [ ] Measure CUDA when available and freeze a numerical device memory ceiling; the CPU smoke is recorded above.
 - [ ] Verify the normal source-anchor product path separately with anchoring off for the experiment.
 - [x] Q21 native-rate production integration, delivery conversion, cache/resume identity, and direct production parity are implemented and pass the automatic gate; bounded streaming conversion remains a follow-up.
-- [ ] Q21 quick owner listening OK is pending; default promotion remains a separate decision.
+- [x] Q21 quick owner listening OK recorded on 2026-09-06; Q21 accepted for opt-in use and remains default-off; Q50 is next.
 
 ## Restart commands
 
