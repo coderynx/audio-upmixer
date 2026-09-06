@@ -97,6 +97,10 @@ def _resample_stems(
     target_length: int,
 ) -> dict[str, np.ndarray]:
     """Convert terminal stems once and enforce the source-duration frame count."""
+    if source_sr == target_sr and all(
+        len(audio) == target_length for audio in stems.values()
+    ):
+        return stems
     return {
         name: _resample_audio(audio, source_sr, target_sr, target_length)
         for name, audio in stems.items()
@@ -391,7 +395,6 @@ def separate(
         _log.info("input_folded_to_stereo input_format=%s", input_fmt.name)
 
     out_sr = _resolve_output_sample_rate(cfg, sr)
-    inference_sr = _resolve_separation_sample_rate(plan, out_sr)
     # sep_sr is the public/cache/store rate consumed by routing and mastering.
     sep_sr = out_sr
     target_frames = round(len(audio_full) * sep_sr / sr)
@@ -406,7 +409,16 @@ def separate(
         if stem_input_result is not None:
             cache_hit_stems = stem_input_result[0]
             cache_hit_sr = stem_input_result[1]
-    elif not retain_private and cfg.stem_cache_dir:
+    if cache_hit_stems is None:
+        inference_sr = _resolve_separation_sample_rate(plan, out_sr)
+    else:
+        inference_sr = sep_sr
+    if (
+        cache_hit_stems is None
+        and not retain_private
+        and not cfg.stem_input_dir
+        and cfg.stem_cache_dir
+    ):
         # A folded run separates one "front" zone where the same file
         # unfolded yields "@zone"-keyed stems, so the two must not share
         # a cache entry.

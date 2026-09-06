@@ -67,10 +67,10 @@ def stem_cache_identity(
     raw = (
         f"{base}|batch={options[0]}|segment={options[1]}|chunk={options[2]}"
         f"|overlap={options[3]}|tta={options[4]}|pitch={options[5]}"
-        f"|{_NATIVE_RATE_POLICY}|sr={native_sample_rate}"
     )
     if cleanup:
         raw += f"|{cleanup}"
     if remask:
         raw += f"|{remask}"
+    raw += f"|{_NATIVE_RATE_POLICY}|sr={native_sample_rate}"
     return hashlib.sha256(raw.encode()).hexdigest()[:20]

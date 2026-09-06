@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -159,6 +160,21 @@ def test_native_cache_identity_is_unconditional():
         stem_cache_identity(plan, config)
 
 
+def test_native_cache_identity_preserves_legacy_suffix_order():
+    from upmixer.separation.stem_identity import stem_cache_identity
+
+    plan = resolve_separation_plan(["Bass"])
+    config = UpmixConfig(stem_bleed_reduction=True)
+    expected_raw = (
+        f"{plan.inference_hash}|batch=None|segment=None|chunk=None"
+        "|overlap=None|tta=False|pitch=None|stemcleanup=1|primaryremask"
+        "|native-rate-v1|sr=44100"
+    )
+    expected = hashlib.sha256(expected_raw.encode()).hexdigest()[:20]
+
+    assert stem_cache_identity(plan, config, 44_100) == expected
+
+
 def test_native_cache_identity_does_not_load_legacy_stem_hash_cache(tmp_path: Path):
     from upmixer.separation.stem_cache import StemCache
     from upmixer.separation.stem_identity import stem_cache_identity
@@ -174,6 +190,42 @@ def test_native_cache_identity_does_not_load_legacy_stem_hash_cache(tmp_path: Pa
     assert _load_cached_stems(config, source, 48_000, native_identity) is None
 
 
+def test_supplied_stems_skip_mixed_native_rate_validation(tmp_path: Path, monkeypatch):
+    plan = resolve_separation_plan(["Bass", "Kick"])
+    mixed_rates = {
+        task.model: rate
+        for task, rate in zip(plan.tasks, (44_100, 48_000, 48_000))
+    }
+    assert len(set(mixed_rates.values())) > 1
+    monkeypatch.setattr(
+        "upmixer.separation.stem_pipeline_separate.resolve_model_native_sample_rate",
+        mixed_rates.__getitem__,
+    )
+
+    source = _source(tmp_path / "source.wav")
+    store = tmp_path / "prepared"
+    PlainStemStore(str(store)).write(
+        {
+            "Bass": np.ones((480, 2), dtype=np.float32),
+            "Kick": np.ones((480, 2), dtype=np.float32),
+        },
+        48_000,
+    )
+    pipeline = StemUpmixPipeline(
+        UpmixConfig(
+            stems=["Bass", "Kick"],
+            output_sample_rate=48_000,
+            stem_input_dir=str(store),
+        )
+    )
+    try:
+        result = pipeline._separate(source, None, lambda *_: None)
+    finally:
+        pipeline.close()
+
+    assert result.sep_sr == 48_000
+
+
 def test_native_boundary_resampling_uses_exact_rounded_lengths():
     source = np.zeros((480, 2), dtype=np.float32)
     expected = round(480 * 44_100 / 48_000)
@@ -181,3 +233,9 @@ def test_native_boundary_resampling_uses_exact_rounded_lengths():
     stems = _resample_stems({"Vocals": source}, 48_000, 44_100, expected)
 
     assert stems["Vocals"].shape == (expected, 2)
+
+
+def test_matching_rate_stems_are_reused_without_copy():
+    stems = {"Vocals": np.ones((480, 2), dtype=np.float32)}
+
+    assert _resample_stems(stems, 48_000, 48_000, 480) is stems
