@@ -1,4 +1,5 @@
 """Evaluation-only direct-Deux counterfactual cascade."""
+
 from __future__ import annotations
 
 import time
@@ -54,11 +55,6 @@ class CascadeEvaluationResult:
     source_sample_rate: int
     source_frame_count: int
 
-    @property
-    def arm_outputs(self) -> tuple[CascadeArmOutput, ...]:
-        """Compatibility name matching the Q30 per-view result."""
-        return self.arms
-
     def provenance(
         self,
         *,
@@ -103,16 +99,12 @@ class CascadeEvaluationResult:
                 }
             )
         if reasons:
-            totals: dict[str, object] = {
-                field: None for field in _ACCOUNTING_FIELDS
-            }
+            totals: dict[str, object] = {field: None for field in _ACCOUNTING_FIELDS}
             totals["unsupported_reason"] = "; ".join(dict.fromkeys(reasons))
         else:
             totals = {
                 field: sum(
-                    int(row[field])
-                    for row in arm_rows
-                    if isinstance(row[field], int)
+                    int(row[field]) for row in arm_rows if isinstance(row[field], int)
                 )
                 for field in _ACCOUNTING_FIELDS
             }
@@ -255,9 +247,7 @@ def separate_with_deux_cascade(
     separate_fn: SeparateFn,
 ) -> CascadeEvaluationResult:
     """Run Deux on ``X`` and ``X - 0.5 * I0`` for the fixed Q40 recipe."""
-    source, source_rate = sf.read(
-        mixture_path, dtype="float32", always_2d=True
-    )
+    source, source_rate = sf.read(mixture_path, dtype="float32", always_2d=True)
     source = np.asarray(source, dtype=np.float32).copy()
     _validate_audio(source, f"mixture {mixture_path}")
     if source.shape[1] != 2:
@@ -269,10 +259,7 @@ def separate_with_deux_cascade(
         started = time.perf_counter()
         result = separate_fn(path)
         elapsed = time.perf_counter() - started
-        if (
-            not isinstance(result, tuple)
-            or len(result) != 2
-        ):
+        if not isinstance(result, tuple) or len(result) != 2:
             raise ValueError(f"{label} separation returned invalid result")
         stems, settings = result
         if not isinstance(settings, RunSettings):

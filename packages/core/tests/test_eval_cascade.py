@@ -1,4 +1,5 @@
 """Q40 direct-Deux counterfactual cascade evaluation."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -63,8 +64,12 @@ def test_deux_cascade_uses_exact_counterfactual_and_declared_formulas(tmp_path):
     np.testing.assert_array_equal(source, original)
     v0 = source * 0.25
     v1 = expected_counterfactual * 0.75
-    np.testing.assert_array_equal(result.stems["Vocals"], (v0 * 0.5 + v1 * 0.5).astype(np.float32))
-    np.testing.assert_array_equal(result.stems["_deux_inst"], (source - result.stems["Vocals"]).astype(np.float32))
+    np.testing.assert_array_equal(
+        result.stems["Vocals"], (v0 * 0.5 + v1 * 0.5).astype(np.float32)
+    )
+    np.testing.assert_array_equal(
+        result.stems["_deux_inst"], (source - result.stems["Vocals"]).astype(np.float32)
+    )
     assert [arm.arm_id for arm in result.arms] == [
         "independent-deux",
         "complementary-v0",
@@ -97,12 +102,32 @@ def test_deux_cascade_retains_leakage_in_i0_only_at_half_formula(tmp_path):
     ("bad_outputs", "match"),
     [
         ({"Vocals": np.zeros((8, 2), dtype=np.float32)}, "exactly"),
-        ({"Vocals": np.zeros((8, 2), dtype=np.float32), "_deux_inst": np.zeros((7, 2), dtype=np.float32)}, "shape"),
-        ({"Vocals": np.zeros((8, 1), dtype=np.float32), "_deux_inst": np.zeros((8, 1), dtype=np.float32)}, "stereo"),
-        ({"Vocals": np.full((8, 2), np.nan, dtype=np.float32), "_deux_inst": np.zeros((8, 2), dtype=np.float32)}, "finite"),
+        (
+            {
+                "Vocals": np.zeros((8, 2), dtype=np.float32),
+                "_deux_inst": np.zeros((7, 2), dtype=np.float32),
+            },
+            "shape",
+        ),
+        (
+            {
+                "Vocals": np.zeros((8, 1), dtype=np.float32),
+                "_deux_inst": np.zeros((8, 1), dtype=np.float32),
+            },
+            "stereo",
+        ),
+        (
+            {
+                "Vocals": np.full((8, 2), np.nan, dtype=np.float32),
+                "_deux_inst": np.zeros((8, 2), dtype=np.float32),
+            },
+            "finite",
+        ),
     ],
 )
-def test_deux_cascade_validates_stereo_shape_finite_and_exact_stems(tmp_path, bad_outputs, match):
+def test_deux_cascade_validates_stereo_shape_finite_and_exact_stems(
+    tmp_path, bad_outputs, match
+):
     mixture, _ = _source(tmp_path)
 
     def separate(_path: str):
@@ -154,8 +179,12 @@ def test_deux_cascade_conserves_source_in_float32(tmp_path):
         assert all(audio.dtype == np.float32 for audio in arm.stems.values())
         assert all(np.isfinite(audio).all() for audio in arm.stems.values())
         if arm.arm_id != "independent-deux" and arm.arm_id != "counterfactual-v1":
-            np.testing.assert_allclose(arm.stems["Vocals"] + arm.stems["_deux_inst"], source, atol=1e-6, rtol=0)
-    np.testing.assert_allclose(result.stems["Vocals"] + result.stems["_deux_inst"], source, atol=1e-6, rtol=0)
+            np.testing.assert_allclose(
+                arm.stems["Vocals"] + arm.stems["_deux_inst"], source, atol=1e-6, rtol=0
+            )
+    np.testing.assert_allclose(
+        result.stems["Vocals"] + result.stems["_deux_inst"], source, atol=1e-6, rtol=0
+    )
 
 
 def test_deux_cascade_provenance_and_report_field(tmp_path):
@@ -184,7 +213,9 @@ def test_deux_cascade_provenance_and_report_field(tmp_path):
     assert provenance["separation_call_count"] == 2
     assert len(provenance["arms"]) == 5
     assert provenance["memory_scope"] == "parent_process_lifetime_peak_rss"
-    report = evaluate_corpus(corpus, lambda path: separate_with_deux_cascade(path, separate), 8_000)
+    report = evaluate_corpus(
+        corpus, lambda path: separate_with_deux_cascade(path, separate), 8_000
+    )
     payload = report.to_dict()
     assert len(payload["cascade_provenance"]) == 1
     assert "origin_provenance" not in payload
@@ -193,7 +224,10 @@ def test_deux_cascade_provenance_and_report_field(tmp_path):
         scores=[StemScore("Vocals", "default", 1.0, 1.0, 1.0, "recording-0", "item-0")],
     ).to_dict()
     assert "cascade_provenance" not in ordinary
-    assert json.loads(EvalReport(settings=settings, scores=[]).to_json()) == EvalReport(settings=settings, scores=[]).to_dict()
+    assert (
+        json.loads(EvalReport(settings=settings, scores=[]).to_json())
+        == EvalReport(settings=settings, scores=[]).to_dict()
+    )
 
 
 def test_runner_validates_and_wires_frozen_cascade(tmp_path):
@@ -201,9 +235,15 @@ def test_runner_validates_and_wires_frozen_cascade(tmp_path):
     mixture, _ = _source(tmp_path, sample_rate=44_100)
     args = runner._parser().parse_args(
         [
-            "--corpus", "licensed", "--variant", "real-model",
-            "--output-dir", str(tmp_path), "--cascade-vocal-repair",
-            "--model", "becruily_deux.ckpt",
+            "--corpus",
+            "licensed",
+            "--variant",
+            "real-model",
+            "--output-dir",
+            str(tmp_path),
+            "--cascade-vocal-repair",
+            "--model",
+            "becruily_deux.ckpt",
         ]
     )
     captured = {}
@@ -221,9 +261,14 @@ def test_runner_validates_and_wires_frozen_cascade(tmp_path):
     assert callable(separator)
     separator(str(mixture))
     assert captured == {
-        "model": "becruily_deux.ckpt", "sample_rate": 44_100,
-        "batch_size": 1, "segment_size": None, "chunk_duration_s": None,
-        "overlap": 2, "stem_ensemble": False, "tta": False,
+        "model": "becruily_deux.ckpt",
+        "sample_rate": 44_100,
+        "batch_size": 1,
+        "segment_size": None,
+        "chunk_duration_s": None,
+        "overlap": 2,
+        "stem_ensemble": False,
+        "tta": False,
         "pitch_shift": None,
     }
 
@@ -256,8 +301,11 @@ def test_runner_retains_all_cascade_arm_paths_and_provenance(tmp_path):
     index = json.loads((output_dir / "stems/index.json").read_text())
     entry = index["items"][0]
     assert [arm["arm_id"] for arm in entry["cascade_arms"]] == [
-        "independent-deux", "complementary-v0", "counterfactual-v1",
-        "refined-complement", "fixed-half-recipe",
+        "independent-deux",
+        "complementary-v0",
+        "counterfactual-v1",
+        "refined-complement",
+        "fixed-half-recipe",
     ]
     for arm in result.provenance()["arms"]:
         path = Path(arm["output_paths"]["Vocals"])
@@ -290,9 +338,15 @@ def test_runner_rejects_non_frozen_cascade_options(tmp_path, capsys, option):
     with pytest.raises(SystemExit):
         runner.main(
             [
-                "--corpus", "licensed", "--variant", "real-model",
-                "--output-dir", str(tmp_path / "report"),
-                "--cascade-vocal-repair", "--model", "becruily_deux.ckpt",
+                "--corpus",
+                "licensed",
+                "--variant",
+                "real-model",
+                "--output-dir",
+                str(tmp_path / "report"),
+                "--cascade-vocal-repair",
+                "--model",
+                "becruily_deux.ckpt",
                 *option,
             ]
         )

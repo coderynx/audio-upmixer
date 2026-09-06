@@ -11,24 +11,20 @@ Examples:
         --variant production-tree --output-dir /tmp/upmixer-eval-tree \
         --stems vocals,bass,drums,other
 """
+
 from __future__ import annotations
 
 import argparse
 import math
-import shutil
 import subprocess
 from functools import partial
 from pathlib import Path
 from typing import Callable, Sequence
 
-import numpy as np
 import soundfile as sf
 
 from upmixer.config import UpmixConfig
-from upmixer.execution import write_report
 from upmixer.eval import (
-    CascadeEvaluationResult,
-    OriginEvaluationResult,
     ReferenceCorpus,
     RunSettings,
     evaluate_corpus,
@@ -39,33 +35,17 @@ from upmixer.eval import (
     separate_tree_for_eval,
     synthetic_corpus,
 )
-from upmixer.eval.cascade import write_cascade_arms
+from upmixer.eval.cascade import CASCADE_RECIPE
 from upmixer.eval.rate_experiment import (
     separate_model_for_rate_experiment,
     separate_tree_for_rate_experiment,
 )
-from upmixer.eval.reference_targets import estimate_components
+from upmixer.eval.retention import _retaining_separator
 from upmixer.separation.stem_plan import normalize_stems
-from upmixer.io.atomic import atomic_output_path
 from upmixer.separation.separator import DEFAULT_MODEL
 
 _PROTOCOL_ID = "upmixer-separation-q00-v1"
-_CASCADE_PROTOCOL_ID = "q40-deux-counterfactual-half-v1"
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-_STEM_INDEX_SCHEMA = 1
-_RETAINED_SETTINGS_FIELDS = (
-    "model",
-    "model_native_sample_rate",
-    "input_sample_rate",
-    "separation_sample_rate",
-    "output_sample_rate",
-    "scoring_sample_rate",
-    "rate_arm",
-    "input_frame_count",
-    "separation_frame_count",
-    "output_frame_count",
-    "resampler",
-)
 
 
 def _positive_int(value: str) -> int:
@@ -74,17 +54,20 @@ def _positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError("must be at least 1")
     return parsed
 
+
 def _finite_positive(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0.0:
         raise argparse.ArgumentTypeError("must be a finite positive number")
     return parsed
 
+
 def _comma_separated_stems(value: str) -> list[str]:
     stems = [stem.strip() for stem in value.split(",") if stem.strip()]
     if not stems:
         raise argparse.ArgumentTypeError("must include at least one stem")
     return stems
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -136,26 +119,51 @@ def _parser() -> argparse.ArgumentParser:
     )
     return parser
 
-def _validate_cascade_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+
+def _validate_cascade_args(
+    args: argparse.Namespace, parser: argparse.ArgumentParser
+) -> None:
     if not args.cascade_vocal_repair:
         return
     checks = (
-        (args.variant != "real-model", "--cascade-vocal-repair requires --variant real-model"),
-        (args.model != "becruily_deux.ckpt", "--cascade-vocal-repair requires --model becruily_deux.ckpt"),
-        (args.sample_rate != 44_100, "--cascade-vocal-repair requires --sample-rate 44100"),
-        (args.batch_size not in (None, 1), "--cascade-vocal-repair requires batch size 1"),
+        (
+            args.variant != "real-model",
+            "--cascade-vocal-repair requires --variant real-model",
+        ),
+        (
+            args.model != "becruily_deux.ckpt",
+            "--cascade-vocal-repair requires --model becruily_deux.ckpt",
+        ),
+        (
+            args.sample_rate != 44_100,
+            "--cascade-vocal-repair requires --sample-rate 44100",
+        ),
+        (
+            args.batch_size not in (None, 1),
+            "--cascade-vocal-repair requires batch size 1",
+        ),
         (args.overlap not in (None, 2), "--cascade-vocal-repair requires overlap 2"),
-        (args.segment_size is not None, "--cascade-vocal-repair requires the default segment size"),
-        (args.chunk_duration_s is not None, "--cascade-vocal-repair forbids outer chunking"),
+        (
+            args.segment_size is not None,
+            "--cascade-vocal-repair requires the default segment size",
+        ),
+        (
+            args.chunk_duration_s is not None,
+            "--cascade-vocal-repair forbids outer chunking",
+        ),
         (args.tta, "--cascade-vocal-repair forbids TTA"),
         (args.pitch_shift is not None, "--cascade-vocal-repair forbids pitch shift"),
         (args.rate_arm is not None, "--cascade-vocal-repair forbids rate arms"),
         (args.stem_ensemble, "--cascade-vocal-repair forbids stem ensembles"),
-        (args.extra_origin_samples is not None, "--cascade-vocal-repair cannot be combined with --extra-origin-samples"),
+        (
+            args.extra_origin_samples is not None,
+            "--cascade-vocal-repair cannot be combined with --extra-origin-samples",
+        ),
     )
     for invalid, message in checks:
         if invalid:
             parser.error(message)
+
 
 def _reference_separator(corpus: ReferenceCorpus, sample_rate: int) -> Callable:
     items = {item.mixture: item for item in corpus.items}
@@ -278,233 +286,6 @@ def _git_revision() -> str | None:
     return f"{head}-dirty" if status.stdout else head
 
 
-def _retained_filename(stem_name: str, used: set[str]) -> str:
-    base = stem_name.replace("@", "__").replace("/", "__").replace("\\", "__") or "stem"
-    filename = f"{base}.wav"
-    suffix = 2
-    while filename in used:
-        filename = f"{base}__{suffix}.wav"
-        suffix += 1
-    used.add(filename)
-    return filename
-
-
-def _retaining_separator(
-    separate_fn: Callable,
-    corpus: ReferenceCorpus,
-    output_dir: Path,
-    evaluation_sample_rate: int,
-) -> Callable:
-    """Persist successful separator returns while evaluation advances in order."""
-    stems_dir = output_dir / "stems"
-    index_path = stems_dir / "index.json"
-    stems_dir.mkdir(parents=True, exist_ok=True)
-    entries: list[dict[str, object]] = []
-    write_report(index_path, {"schema_version": _STEM_INDEX_SCHEMA, "items": entries})
-    next_index = 0
-
-    def separate(mixture_path: str):
-        nonlocal next_index
-        if next_index >= len(corpus.items):
-            raise RuntimeError("separator called more times than corpus items")
-        item_index = next_index
-        item = corpus.items[item_index]
-        next_index += 1
-        if str(mixture_path) != item.mixture:
-            raise ValueError("separator mixture path does not match corpus item")
-        result = separate_fn(mixture_path)
-        if isinstance(result, OriginEvaluationResult):
-            origin_result = result
-            stems, settings = result.stems, result.settings
-            cascade_result = None
-        elif isinstance(result, CascadeEvaluationResult):
-            origin_result = None
-            cascade_result = result
-            stems, settings = result.stems, result.settings
-        else:
-            origin_result = None
-            cascade_result = None
-            stems, settings = result
-        if not isinstance(stems, dict) or not stems:
-            return result
-        if not isinstance(settings, RunSettings):
-            return result
-        sample_rate = settings.sample_rate
-        if isinstance(sample_rate, bool) or not isinstance(sample_rate, int) or sample_rate < 1:
-            raise ValueError("retained stems require a positive settings sample rate")
-        if sample_rate != evaluation_sample_rate:
-            return result
-        required_stems = {
-            component
-            for target in item.stems
-            for component in estimate_components(item, target)
-        }
-        if required_stems and not required_stems.issubset(stems):
-            return result
-        reference_info = None
-        if item.stems:
-            try:
-                first_reference = item.stems[sorted(item.stems)[0]]
-                reference_info = sf.info(first_reference)
-            except (OSError, RuntimeError):
-                return result
-        retained: dict[str, np.ndarray] = {}
-        try:
-            for stem_name, value in stems.items():
-                if not isinstance(stem_name, str):
-                    return result
-                raw_audio = np.asarray(value)
-                if (
-                    raw_audio.ndim != 2
-                    or not raw_audio.size
-                    or not raw_audio.shape[0]
-                    or not raw_audio.shape[1]
-                    or not np.issubdtype(raw_audio.dtype, np.number)
-                ):
-                    return result
-                audio = np.asarray(raw_audio, dtype=np.float32)
-                if not np.all(np.isfinite(audio)):
-                    return result
-                if reference_info is not None and (
-                    reference_info.samplerate != sample_rate
-                    or reference_info.frames != audio.shape[0]
-                    or reference_info.channels != audio.shape[1]
-                ):
-                    return result
-                if stem_name in item.stems:
-                    info = sf.info(item.stems[stem_name])
-                    if (
-                        info.samplerate != sample_rate
-                        or info.frames != audio.shape[0]
-                        or info.channels != audio.shape[1]
-                    ):
-                        return result
-                retained[stem_name] = audio
-        except (OSError, RuntimeError, TypeError, ValueError):
-            return result
-
-        retained_views: list[tuple[object, dict[str, np.ndarray]]] = []
-        if origin_result is not None:
-            for view in origin_result.view_outputs:
-                view_stems: dict[str, np.ndarray] = {}
-                for stem_name, value in view.stems.items():
-                    audio = np.asarray(value, dtype=np.float32)
-                    if (
-                        not isinstance(stem_name, str)
-                        or audio.ndim != 2
-                        or not audio.size
-                        or not np.all(np.isfinite(audio))
-                        or set(view.stems) != set(retained)
-                        or (
-                            reference_info is not None
-                            and (
-                                reference_info.samplerate != sample_rate
-                                or reference_info.frames != audio.shape[0]
-                                or reference_info.channels != audio.shape[1]
-                            )
-                        )
-                    ):
-                        return result
-                    view_stems[stem_name] = audio
-                retained_views.append((view, view_stems))
-
-        retained_arms: list[tuple[object, dict[str, np.ndarray]]] = []
-        if cascade_result is not None:
-            arm_ids: set[str] = set()
-            for arm in cascade_result.arms:
-                if not isinstance(arm.arm_id, str) or arm.arm_id in arm_ids:
-                    return result
-                arm_ids.add(arm.arm_id)
-                if not isinstance(arm.stems, dict) or set(arm.stems) != set(retained):
-                    return result
-                arm_stems: dict[str, np.ndarray] = {}
-                for stem_name, value in arm.stems.items():
-                    audio = np.asarray(value, dtype=np.float32)
-                    if (
-                        not isinstance(stem_name, str)
-                        or audio.ndim != 2
-                        or not audio.size
-                        or not np.all(np.isfinite(audio))
-                        or set(arm.stems) != set(retained)
-                        or audio.shape != next(iter(retained.values())).shape
-                    ):
-                        return result
-                    arm_stems[stem_name] = audio
-                retained_arms.append((arm, arm_stems))
-
-        item_dir = stems_dir / f"{item_index:04d}"
-        paths: dict[str, str] = {}
-        used_filenames: set[str] = set()
-        try:
-            item_dir.mkdir(parents=True, exist_ok=False)
-            for stem_name in sorted(stems, key=str):
-                filename = _retained_filename(str(stem_name), used_filenames)
-                destination = item_dir / filename
-                with atomic_output_path(destination) as temporary:
-                    sf.write(
-                        str(temporary), retained[stem_name], sample_rate, subtype="FLOAT"
-                    )
-                paths[str(stem_name)] = destination.relative_to(output_dir).as_posix()
-            view_entries: list[dict[str, object]] = []
-            for view, view_stems in retained_views:
-                view_dir = item_dir / "views" / str(view.origin_samples)
-                view_dir.mkdir(parents=True, exist_ok=False)
-                view_paths: dict[str, str] = {}
-                used_view_filenames: set[str] = set()
-                for stem_name in sorted(view_stems, key=str):
-                    filename = _retained_filename(stem_name, used_view_filenames)
-                    destination = view_dir / filename
-                    with atomic_output_path(destination) as temporary:
-                        sf.write(
-                            str(temporary),
-                            view_stems[stem_name],
-                            sample_rate,
-                            subtype="FLOAT",
-                        )
-                    view_paths[stem_name] = destination.relative_to(
-                        output_dir
-                    ).as_posix()
-                view.output_paths = view_paths
-                view_entries.append(
-                    {"origin_samples": view.origin_samples, "stems": view_paths}
-                )
-            arm_entries = write_cascade_arms(
-                retained_arms,
-                item_dir=item_dir,
-                output_dir=output_dir,
-                sample_rate=sample_rate,
-                filename_for=_retained_filename,
-            )
-            entry = {
-                "index": item_index,
-                "recording_id": item.recording_id,
-                "item_id": item.item_id,
-                "split": item.split,
-                "category": item.category,
-                "sample_rate": sample_rate,
-                "stems": paths,
-            }
-            if view_entries:
-                entry["view_outputs"] = view_entries
-            if arm_entries:
-                entry["cascade_arms"] = arm_entries
-            for field in _RETAINED_SETTINGS_FIELDS:
-                value = getattr(settings, field, None)
-                if value is not None:
-                    entry[field] = value
-            write_report(
-                index_path,
-                {"schema_version": _STEM_INDEX_SCHEMA, "items": [*entries, entry]},
-            )
-        except BaseException:
-            shutil.rmtree(item_dir, ignore_errors=True)
-            raise
-        entries.append(entry)
-        return result
-
-    return separate
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
@@ -512,7 +293,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(
             "production-tree does not accept --model; the plan owns model selection"
         )
-    if args.variant == "real-model" and args.rate_arm is not None and args.stem_ensemble:
+    if (
+        args.variant == "real-model"
+        and args.rate_arm is not None
+        and args.stem_ensemble
+    ):
         parser.error(
             "--rate-arm with --stem-ensemble requires --variant production-tree"
         )
@@ -532,22 +317,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     _validate_cascade_args(args, parser)
     if args.variant == "synthetic-reference":
-        if any(
-            value is not None
-            for value in (
-                args.model,
-                args.batch_size,
-                args.segment_size,
-                args.chunk_duration_s,
-                args.overlap,
-                args.pitch_shift,
+        if (
+            any(
+                value is not None
+                for value in (
+                    args.model,
+                    args.batch_size,
+                    args.segment_size,
+                    args.chunk_duration_s,
+                    args.overlap,
+                    args.pitch_shift,
+                )
             )
-        ) or args.stem_ensemble or args.tta:
+            or args.stem_ensemble
+            or args.tta
+        ):
             parser.error("model settings require --variant real-model")
         if args.rate_arm is not None:
             parser.error("--rate-arm requires --variant real-model")
         if args.retain_stems:
-            parser.error("--retain-stems requires --variant real-model or production-tree")
+            parser.error(
+                "--retain-stems requires --variant real-model or production-tree"
+            )
     if args.stems is not None:
         try:
             args.stems = normalize_stems(args.stems)
@@ -575,9 +366,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         corpus,
         separate_fn,
         sample_rate=args.sample_rate,
-        protocol_id=(
-            _CASCADE_PROTOCOL_ID if args.cascade_vocal_repair else _PROTOCOL_ID
-        ),
+        protocol_id=(CASCADE_RECIPE if args.cascade_vocal_repair else _PROTOCOL_ID),
         code_revision=code_revision,
         report_failures=True,
     )

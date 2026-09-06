@@ -7,6 +7,7 @@ that produced them (see ``docs/evaluation_harness.md``). ``evaluate_corpus``
 takes a pluggable separation callable so tests can substitute a fast, offline
 stand-in without downloading model weights.
 """
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -161,9 +162,7 @@ def separate_for_eval(
     finally:
         separator.close()
     if snapshot is None:
-        raise RuntimeError(
-            "StemSeparator completed without a run-settings snapshot"
-        )
+        raise RuntimeError("StemSeparator completed without a run-settings snapshot")
     try:
         input_sample_rate = sf.info(mixture_path).samplerate
     except (OSError, RuntimeError):
@@ -277,9 +276,7 @@ def separate_tree_for_eval(
         chunk_duration_s=_common_stage_setting(stage_settings, "chunk_duration_s"),
         overlap=_common_stage_setting(stage_settings, "overlap"),
         ensemble_algorithm=ENSEMBLE_ALGORITHM if ensemble_observed else None,
-        ensemble_models=(MODEL_PRIMARY, MODEL_ENSEMBLE)
-        if ensemble_observed
-        else None,
+        ensemble_models=(MODEL_PRIMARY, MODEL_ENSEMBLE) if ensemble_observed else None,
         tta=_common_stage_setting(stage_settings, "tta"),
         pitch_shift=_common_stage_setting(stage_settings, "pitch_shift"),
         backend=_common_stage_setting(stage_settings, "backend"),
