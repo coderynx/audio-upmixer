@@ -275,6 +275,25 @@ does not reveal A/B mappings.
 | `branch-smoke-flags-v1` | 1 proxy case | `49bb7ed95c42ba5154e8d764b5cc910ee39e74259507abee7b96219be2adc1b7` | `094bda9411236a06961d00cabcb15c693aacbae50918b8cceb6700bb945053c5` |
 | `residual-policy-v1` | 4 | `d09441bac064a3dbec6c0b90c3df43f3154ff4fa05e59a9ba1689c605165c38d` | `463390f2455cb742e882cde7cd5b4a3ad66685c72643d0cc46c2073648489a3e` |
 
+The local reviewer is implemented by commits `70be357` and `abf4a2c`. From
+the repository root, run one pack at a time on its default port:
+
+```bash
+uv run python scripts/run_listening_review.py \
+  "$UPMIXER_EVAL_ROOT/q20/listening/tuning-rate-flags-v1" --port 8765
+uv run python scripts/run_listening_review.py \
+  "$UPMIXER_EVAL_ROOT/q20/listening/branch-smoke-flags-v1" --port 8765
+uv run python scripts/run_listening_review.py \
+  "$UPMIXER_EVAL_ROOT/q20/listening/residual-policy-v1" --port 8765
+```
+
+The server binds to `127.0.0.1` only (localhost). It reads each pack's
+`manifest.json` and `ratings.csv`, serves audio only through the manifest
+allowlist with paths confined to the pack, never reads or serves the answer
+key, and saves ratings atomically with a flushed and synced temporary CSV
+replacement. Validation passed: 2 focused tests; Ruff check and format check;
+full suite `1621 passed, 38 deselected, 24 warnings`.
+
 The residual pack's independent recomputation passed all four cases:
 separate reconstruction maximum absolute error
 `1.862645149230957e-09`; assigned-policy reconstruction maximum absolute error
