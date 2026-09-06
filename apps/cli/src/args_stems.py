@@ -228,6 +228,17 @@ def add_stem_args(parser: argparse.ArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--stem-native-rate",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="stem_native_rate",
+        help=(
+            "Run separator models at their declared native sample rate before "
+            "delivery conversion (stem mode only). Default: disabled."
+        ),
+    )
+
+    parser.add_argument(
         "--stem-bleed-reduction",
         action=argparse.BooleanOptionalAction,
         default=None,

@@ -98,6 +98,23 @@ def test_stem_ensemble_flag_preserves_cli_precedence(manifest_value, argv, expec
 
 
 @pytest.mark.parametrize(
+    ("manifest_value", "argv", "expected"),
+    [
+        (False, ["--stem-native-rate"], True),
+        (True, ["--no-stem-native-rate"], False),
+        (True, [], True),
+    ],
+)
+def test_stem_native_rate_flag_preserves_cli_precedence(manifest_value, argv, expected):
+    config = UpmixConfig(stem_native_rate=manifest_value)
+    args = _parsed(argv)
+
+    _apply_cli_flags(config, args, sample_rate_set=False)
+
+    assert config.stem_native_rate is expected
+
+
+@pytest.mark.parametrize(
     "argv",
     [
         ["--stem-phase-fix-low-hz", "500"],
