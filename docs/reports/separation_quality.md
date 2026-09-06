@@ -8,8 +8,9 @@ This is the resumable handoff for the frozen
 
 Current status: Q01/Q02 plumbing and regression work is complete; Q03 has a
 12-recording tuning baseline; Q10 passes its objective equivalence and memory
-gate; Q20/Q21 remain partial; Q30 and Q40 experiments are complete but their
-candidates are rejected for production; Q31+ quality changes have not started.
+gate; Q20 remains partial and Q21 is unstarted/blocked; Q30 and Q40 experiments
+are complete but their candidates are rejected for production; Q31+ quality
+changes have not started.
 No production default has changed.
 
 ## Progress/stage
@@ -21,7 +22,7 @@ No production default has changed.
 | Q03 | Partial | — |
 | Q10 | Complete; objective gate passes | — |
 | Q20 | Partial | Finish its rate, residual, listening, and heldout prerequisites for Q21. |
-| Q21 | Partial | Complete native-rate production integration only after Q20 passes. |
+| Q21 | Unstarted; blocked by Q20 | Complete native-rate production integration only after Q20 passes. |
 | Q30 | Complete; rejected | No Q31; after Q21, Q50 or Q60 may be considered under their stated evidence gates. |
 | Q40 | Complete; rejected | No Q41. Q50, Q60, or Q80 remain conditional candidates; Q70 and Q90 require their follow-up prerequisites. |
 
@@ -30,7 +31,7 @@ No production default has changed.
 | Key | Value |
 | --- | --- |
 | Research baseline | `287705467f65a2bdc52b09ceffeccd4f17821548` |
-| Current code revision | `5ff2524ff2df6ccf54c4c06a95db2e5f0b57ad3f` |
+| Evaluated implementation revision | `5ff2524ff2df6ccf54c4c06a95db2e5f0b57ad3f` |
 | Q03/Q20 matrix revision | `7a2806cf5fa7f0d8a84af3b8139b92c68a8c242b` |
 | Protocol | `upmixer-separation-q00-v1` |
 | Synthetic corpus | `upmixer-synthetic-v1`; deterministic harness checks only |
@@ -279,9 +280,9 @@ separate reconstruction maximum absolute error
 `1.862645149230957e-09`; assigned-policy reconstruction maximum absolute error
 `5.960464477539063e-08`. The separate-Unassigned residual contract remains
 provisional: policy 1 leaves `Other` raw, while policy 2 adds the
-delivery-domain residual. Q21 remains partial, and any default change remains
-blocked pending listening review, a policy freeze, and one single heldout run.
-Heldout inference has not run.
+delivery-domain residual. Q21 remains unstarted and blocked, and any default
+change remains blocked pending listening review, a policy freeze, and one
+single heldout run. Heldout inference has not run.
 
 The corrected one-item smoke artifacts are:
 
@@ -418,9 +419,10 @@ pre-hardening archive remains at
 for audit only.
 
 The stop rule applies: no production change was made and the evaluation
-harness is retained. Q20/Q21 remain partial, so this Q40 result is diagnostic
-and promotion-prohibited; those entry prerequisites independently continue to
-block production. Per the plan, the next named candidates are Q50 event or
+harness is retained. The combined Q20/Q21 stage remains partial: Q20 is
+incomplete and Q21 is unstarted and blocked. This Q40 result is diagnostic and
+promotion-prohibited; those entry prerequisites independently continue to block
+production. Per the plan, the next named candidates are Q50 event or
 repetition evidence after Q21 (or earlier only for a concrete DrumSep
 ownership complaint), Q60 stereo-aware residual allocation after Q21 plus a
 measured spatial/residual defect, and Q80 reversible level conditioning after
@@ -436,7 +438,7 @@ cd /Users/coderynx/Projects/upmixer
 /usr/bin/time -lp uv run python scripts/run_eval.py \
   --corpus "/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1" \
   --variant real-model \
-  --output-dir "/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1/results/independent-deux" \
+  --output-dir "/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1/results-rerun/independent-deux" \
   --model becruily_deux.ckpt \
   --sample-rate 44100 \
   --batch-size 1 \
@@ -446,7 +448,7 @@ cd /Users/coderynx/Projects/upmixer
 /usr/bin/time -lp uv run python scripts/run_eval.py \
   --corpus "/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1" \
   --variant real-model \
-  --output-dir "/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1/results/fixed-half-recipe" \
+  --output-dir "/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1/results-rerun/fixed-half-recipe" \
   --model becruily_deux.ckpt \
   --sample-rate 44100 \
   --batch-size 1 \
@@ -465,7 +467,7 @@ cd /Users/coderynx/Projects/upmixer
 - [ ] Expand and confirm eligible complete-tree real evidence where references permit. The corrected one-item branch smokes exercised the SCNet ensemble, Karaoke lead/backing path, and private `_deux_inst` on tuning/proxy material; broader coverage remains open, and the branch proxies plus supplementary IDMT, MedleyDB, CrowdioSet, Freischütz, and Celtic sets do not substitute for aligned heldout music.
 - [ ] Measure CUDA when available and freeze a numerical device memory ceiling; the CPU smoke is recorded above.
 - [ ] Verify the normal source-anchor product path separately with anchoring off for the experiment.
-- [ ] Q21 native-rate production integration, bounded conversion, cache/resume identity, and any default promotion remain partial and blocked by the Q20 gates.
+- [ ] Q21 native-rate production integration, bounded conversion, cache/resume identity, and any default promotion remain unstarted and blocked by the Q20 gates.
 
 ## Restart commands
 
