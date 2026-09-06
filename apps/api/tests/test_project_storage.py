@@ -192,6 +192,18 @@ def test_export_stem_dir_validates_all_paths_against_one_readable_store(tmp_path
                 [*relative_paths, str(orphan.relative_to(storage.root))],
                 ["Vocals"],
             )
+        with pytest.raises(ValueError, match="missing"):
+            storage.export_stem_dir(
+                project.id, track.id, 1, relative_paths, ["Vocals", "Bass"]
+            )
+        (entry / "stems.json").unlink()
+        assert storage.export_stem_dir(
+            project.id, track.id, 1, relative_paths, ["Vocals"]
+        ) == entry
+        with pytest.raises(ValueError, match="missing"):
+            storage.export_stem_dir(
+                project.id, track.id, 1, relative_paths, ["Vocals", "Bass"]
+            )
 
         other = storage.root / "other" / "stem.wav"
         other.parent.mkdir(parents=True)

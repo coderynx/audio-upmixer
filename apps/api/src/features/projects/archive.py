@@ -33,6 +33,10 @@ def safe_component(name: str) -> str:
     return cleaned or "stem"
 
 
+def _stem_filename(stem_key: str) -> str:
+    return stem_key.replace("@", "__").replace("/", "__").replace("\\", "__") + ".wav"
+
+
 def _archived_reference_match(
     manifest: dict[str, Any], project_manifest: dict[str, Any]
 ) -> dict[str, dict[str, Any]]:
@@ -322,8 +326,11 @@ def import_project_archive(
                 session.flush()
 
                 track_root = project_stems.track_root(project.id, track.id)
-                for stem_data in track_data.get("stems", []):
-                    stem_dest = _extract(archive, stem_data["audio_entry"], track_root / Path(stem_data["audio_entry"]).name)
+                stems_data = track_data.get("stems", [])
+                for stem_data in stems_data:
+                    stem_dest = _extract(
+                        archive, stem_data["audio_entry"], track_root / _stem_filename(stem_data["stem_key"])
+                    )
                     preview_relative = None
                     preview_size = None
                     if stem_data.get("preview_entry"):
@@ -339,6 +346,16 @@ def import_project_archive(
                         size_bytes=stem_dest.stat().st_size, generation=project.stem_generation,
                         preview_relative_path=preview_relative, preview_size_bytes=preview_size,
                     ))
+
+                # Imported archives predate generation stores. Keep their
+                # restored directory readable by PlainStemStore so exports
+                # and reference-match can use the same prepared stems.
+                if stems_data:
+                    (track_root / "stems.json").write_text(json.dumps({
+                        "schema": 1,
+                        "stem_keys": [item["stem_key"] for item in stems_data],
+                        "sample_rate": stems_data[0]["sample_rate"],
+                    }), encoding="utf-8")
 
                 if track_data.get("peaks_entry"):
                     peaks_dest = _extract(archive, track_data["peaks_entry"], track_root / "peaks.bin")

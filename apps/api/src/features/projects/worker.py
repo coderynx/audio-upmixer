@@ -8,6 +8,8 @@ import shutil
 from contextlib import ExitStack
 from datetime import datetime, timezone
 
+from sqlalchemy import update
+
 from upmixer.config import UpmixConfig
 from upmixer.manifest import apply_asset_job, parse_manifest
 from upmixer_web.features.projects.layouts import track_prepare_overrides
@@ -40,6 +42,13 @@ def _project_is_current(project: Project, revision: int, generation: int) -> boo
         and project.stem_generation == generation
         and project.status in {"preparing", "expanding"}
     )
+
+
+def _check_project_state(project: Project, revision: int, generation: int) -> None:
+    if project.status == "deleting":
+        raise JobDeleting()
+    if not _project_is_current(project, revision, generation):
+        raise _ProjectPreparationStale()
 
 
 class ProjectRunnerMixin:
@@ -134,8 +143,7 @@ class ProjectRunnerMixin:
                         track = session.get(ProjectTrack, track_id)
                         if not project or not track:
                             raise JobDeleting()
-                        if not _project_is_current(project, project_revision, starting_generation):
-                            raise _ProjectPreparationStale()
+                        _check_project_state(project, project_revision, starting_generation)
                         track.status = "running"
                         session.commit()
                     config = UpmixConfig()
@@ -160,8 +168,7 @@ class ProjectRunnerMixin:
                                 project = session.get(Project, project_id)
                                 if not project:
                                     raise JobDeleting()
-                                if not _project_is_current(project, project_revision, starting_generation):
-                                    raise _ProjectPreparationStale()
+                                _check_project_state(project, project_revision, starting_generation)
                             continue
                         kind = event[0]
                         if kind == "progress":
@@ -171,8 +178,7 @@ class ProjectRunnerMixin:
                                 track_row = session.get(ProjectTrack, track_id)
                                 if not project_row or not track_row:
                                     raise JobDeleting()
-                                if not _project_is_current(project_row, project_revision, starting_generation):
-                                    raise _ProjectPreparationStale()
+                                _check_project_state(project_row, project_revision, starting_generation)
                                 track_row.progress = max(0.0, min(1.0, fraction))
                                 project_row.progress = (
                                     (index_by_track[track_id] + track_row.progress) / max(1, len(track_ids))
@@ -192,8 +198,7 @@ class ProjectRunnerMixin:
                                 track = session.get(ProjectTrack, track_id)
                                 if not project or not track:
                                     raise JobDeleting()
-                                if not _project_is_current(project, project_revision, starting_generation):
-                                    raise _ProjectPreparationStale()
+                                _check_project_state(project, project_revision, starting_generation)
                                 track.status = "ready"
                                 track.progress = 1.0
                                 session.commit()
@@ -207,8 +212,7 @@ class ProjectRunnerMixin:
                     project = session.get(Project, project_id)
                     if not project:
                         raise JobDeleting()
-                    if not _project_is_current(project, project_revision, starting_generation):
-                        raise _ProjectPreparationStale()
+                    _check_project_state(project, project_revision, starting_generation)
                     for track_id, input_path in zip(track_ids, input_paths, strict=True):
                         track = session.get(ProjectTrack, track_id)
                         if not track:
@@ -220,8 +224,7 @@ class ProjectRunnerMixin:
                 project = get_project(session, project_id)
                 if not project:
                     raise JobDeleting()
-                if not _project_is_current(project, project_revision, starting_generation):
-                    raise _ProjectPreparationStale()
+                _check_project_state(project, project_revision, starting_generation)
                 for track in project.tracks:
                     self.project_stems.catalogue_track(
                         session,
@@ -233,15 +236,32 @@ class ProjectRunnerMixin:
                             project.id, track.id, next_generation
                         ),
                     )
-                if not _project_is_current(project, project_revision, starting_generation):
+                ready_log = {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "message": "Project stems ready",
+                    "fraction": 1.0,
+                }
+                published = session.execute(
+                    update(Project)
+                    .where(
+                        Project.id == project_id,
+                        Project.revision == project_revision,
+                        Project.stem_generation == starting_generation,
+                        Project.status.in_(("preparing", "expanding")),
+                    )
+                    .values(
+                        prepared_stems=list(project.requested_stems),
+                        stem_generation=next_generation,
+                        status="ready",
+                        progress=1.0,
+                        status_message="Project stems ready",
+                        progress_log=[*project.progress_log, ready_log][-_PROGRESS_LOG_LIMIT:],
+                        error=None,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if published.rowcount != 1:
                     raise _ProjectPreparationStale()
-                project.prepared_stems = list(project.requested_stems)
-                project.stem_generation = next_generation
-                project.status = "ready"
-                project.progress = 1.0
-                project.status_message = "Project stems ready"
-                project.error = None
-                _append_progress_log(project, project.status_message, 1.0)
                 session.commit()
                 finalized = True
 
@@ -252,8 +272,10 @@ class ProjectRunnerMixin:
             self._delete_project(project_id)
         except _ProjectPreparationStale:
             _log.info("project_preparation_discarded_stale project_id=%s", project_id)
+            delete_requested = False
             with self.sessions() as session:
                 project = session.get(Project, project_id)
+                delete_requested = not project or project.status == "deleting"
                 if project and project.status in {"preparing", "expanding"}:
                     project.status = "expanding" if project.prepared_stems else "queued"
                     project.progress = 0.0
@@ -264,17 +286,21 @@ class ProjectRunnerMixin:
                         track.progress = 0.0
                         track.error = None
                     session.commit()
-            if next_generation is not None:
+            if delete_requested:
+                self._delete_project(project_id)
+            elif next_generation is not None:
                 self.project_stems.delete_generation(project_id, track_ids, next_generation)
         except Exception as exc:
             _log.exception("project_preparation_failed project_id=%s", project_id)
+            delete_requested = False
             if not finalized:
                 stale = False
                 with self.sessions() as session:
                     project = session.get(Project, project_id)
+                    delete_requested = bool(project and project.status == "deleting")
                     if project and project_revision is not None and starting_generation is not None:
                         stale = not _project_is_current(project, project_revision, starting_generation)
-                    if project and not stale:
+                    if project and not stale and not delete_requested:
                         project.status = "expansion_failed" if project.prepared_stems else "failed"
                         project.error = str(exc)
                         project.status_message = "Project stem preparation failed"
@@ -284,7 +310,9 @@ class ProjectRunnerMixin:
                                 track.status = "failed"
                                 track.error = str(exc)
                         session.commit()
-            if not finalized and next_generation is not None:
+            if delete_requested:
+                self._delete_project(project_id)
+            elif not finalized and next_generation is not None:
                 self.project_stems.delete_generation(project_id, track_ids, next_generation)
         finally:
             if job_process is not None:

@@ -16,6 +16,34 @@ import _helpers
 from _helpers import InProcessJobRun, _wav_bytes
 
 
+def _queue_worker_project(client, name="Worker race project") -> str:
+    imported = client.post(
+        "/api/v1/imports",
+        files=[("files", ("tone.wav", _wav_bytes(), "audio/wav"))],
+        data={"relative_paths": "tone.wav"},
+    )
+    assert imported.status_code == 201, imported.text
+    created = client.post(
+        "/api/v1/projects",
+        json={
+            "name": name,
+            "manifest": {
+                "version": "1.0.0",
+                "engine": {"mode": "stem", "stems": ["Vocals"]},
+                "mixing": {"channel_layout": "5.1"},
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    project_id = created.json()["id"]
+    added = client.post(
+        f"/api/v1/projects/{project_id}/assets",
+        json={"import_id": imported.json()["id"]},
+    )
+    assert added.status_code == 201, added.text
+    return project_id
+
+
 def test_native_rate_project_prepares_delivers_and_exports(
     web_client, in_process_jobs, monkeypatch
 ):
@@ -255,3 +283,63 @@ def test_project_prepare_discards_stale_generation_and_requeues_current_settings
         assert not manager.project_stems.generation_stem_dir(
             project_id, track_id, 1
         ).exists()
+
+
+def test_project_prepare_deletion_race_removes_partial_generation(web_client, monkeypatch):
+    from upmixer_web.shared.models import Project
+
+    manager = web_client.app.state.manager
+    monkeypatch.setattr(manager, "_submit_available", lambda: None)
+    monkeypatch.setattr(
+        "upmixer_web.features.projects.worker.JobSubprocess", InProcessJobRun
+    )
+    project_id = _queue_worker_project(web_client, "Delete race project")
+
+    original_catalogue = manager.project_stems.catalogue_track
+
+    def catalogue_then_delete(session, project, track, *args, **kwargs):
+        with manager.sessions() as mutation_session:
+            current = mutation_session.get(Project, project_id)
+            assert current is not None
+            current.status = "deleting"
+            current.revision += 1
+            mutation_session.commit()
+        return original_catalogue(session, project, track, *args, **kwargs)
+
+    monkeypatch.setattr(manager.project_stems, "catalogue_track", catalogue_then_delete)
+    manager._run_project(project_id)
+
+    assert web_client.get(f"/api/v1/projects/{project_id}").status_code == 404
+    assert not (manager.project_stems.root / project_id).exists()
+
+
+def test_project_prepare_atomic_publish_discards_finalization_race(web_client, monkeypatch):
+    from upmixer_web.shared.models import Project
+
+    manager = web_client.app.state.manager
+    monkeypatch.setattr(manager, "_submit_available", lambda: None)
+    monkeypatch.setattr(
+        "upmixer_web.features.projects.worker.JobSubprocess", InProcessJobRun
+    )
+    project_id = _queue_worker_project(web_client, "Finalization race project")
+
+    original_catalogue = manager.project_stems.catalogue_track
+
+    def catalogue_then_mutate(session, project, track, *args, **kwargs):
+        with manager.sessions() as mutation_session:
+            current = mutation_session.get(Project, project_id)
+            assert current is not None
+            current.manifest = {**current.manifest, "race_marker": "new"}
+            current.revision += 1
+            mutation_session.commit()
+        return original_catalogue(session, project, track, *args, **kwargs)
+
+    monkeypatch.setattr(manager.project_stems, "catalogue_track", catalogue_then_mutate)
+    manager._run_project(project_id)
+
+    body = web_client.get(f"/api/v1/projects/{project_id}").json()
+    assert body["status"] == "queued"
+    assert body["manifest"]["race_marker"] == "new"
+    assert body["stem_generation"] == 0
+    track_id = body["tracks"][0]["id"]
+    assert not manager.project_stems.generation_stem_dir(project_id, track_id, 1).exists()

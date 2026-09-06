@@ -333,11 +333,10 @@ def project_export_job(
             mixing_override.setdefault("stem_routing", routing)
             overrides["mixing"] = mixing_override
         stem_paths = [stem.relative_path for stem in track.stems]
-        track_stems = [stem.stem_key.split("@", 1)[0] for stem in track.stems]
         snapshot_tracks[track.asset_id] = ProjectExportTrack(
             overrides,
             str(project_stems.export_stem_dir(
-                project.id, track.id, project.stem_generation, stem_paths, track_stems
+                project.id, track.id, project.stem_generation, stem_paths, project.prepared_stems
             )),
         )
 

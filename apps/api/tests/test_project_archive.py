@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from upmixer_web.api import create_app
 from upmixer_web.features.projects.archive import export_project_archive, import_project_archive
-from upmixer_web.features.projects.service import get_project
+from upmixer_web.features.projects.service import get_project, project_export_job
 from upmixer_web.features.projects.storage import ProjectStemStorage
 from upmixer_web.settings import Settings
 from upmixer_web.shared.database import create_database_engine, create_session_factory, upgrade_database
@@ -54,7 +54,7 @@ def test_export_then_import_reconstructs_an_identical_workspace(tmp_path):
         )
         track = ProjectTrack(
             project=project, asset=asset, position=0,
-            layout_overrides={"5.1": {"mastering": {"loudness_target": -16.0}}},
+            layout_overrides={"5.1": {"mastering": {"loudness": {"target": -16.0}}}},
         )
         session.add_all([batch, asset, project, track])
         session.flush()
@@ -88,7 +88,7 @@ def test_export_then_import_reconstructs_an_identical_workspace(tmp_path):
 
         imported_track = imported.tracks[0]
         assert imported_track.id != track.id
-        assert imported_track.layout_overrides == {"5.1": {"mastering": {"loudness_target": -16.0}}}
+        assert imported_track.layout_overrides == {"5.1": {"mastering": {"loudness": {"target": -16.0}}}}
         assert imported_track.asset.filename == "source.wav"
         assert imported_track.asset.import_id != asset.import_id
         assert len(imported_track.stems) == 1
@@ -99,6 +99,11 @@ def test_export_then_import_reconstructs_an_identical_workspace(tmp_path):
         assert imported_stem.channels == 2
         restored_path = project_stems.resolve(imported_stem.relative_path)
         assert restored_path.read_bytes() == stem_path.read_bytes()
+        assert (restored_path.parent / "stems.json").is_file()
+
+        export_job = project_export_job(session, imported, project_stems, "5.1")
+        snapshot_track = next(iter(export_job.project_snapshot["tracks"].values()))
+        assert snapshot_track["stem_input_dir"] == str(restored_path.parent)
 
         restored_source = storage.local_path(imported_track.asset.storage_key)
         assert restored_source.read_bytes() == source_path.read_bytes()

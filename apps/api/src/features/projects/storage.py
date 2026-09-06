@@ -143,7 +143,9 @@ class ProjectStemStorage:
             self._validate_stem_store(directory, paths, requested_stems)
             return directory
         generation_dir = self.generation_stem_dir(project_id, track_id, generation)
-        if (generation_dir / "stems.json").is_file():
+        if generation_dir.exists():
+            if not (generation_dir / "stems.json").is_file():
+                raise ValueError("Project stem snapshot has no readable manifest")
             self._validate_stem_store(generation_dir, [], requested_stems)
             return generation_dir
         return self.stem_dir(project_id, track_id)
@@ -157,6 +159,17 @@ class ProjectStemStorage:
         """Check the manifest and every file selected for an export."""
         try:
             metadata = json.loads((directory / "stems.json").read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            if directory.name.startswith("stems-"):
+                raise ValueError("Project stem snapshot has no readable manifest") from exc
+            if len(set(requested_stems or ())) > len(requested_paths):
+                raise ValueError("Project stem snapshot is missing requested stems")
+            for path in requested_paths:
+                try:
+                    sf.info(str(path))
+                except (OSError, RuntimeError) as read_exc:
+                    raise ValueError(f"Project stem snapshot is unreadable: {path.name}") from read_exc
+            return
         except (OSError, ValueError, TypeError) as exc:
             raise ValueError("Project stem snapshot has no readable manifest") from exc
         stem_keys = metadata.get("stem_keys") if isinstance(metadata, dict) else None
