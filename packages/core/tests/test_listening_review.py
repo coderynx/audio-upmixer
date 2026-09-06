@@ -121,7 +121,9 @@ def test_review_serves_manifest_audio_and_persists_replacements(tmp_path: Path) 
 
     rows = _REVIEW.ReviewStore(pack).rows()
     assert len(rows) == 2
-    assert next(row for row in rows if row["case_id"] == "case-a")["preference"] == "TIE"
+    assert (
+        next(row for row in rows if row["case_id"] == "case-a")["preference"] == "TIE"
+    )
     assert next(row for row in rows if row["case_id"] == "case-b")["notes"] == "keep"
 
 

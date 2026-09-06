@@ -186,7 +186,9 @@ def _integer(value: str, field: str) -> int:
         raise ValueError(f"{field} must be an integer") from exc
 
 
-def _atomic_csv_write(path: Path, columns: list[str], rows: list[dict[str, str]]) -> None:
+def _atomic_csv_write(
+    path: Path, columns: list[str], rows: list[dict[str, str]]
+) -> None:
     mode = stat.S_IMODE(path.stat().st_mode)
     temporary: str | None = None
     try:
@@ -212,7 +214,8 @@ def _json_bytes(value: object) -> bytes:
 
 def _page(store: ReviewStore) -> bytes:
     state = json.dumps(store.state(), separators=(",", ":")).replace("<", "\\u003c")
-    return ("""<!doctype html>
+    return (
+        """<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Listening review</title>
 <style>
@@ -227,7 +230,9 @@ button{font:inherit;padding:.35rem .7rem} #status{min-height:1.5em}
 <div class="nav"><button id="previous">Previous</button><select id="case"></select><button id="next">Next</button></div>
 <p id="meta"></p><section class="audio" id="audio"></section><form id="form"></form>
 <p><button id="save">Save rating</button> <span id="status" role="status"></span></p>
-<script id="review-data" type="application/json">""" + state + """</script>
+<script id="review-data" type="application/json">"""
+        + state
+        + """</script>
 <script>
 const data=JSON.parse(document.getElementById('review-data').textContent), form=document.getElementById('form'), status=document.getElementById('status');
 const caseSelect=document.getElementById('case'), audio=document.getElementById('audio'), meta=document.getElementById('meta');
@@ -249,7 +254,8 @@ caseSelect.onchange=()=>{index=data.cases.findIndex(c=>c.case_id===caseSelect.va
 document.getElementById('save').onclick=async()=>{const payload=Object.fromEntries(new FormData(form));payload.case_id=caseSelect.value;status.textContent='Saving…';
 try{const response=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const result=await response.json();if(!response.ok)throw Error(result.error);data.rows=await (await fetch('/api/state')).json().then(x=>x.rows);status.textContent='Saved'}catch(error){status.textContent=error.message}}
 render();
-</script></body></html>""").encode("utf-8")
+</script></body></html>"""
+    ).encode("utf-8")
 
 
 class ReviewHandler(BaseHTTPRequestHandler):
@@ -275,7 +281,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
             except OSError:
                 self.send_error(404, "audio not found")
                 return
-            self._send(200, mimetypes.guess_type(path.name)[0] or "application/octet-stream", body)
+            self._send(
+                200,
+                mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+                body,
+            )
             return
         self.send_error(404)
 
