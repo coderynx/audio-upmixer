@@ -59,10 +59,45 @@ def test_native_policy_uses_model_config_rate_and_delivery_length(tmp_path: Path
     finally:
         pipeline.close()
 
-    assert seen == [(48_000, 44_100)]
+    assert seen == [(44_100, 44_100)]
     assert result.sep_sr == 96_000
     assert result.out_sr == 96_000
     assert len(result.all_stems["Vocals"]) == round(480 * 96_000 / 48_000)
+
+
+def test_native_policy_keeps_silence_skip_zone_at_native_rate(tmp_path: Path):
+    source_path = tmp_path / "active-source.wav"
+    source_audio = np.zeros((4_800, 2), dtype=np.float32)
+    source_audio[1_000] = 1.0
+    sf.write(source_path, source_audio, 48_000, subtype="FLOAT")
+    seen: list[tuple[int, int, int]] = []
+
+    def fake_execute(_get_separator, plan, sep_path, sep_sr, *_args, **_kwargs):
+        audio, source_sr = sf.read(sep_path, dtype="float32", always_2d=True)
+        seen.append((source_sr, sep_sr, len(audio)))
+        return {
+            name: np.ones((len(audio), 2), dtype=np.float32)
+            for name in plan.requested_stems
+        }
+
+    config = UpmixConfig(
+        stems=["Vocals"],
+        output_sample_rate=48_000,
+        stem_native_rate=True,
+        stem_silence_skip=True,
+    )
+    pipeline = StemUpmixPipeline(config)
+    try:
+        with patch(
+            "upmixer.separation.stem_pipeline_exec.execute_plan",
+            side_effect=fake_execute,
+        ):
+            result = pipeline._separate(str(source_path), None, lambda *_: None)
+    finally:
+        pipeline.close()
+
+    assert seen == [(44_100, 44_100, round(4_800 * 44_100 / 48_000))]
+    assert len(result.all_stems["Vocals"]) == 4_800
 
 
 def test_native_policy_converts_supplied_stems_to_delivery_rate(tmp_path: Path):

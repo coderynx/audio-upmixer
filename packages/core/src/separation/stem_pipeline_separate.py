@@ -274,6 +274,16 @@ def _run_zone_separation(
     try:
         for zone_idx, zone_name in enumerate(zone_names):
             pair_src = sep_zones[zone_name]
+            zone_sr = sr
+            if cfg.stem_native_rate and sep_sr != sr:
+                source_audio = audio_full if isinstance(pair_src, str) else pair_src
+                pair_src = _resample_audio(
+                    source_audio,
+                    sr,
+                    sep_sr,
+                    round(len(source_audio) * sep_sr / sr),
+                )
+                zone_sr = sep_sr
             zone_frac = 0.15 + 0.60 * (zone_idx / n_zones)
             next_zone_frac = 0.15 + 0.60 * ((zone_idx + 1) / n_zones)
             progress(f"    Separating zone: {zone_name}...", zone_frac)
@@ -312,7 +322,7 @@ def _run_zone_separation(
                     get_separator,
                     plan,
                     zone_audio,
-                    sr,
+                    zone_sr,
                     sep_sr,
                     cfg,
                     original_path=original_path,
@@ -325,7 +335,7 @@ def _run_zone_separation(
                     sep_path = pair_src
                 else:
                     tmp = temporary_wav_path(f"upmixer_{zone_name}_")
-                    sf.write(tmp, pair_src, sr, subtype="FLOAT")
+                    sf.write(tmp, pair_src, zone_sr, subtype="FLOAT")
                     sep_path = tmp
                     tmp_files.append(tmp)
                 zone_stems = execute_plan(
