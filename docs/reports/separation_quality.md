@@ -8,16 +8,29 @@ This is the resumable handoff for the frozen
 
 Current status: Q01/Q02 plumbing and regression work is complete; Q03 has a
 12-recording tuning baseline; Q10 passes its objective equivalence and memory
-gate; Q20 remains a tuning experiment; Q30 experiment/eval plumbing is complete
-but its candidate is rejected for production; Q21 and Q31+ quality changes have
-not started. No production default has changed.
+gate; Q20/Q21 remain partial; Q30 and Q40 experiments are complete but their
+candidates are rejected for production; Q31+ quality changes have not started.
+No production default has changed.
+
+## Progress/stage
+
+| Stage | Status | Next eligible work |
+| --- | --- | --- |
+| Q00 | Available; promotion open | Finish category, listening, and heldout gates. |
+| Q01/Q02 | Complete | — |
+| Q03 | Partial | — |
+| Q10 | Complete; objective gate passes | — |
+| Q20 | Partial | Finish its rate, residual, listening, and heldout prerequisites for Q21. |
+| Q21 | Partial | Complete native-rate production integration only after Q20 passes. |
+| Q30 | Complete; rejected | No Q31; after Q21, Q50 or Q60 may be considered under their stated evidence gates. |
+| Q40 | Complete; rejected | No Q41. Q50, Q60, or Q80 remain conditional candidates; Q70 and Q90 require their follow-up prerequisites. |
 
 ## Frozen identity and corpus
 
 | Key | Value |
 | --- | --- |
 | Research baseline | `287705467f65a2bdc52b09ceffeccd4f17821548` |
-| Current code revision | `f500a8abdd2b046275a07c41b0b97699b9c02e69` |
+| Current code revision | `5ff2524ff2df6ccf54c4c06a95db2e5f0b57ad3f` |
 | Q03/Q20 matrix revision | `7a2806cf5fa7f0d8a84af3b8139b92c68a8c242b` |
 | Protocol | `upmixer-separation-q00-v1` |
 | Synthetic corpus | `upmixer-synthetic-v1`; deterministic harness checks only |
@@ -84,9 +97,9 @@ Promotion and any default change remain open.
 The harness now validates corpus/report coverage, unavailable references,
 paired recording-group statistics, serialization, production-tree execution,
 rate/level/plan/zone/persistence/retry behavior, and execution provenance.
-The latest full Python suite at code revision `8683132` reported
-`1584 passed, 38 deselected, 24 warnings`; only documentation changes have
-followed.
+The Q01/Q02 baseline at code revision `8683132` reported
+`1584 passed, 38 deselected, 24 warnings`; Q40 validation at `5ff2524` is
+recorded below.
 
 ### Q03 — 12-recording tuning baseline, partial
 
@@ -266,9 +279,9 @@ separate reconstruction maximum absolute error
 `1.862645149230957e-09`; assigned-policy reconstruction maximum absolute error
 `5.960464477539063e-08`. The separate-Unassigned residual contract remains
 provisional: policy 1 leaves `Other` raw, while policy 2 adds the
-delivery-domain residual. Q21 and any default change remain blocked pending
-listening review, a policy freeze, and one single heldout run. Heldout
-inference has not run.
+delivery-domain residual. Q21 remains partial, and any default change remains
+blocked pending listening review, a policy freeze, and one single heldout run.
+Heldout inference has not run.
 
 The corrected one-item smoke artifacts are:
 
@@ -347,6 +360,101 @@ implemented. No full tuning or heldout run was made; bootstrap, listening, and
 numeric memory-ceiling gates remain open. No default or web product behavior
 changed, and Q30 was not promoted.
 
+### Q40 — Deux cascade pilot complete; candidate rejected
+
+Task Q40 status: `rejected` (completed experiment, promotion prohibited). The
+three reviewable implementation slices were `c104a36`, `24a32dc`, and
+`5ff2524`, evaluated at code revision
+`5ff2524ff2df6ccf54c4c06a95db2e5f0b57ad3f`. Their exact changed files were:
+
+| Commit | Changed files |
+| --- | --- |
+| `c104a36` | `packages/core/src/eval/__init__.py`, `packages/core/src/eval/cascade.py`, `packages/core/src/eval/harness.py`, `packages/core/src/eval/report.py`, `packages/core/tests/test_eval_cascade.py`, `scripts/run_eval.py` |
+| `24a32dc` | `packages/core/src/eval/__init__.py`, `packages/core/src/eval/cascade.py`, `packages/core/src/eval/harness.py`, `packages/core/src/eval/report.py`, `packages/core/src/eval/report_format.py`, `packages/core/src/eval/retention.py`, `packages/core/tests/test_eval_cascade.py`, `scripts/run_eval.py` |
+| `5ff2524` | `packages/core/src/eval/cascade.py`, `packages/core/src/eval/harness.py`, `packages/core/src/eval/report.py`, `packages/core/src/eval/report_format.py`, `packages/core/src/eval/scoring.py`, `packages/core/tests/test_eval_cascade.py`, `scripts/run_eval.py` |
+
+The frozen item was one 12-second tuning excerpt, `Hollow Ground - Ill Fate`,
+at 44.1 kHz. No heldout inference, listening review, deferred arm, or
+expansion run was made. The protocol, corpus, and provenance identities are:
+
+| Artifact | Identity |
+| --- | --- |
+| Protocol `q40-deux-counterfactual-half-v1` | SHA-256 `264429e1133bc004b61104f036f5374f51b80705cc5ea1548a8e06abe44ab7f2` |
+| Q40 corpus | SHA-256 `b835022cb61d8b61197f4d0521686e3f42628c864a36138f46921c0cef0c694e` |
+| Provenance | SHA-256 `163b3c1d80c5630ecde8e6e021ec9b4c23717730a06c6302e8d4663acb2151da` |
+| Final result root | `/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1/results` |
+| Analysis | SHA-256 `9c23fd1f78ae04aacd124b872761a909909070cc184d172a653545f0692c8f9e` |
+| Results manifest (`SHA256SUMS`) | SHA-256 `1ad6a51a128fdf7c582b81ed9ad137d4a837abf8cfb702545e7f4df1c0f56faa` |
+
+The scored candidate was the fixed half recipe against `complementary-v0`:
+
+| Arm | Stem | SDR (dB) | Fullness | Bleedless |
+| --- | --- | ---: | ---: | ---: |
+| `complementary-v0` | Vocals | 8.730073 | 0.754295 | 0.887570 |
+| `complementary-v0` | Instrumental | 20.810938 | 0.925277 | 0.984917 |
+| `fixed-half-recipe` | Vocals | 8.773351 | 0.736398 | 0.899439 |
+| `fixed-half-recipe` | Instrumental | 20.854319 | 0.930158 | 0.983209 |
+
+Candidate minus control median deltas were SDR `+0.043329 dB`, fullness
+`-0.006508`, and bleedless `+0.005081`, against material thresholds of
+`0.2 dB`, `0.01`, and `0.01`. None passed; there were no individual regression
+flags. The fixed recipe therefore missed the material screen. The
+counterfactual and refined-complement arms remain diagnostic evidence only.
+
+The candidate/control wall times were `17.88 s / 12.15 s = 1.4716049x`; the
+internal accounting ratio was `1.6832405x`. Maximum RSS was
+`1,989,836,800` bytes for the candidate and `1,649,934,336` bytes for the
+control. There were zero swaps. Aggregate accounting was
+`scheduled_windows/evaluated_unique_windows/tail_replay_contributions/model_forward_calls`
+`4/2/2/2`. Fourteen retained WAVs passed validation; deterministic identity
+checks passed; candidate conservation passed with maximum absolute error
+`2.9802322387695312e-08`.
+
+The focused Q40 root suite passed `72`; the affected agent suite passed `83`
+with `1 deselected`; the final full suite passed `1619` with `38 deselected`
+and `24 warnings`. Ruff and markdown whitespace/diff checks passed. The
+pre-hardening archive remains at
+`/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1/results-pre-hardening-24a32dc`
+for audit only.
+
+The stop rule applies: no production change was made and the evaluation
+harness is retained. Q20/Q21 remain partial, so this Q40 result is diagnostic
+and promotion-prohibited; those entry prerequisites independently continue to
+block production. Per the plan, the next named candidates are Q50 event or
+repetition evidence after Q21 (or earlier only for a concrete DrumSep
+ownership complaint), Q60 stereo-aware residual allocation after Q21 plus a
+measured spatial/residual defect, and Q80 reversible level conditioning after
+Q21 plus a Q03 quiet-input failure. Q70 remains gated on an accepted magnitude
+improvement and Q90 on a named Q40/Q50 ambiguity plus failed classical cues.
+There is no Q41.
+
+Exact rerun commands (use fresh output directories):
+
+```bash
+cd /Users/coderynx/Projects/upmixer
+
+/usr/bin/time -lp uv run python scripts/run_eval.py \
+  --corpus "/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1" \
+  --variant real-model \
+  --output-dir "/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1/results/independent-deux" \
+  --model becruily_deux.ckpt \
+  --sample-rate 44100 \
+  --batch-size 1 \
+  --overlap 2 \
+  --retain-stems
+
+/usr/bin/time -lp uv run python scripts/run_eval.py \
+  --corpus "/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1" \
+  --variant real-model \
+  --output-dir "/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1/results/fixed-half-recipe" \
+  --model becruily_deux.ckpt \
+  --sample-rate 44100 \
+  --batch-size 1 \
+  --overlap 2 \
+  --retain-stems \
+  --cascade-vocal-repair
+```
+
 ## Gates still open
 
 - [ ] Run no heldout inference until the rate, residual, and listening policy is frozen; the generated heldout excerpts remain untouched.
@@ -357,7 +465,7 @@ changed, and Q30 was not promoted.
 - [ ] Expand and confirm eligible complete-tree real evidence where references permit. The corrected one-item branch smokes exercised the SCNet ensemble, Karaoke lead/backing path, and private `_deux_inst` on tuning/proxy material; broader coverage remains open, and the branch proxies plus supplementary IDMT, MedleyDB, CrowdioSet, Freischütz, and Celtic sets do not substitute for aligned heldout music.
 - [ ] Measure CUDA when available and freeze a numerical device memory ceiling; the CPU smoke is recorded above.
 - [ ] Verify the normal source-anchor product path separately with anchoring off for the experiment.
-- [ ] Q21 native-rate production integration, bounded conversion, cache/resume identity, and any default promotion remain unstarted.
+- [ ] Q21 native-rate production integration, bounded conversion, cache/resume identity, and any default promotion remain partial and blocked by the Q20 gates.
 
 ## Restart commands
 
