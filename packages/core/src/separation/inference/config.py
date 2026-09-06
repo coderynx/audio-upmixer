@@ -11,6 +11,7 @@ used throughout the engine, plus a namespace view for the vendored
 ``TFC_TDF_net`` architecture, which expects dotted attribute access
 (``config.model.norm``, ``config.audio.dim_f``, ...).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

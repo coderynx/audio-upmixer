@@ -1,4 +1,5 @@
 """Cache identity for stem-separation runs."""
+
 from __future__ import annotations
 
 import hashlib
@@ -38,9 +39,17 @@ def remask_cache_component(plan: SeparationPlan, config: UpmixConfig) -> str:
     return "|".join(parts)
 
 
-def stem_cache_identity(plan: SeparationPlan, config: UpmixConfig) -> str:
+def stem_cache_identity(
+    plan: SeparationPlan,
+    config: UpmixConfig,
+    native_sample_rate: int | None = None,
+) -> str:
     """Return model-plan identity including output-affecting inference overrides."""
     base = plan.inference_hash or plan.stems_hash
+    if config.stem_native_rate and native_sample_rate is None:
+        raise ValueError(
+            "native_sample_rate is required for native-rate cache identity"
+        )
     options = (
         config.stem_batch_size,
         config.stem_segment_size,
@@ -71,5 +80,5 @@ def stem_cache_identity(plan: SeparationPlan, config: UpmixConfig) -> str:
     if remask:
         raw += f"|{remask}"
     if config.stem_native_rate:
-        raw += f"|{_NATIVE_RATE_POLICY}"
+        raw += f"|{_NATIVE_RATE_POLICY}|sr={native_sample_rate}"
     return hashlib.sha256(raw.encode()).hexdigest()[:20]

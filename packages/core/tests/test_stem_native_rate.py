@@ -11,7 +11,10 @@ import soundfile as sf
 
 from upmixer.config import UpmixConfig
 from upmixer.separation.stem_pipeline import StemUpmixPipeline
-from upmixer.separation.stem_pipeline_separate import _resolve_separation_sample_rate
+from upmixer.separation.stem_pipeline_separate import (
+    _resample_stems,
+    _resolve_separation_sample_rate,
+)
 from upmixer.separation.stem_plan import (
     SeparationPlan,
     SeparationTask,
@@ -116,5 +119,26 @@ def test_native_policy_changes_cache_identity():
 
     plan = resolve_separation_plan(["Vocals"])
     assert stem_cache_identity(plan, UpmixConfig()) != stem_cache_identity(
-        plan, UpmixConfig(stem_native_rate=True)
+        plan, UpmixConfig(stem_native_rate=True), 44_100
     )
+
+
+def test_native_cache_identity_includes_resolved_rate():
+    from upmixer.separation.stem_identity import stem_cache_identity
+
+    plan = resolve_separation_plan(["Vocals"])
+    config = UpmixConfig(stem_native_rate=True)
+    assert stem_cache_identity(plan, config, 44_100) != stem_cache_identity(
+        plan, config, 48_000
+    )
+    with pytest.raises(ValueError, match="native_sample_rate"):
+        stem_cache_identity(plan, config)
+
+
+def test_native_boundary_resampling_uses_exact_rounded_lengths():
+    source = np.zeros((480, 2), dtype=np.float32)
+    expected = round(480 * 44_100 / 48_000)
+
+    stems = _resample_stems({"Vocals": source}, 48_000, 44_100, expected)
+
+    assert stems["Vocals"].shape == (expected, 2)

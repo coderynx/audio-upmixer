@@ -432,20 +432,18 @@ class StemSeparator:
             checkpoint_name = get_model_spec(self._model).filename
         except (ImportError, KeyError, AttributeError):
             checkpoint_name = self._model
-        self._checkpoint_sha256 = _sha256_file(
-            Path(self._model_dir) / checkpoint_name
-        )
+        self._checkpoint_sha256 = _sha256_file(Path(self._model_dir) / checkpoint_name)
         if config_name:
             config_filename = (
                 config_name if config_name.endswith(".yaml") else f"{config_name}.yaml"
             )
-            config_path = Path(__file__).parent / "inference" / "configs" / config_filename
+            config_path = (
+                Path(__file__).parent / "inference" / "configs" / config_filename
+            )
             self._model_config_sha256 = _sha256_file(config_path)
         self._provenance_ready = True
 
-    def _engine_device(
-        self, engine: object | None
-    ) -> tuple[object | None, str | None]:
+    def _engine_device(self, engine: object | None) -> tuple[object | None, str | None]:
         if engine is None:
             return None, None
         try:
@@ -454,9 +452,7 @@ class StemSeparator:
         except (AttributeError, RuntimeError, StopIteration):
             return None, None
 
-    def _effective_batch_size(
-        self, arch: str | None, device: object | None
-    ) -> int:
+    def _effective_batch_size(self, arch: str | None, device: object | None) -> int:
         batch_size = self._batch_size
         if (
             device is not None
@@ -506,9 +502,7 @@ class StemSeparator:
         engine = self._engine
         arch = getattr(engine, "_arch", None) or model_arch
         device, device_name = self._engine_device(engine)
-        segment_size = self._effective_segment_size(
-            engine, arch, registry_config
-        )
+        segment_size = self._effective_segment_size(engine, arch, registry_config)
         overlap = self._overlap
 
         if overlap is None:

@@ -99,19 +99,39 @@ def _resample_stems(
     target_length: int,
 ) -> dict[str, np.ndarray]:
     """Convert terminal stems once and enforce the source-duration frame count."""
-    converted: dict[str, np.ndarray] = {}
-    for name, audio in stems.items():
-        array = np.asarray(audio, dtype=np.float32)
-        if source_sr != target_sr:
-            array = resample_channels(
-                {"stem": array}, source_sr, target_sr
-            )["stem"].astype(np.float32, copy=False)
-        if len(array) != target_length:
-            sized = np.zeros((target_length, *array.shape[1:]), dtype=np.float32)
-            sized[: min(len(array), target_length)] = array[:target_length]
-            array = sized
-        converted[name] = array
-    return converted
+    return {
+        name: _resample_audio(audio, source_sr, target_sr, target_length)
+        for name, audio in stems.items()
+    }
+
+
+def _resample_audio(
+    audio: np.ndarray,
+    source_sr: int,
+    target_sr: int,
+    target_length: int,
+) -> np.ndarray:
+    """Resample one mono/stereo array and enforce an exact frame count."""
+    array = np.asarray(audio, dtype=np.float32)
+    if array.ndim == 1:
+        converted = resample_channels({"audio": array}, source_sr, target_sr)["audio"]
+    elif array.ndim == 2:
+        converted = np.column_stack(
+            [
+                resample_channels({"audio": array[:, index]}, source_sr, target_sr)[
+                    "audio"
+                ]
+                for index in range(array.shape[1])
+            ]
+        )
+    else:
+        raise ValueError(f"Expected mono or stereo audio, got shape {array.shape}")
+    converted = np.asarray(converted, dtype=np.float32)
+    if len(converted) == target_length:
+        return converted
+    sized = np.zeros((target_length, *converted.shape[1:]), dtype=np.float32)
+    sized[: min(len(converted), target_length)] = converted[:target_length]
+    return sized
 
 
 def _resolve_input_format(
@@ -404,7 +424,7 @@ def separate(
         # A folded run separates one "front" zone where the same file
         # unfolded yields "@zone"-keyed stems, so the two must not share
         # a cache entry.
-        cache_identity = stem_cache_identity(plan, cfg) + (
+        cache_identity = stem_cache_identity(plan, cfg, inference_sr) + (
             "|stereo" if stereo_folded_input else ""
         )
         cache_hit_stems = _load_cached_stems(
