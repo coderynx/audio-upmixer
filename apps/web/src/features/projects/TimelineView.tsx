@@ -13,10 +13,6 @@ import type { TrackPeaks } from "./useTrackPeaks";
 // the playhead is a separate per-frame overlay positioned from currentTimeRef
 // (subscribing to currentTime state would re-render the page 60x/sec).
 
-// Two-line row (name, then M/S/fader) plus a full-height instrument-icon
-// swatch, matching iPad Logic's own track-header shape — grown from a
-// single 44px line when that shape was adopted (see docs/web_ui_design.md
-// §7.2, updated alongside this constant).
 export const LANE_HEIGHT = 64;
 export const RULER_HEIGHT = 22;
 export const HEADER_WIDTH = 280;
@@ -58,9 +54,7 @@ export type TimelineViewProps = {
   onToggleMute: (stem: string) => void;
   onToggleSolo: (stem: string) => void;
   /** Per-stem program gain, same manifest field and range as the mixer
-   * strip's vertical fader and the inspector's copy of it (`ChannelStrip.tsx`)
-   * — a third home for the one value, not a parallel control (see
-   * docs/web_ui_controls.md, updated alongside this addition). */
+   * strip's vertical fader and the inspector's copy of it (`ChannelStrip.tsx`). */
   gains: Record<string, number>;
   onGain: (stem: string, value: number) => void;
   /** Live per-channel level, keyed same as `useStemPreview`'s `stemLevels` —

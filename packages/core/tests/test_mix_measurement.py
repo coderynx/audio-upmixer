@@ -3,7 +3,6 @@
 Skipped by default. Run with:
     uv run pytest packages/core/tests/test_mix_measurement.py -m perf -s
 
-The ``-s`` run prints markdown tables for docs/plans/mixing/phase0_report.md.
 Five measurements: send frequency response, downmix fold-down comb / height
 loss, LFE energy and crossover phase, per-zone channel energy accounting,
 per-stem loudness offset after routing.

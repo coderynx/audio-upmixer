@@ -21,10 +21,6 @@
 //! taps the response has ~M²/2 non-zero autocorrelation lags against 2M free
 //! parameters, so the Rayleigh floor of ~5.5 dB per-bin sigma cannot be
 //! optimized away, at any length or tap count (measured: it does not move).
-//! What the design controls is where the dips land — ~60 aperiodic ones here
-//! against the ~490 evenly spaced −20 dB notches of the blend. See
-//! `docs/plans/mixing/phase2_report.md` for the measured comparison.
-
 use crate::kernels::rng::{next_sign, next_unit};
 
 /// Default filter span. Long enough to decorrelate down to ~200 Hz, short

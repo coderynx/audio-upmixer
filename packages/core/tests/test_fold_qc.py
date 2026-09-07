@@ -99,9 +99,7 @@ def test_the_stereo_fold_of_correlated_surround_content_flags_over_the_ceiling()
 def test_a_decorrelated_bed_folds_inside_the_divergence_threshold() -> None:
     """A front-dominant decorrelated bed folds within the documented tolerance.
 
-    The trims are the phase 0 test programme's, so this pins the threshold
-    against the material it was chosen from
-    (``docs/plans/mastering/phase8_report.md``).
+    The trims pin the threshold against the test programme.
     """
     trim = {
         "FL": 1.0, "FR": 1.0, "C": 0.7,

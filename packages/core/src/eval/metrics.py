@@ -1,12 +1,9 @@
 """SDR, fullness, and bleedless metrics for separated stems.
 
-SDR is the community-standard signal-to-distortion ratio (formula fixed by
-convention — see ``docs/evaluation_harness.md``).  Fullness and bleedless
+SDR is the community-standard signal-to-distortion ratio. Fullness and bleedless
 separate the two axes SDR conflates: how much of the true stem survives, and
 how little foreign content leaks in.  Community definitions (jarredou's
-metrics, the MVSEP quality checker) are conceptual only; this module commits
-to a magnitude-STFT operationalization documented in
-``docs/evaluation_harness.md``.  All three metrics are advisory community
+metrics, the MVSEP quality checker) are conceptual only; all three are advisory community
 metrics, not a normative standard.
 """
 from __future__ import annotations

@@ -1,10 +1,7 @@
 """Objective evaluation harness for stem-separation quality.
 
 Reports SDR, fullness, and bleedless per stem against a reference corpus, with
-deterministic inference settings recorded alongside every score.  See
-``docs/evaluation_harness.md`` for the metric definitions and corpus format,
-and ``~/Projects/upmixer-knowledge/techniques/evaluation.md`` for the
-community context these metrics are drawn from.
+deterministic inference settings recorded alongside every score.
 
 This package gates separation-quality decisions elsewhere in the codebase
 (model swaps, ensembling, phase-fix/debleed passes): those changes should be

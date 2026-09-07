@@ -1,7 +1,4 @@
-"""Composed background worker pool: dispatcher core plus per-feature runner
-mixins. See ``upmixer_web.worker.manager`` for the shared dispatch/control
-protocol and ``docs/web_api_architecture.md`` for the composition contract.
-"""
+"""Composed background worker pool."""
 
 from __future__ import annotations
 

@@ -11,9 +11,6 @@ import math
 import numpy as np
 from scipy.signal import firwin, kaiserord, resample_poly
 
-# scipy's own default (Kaiser beta 5, 10x max_rate half-length) rolls off from
-# ~18.5 kHz and leaves images 37 dB down on 44.1 -> 48 kHz; measured in
-# docs/plans/mastering/phase6_report.md.
 _STOPBAND_DB = 120.0
 _TRANSITION_FRACTION = 0.10
 

@@ -2,8 +2,7 @@
 bandwidth and the two frequency-range masks.
 
 All three act at curve realization (:func:`build_curve_fir`), never at
-analysis, so the persisted curve stays control-independent — see
-``docs/plans/mastering/phase7_report.md``.
+analysis, so the persisted curve stays control-independent.
 """
 from __future__ import annotations
 

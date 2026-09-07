@@ -67,9 +67,7 @@ Two things this does *not* do, both deliberate:
   a causal lowpass rotates only one of them: LR4 and Butterworth-4 both sit at
   −180° at `f_c`. The measured coincident sum near 120 Hz improves from
   −2.4/−2.7 dB (Butterworth-4, Bass/Kick) to −1.6/−1.8 dB purely because LR's
-  −6 dB point puts less correlated energy into the overlap. Closing the rest
-  needs an allpass on the LFE bus, rejected with numbers in
-  `docs/plans/mixing/phase5_report.md` §3.
+  −6 dB point puts less correlated energy into the overlap.
 
 Level calibration is `UpmixConfig.lfe_gain` = 0.3162 (−10 dB), the complement
 of the Annex 7 monitoring gain above; the preset `lfe` send weights are
@@ -317,8 +315,7 @@ stereo monitoring path apply the same matrix.
 This is a *level* law, unlike the render path's `fold_route_to_stereo`
 (a pan law, see "Stem-route folding is a pan law, not a level law" below): the
 two stereo paths now agree that heights are audible in stereo and differ only
-in the per-stem renormalization the render path applies afterwards. Measured
-residual per stem: `docs/plans/mixing/phase4_report.md`.
+in the per-stem renormalization the render path applies afterwards.
 
 ### 5.1 re-render fold (measurement programme, not a delivery format)
 
@@ -378,9 +375,7 @@ re-limit is deliberately out of scope.
 | fold true peak over the delivery target's ceiling | the target's own `max_tp_dbtp` |
 | fold integrated loudness away from the bed's | `FOLD_DIVERGENCE_LU` = **±1.5 LU** |
 
-**Evidence for ±1.5 LU** (`docs/plans/mastering/phase0_report.md` audit 1,
-`phase1_report.md` §"What the fold changes", `phase8_report.md` fold tables —
-reproduce with `uv run pytest
+Reproduce with `uv run pytest
 packages/core/tests/test_master_measurement.py -m perf -s`):
 
 - Realistic decorrelated programme material folds by at most **1.27 LU**

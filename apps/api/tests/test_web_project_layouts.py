@@ -104,8 +104,7 @@ def test_adding_a_layout_rebuilds_routing_for_its_own_speakers(layouts_client):
 
 
 def test_a_stereo_layout_block_is_folded_to_the_front_pair(layouts_client):
-    """The two-channel fold is load-bearing (docs/project_manifest_parity.md):
-    the preview reads routing straight from the manifest while the export
+    """The two-channel fold is load-bearing: the preview reads routing straight from the manifest while the export
     folds the built-in base route, so an unfolded route on a `stereo` layout
     previews several dB below the render. Track overrides never ran this fold
     before layouts were per track."""

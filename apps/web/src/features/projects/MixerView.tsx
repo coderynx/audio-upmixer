@@ -18,8 +18,6 @@ import { useStripMeterLoop } from "./useStripMeterLoop";
 import type { MeterLevel } from "./useStemPreview";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 
-// Rack layout, strip anatomy and resize behavior: docs/web_ui_controls.md.
-
 const MONITOR_TICKS = [0, -6, -12, -18, -24, -36, -48, -60];
 const ANCHOR_TICKS = [100, 75, 50, 25, 0];
 const BED_TRIM_TICKS = [6, 3, 0];

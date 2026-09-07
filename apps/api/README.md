@@ -18,8 +18,7 @@ python3 -m upmixer_web
 ```
 
 API documentation is served at `http://localhost:8000/api/docs`; the OpenAPI document is at
-`/api/v1/openapi.json`. See [Web architecture](../../docs/web_architecture.md) for persistence, storage
-interfaces, job states, endpoints, reverse-proxy setup, GPU containers, and extension boundaries.
+`/api/v1/openapi.json`.
 
 ## Configuration
 

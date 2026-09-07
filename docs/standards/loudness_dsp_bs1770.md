@@ -115,10 +115,6 @@ bed, or on the native bed-plus-objects render for ADM. The ADM limiter links
 the bed and object tracks against that render so the combined programme stays
 under the ceiling without copying object audio into the bed.
 
-Measured fold delta on synthetic 7.1.4 programmes: −0.32 dB on realistic
-material, −2.35 dB on height-only content
-(`docs/plans/mastering/phase0_report.md` § "Audit 1").
-
 Implemented once in `dsp-core`'s `spatial::downmix::FoldTo51`, reached as
 `upmixer_dsp.fold_to_51` by the export path (`loudness.py`'s
 `measurement_programme`) and folded at the meter input by the preview's
@@ -272,8 +268,7 @@ Measured against exact band-limited interpolation of a periodic sine
 | 0.45 | +0.64 dB |
 
 The error is always positive — the detector over-reads near Nyquist rather than
-under-reading, so a limiter built on it stays conservative. Full numbers:
-`docs/plans/mastering/phase0_report.md`.
+under-reading, so a limiter built on it stays conservative.
 
 ### FIR Coefficients — order-48, 4-phase interpolating filter (≤48 kHz)
 
@@ -309,11 +304,7 @@ the same ceiling, so every channel is still TP-compliant; only the coupling
 between them is gone.
 
 Coupling LFE into the shared curve makes an LFE-only peak duck the entire bed
-one-for-one: with a `cinema` bass send putting 50% of the low bus into LFE, a
-+6 dBFS LFE swell took 7.1 dB off the mains for 21% of the programme
-(`docs/plans/mastering/phase0_report.md` § "Audit 2"). Concentrated in the
-loud fifth of the programme and synchronised to the bass, that is audible
-pumping while barely moving an RMS meter. Current immersive limiter practice
+one-for-one. Current immersive limiter practice
 agrees: FLUX Elixir exposes channel-link as a control, Pulsar P21 Atlas shares
 gain reduction across the bed with LFE excluded, and McDSP's surround limiters
 group channels rather than linking all of them.
@@ -344,8 +335,7 @@ still runs last, on the 4x-oversampled envelope of whatever the clipper
 produced. What the clipper changes is how much work is left — it takes the
 transients that would otherwise be met with deep, short gain reduction, so the
 limiter's duty falls and less of the programme body is given away to reach the
-same ceiling. The stage is off by default and its numbers are in
-`docs/plans/mastering/phase4_report.md`, including the aliasing it costs: it
+same ceiling. The stage is off by default and it
 does not oversample in v1, so its odd harmonics past Nyquist fold back.
 
 ---
@@ -365,9 +355,7 @@ would describe a programme the file no longer contains. Pinned by
 
 The conversion itself is `upmixer.resample`: a polyphase stage whose
 anti-imaging FIR is a Kaiser design at a 120 dB stopband with the transition
-spanning 10% of the lower of the two rates. SciPy's `resample_poly` default
-window is not adequate for delivery — measurements for both in
-`docs/plans/mastering/phase6_report.md`.
+spanning 10% of the lower of the two rates.
 
 **2. Quantize last, with dither.** Bit-depth reduction is the final operation
 before samples leave the process, and it is the only place rounding happens.

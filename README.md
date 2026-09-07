@@ -11,8 +11,6 @@ footprint. This repository is a uv workspace monorepo — `packages/core` (libra
 
 An optional web application adds interactive track and album workflows without changing the CLI. It uses the same manifests and processing pipelines, so browser-configured jobs remain portable to automation.
 
-For implementation references, use the [documentation map](docs/README.md).
-
 ## Web application
 
 The stack is two processes: the FastAPI server (`apps/api`) and the React client (`apps/web`). Stem separation
@@ -87,7 +85,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. API documentation is available at `http://localhost:8000/api/docs`. See [Web architecture](docs/web_architecture.md) for persistence, storage interfaces, job states, endpoints, reverse-proxy setup, GPU containers, and extension boundaries.
+Open `http://localhost:5173`. API documentation is available at `http://localhost:8000/api/docs`.
 
 ## Features
 
@@ -398,8 +396,6 @@ format:
 
 The web server owns uploaded input/output/cache paths and downmix filenames.
 Projects expose the same delivery setting and publish the companion as an artifact.
-See [`docs/project_manifest_parity.md`](docs/project_manifest_parity.md) for the
-project-to-manifest mapping and intentionally unsupported fields.
 
 Configuration precedence is:
 

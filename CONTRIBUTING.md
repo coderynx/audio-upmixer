@@ -10,9 +10,7 @@ This is a uv workspace monorepo:
 - `apps/api` — the `upmixer-web` FastAPI server (`upmixer_web`), consuming core's public API only.
 - `apps/web` — the React/shadcn/ui client, talking to `apps/api` over `/api/*`.
 
-Read `AGENTS.md` and the linked [agent workflow](docs/agent_workflow.md) before
-making a non-trivial change. The [documentation map](docs/README.md) points to
-task-specific contracts.
+Read `AGENTS.md` before making a non-trivial change.
 
 ## Setup
 
@@ -50,6 +48,5 @@ when output changes.
 
 ## Code conventions
 
-Follow the [agent workflow](docs/agent_workflow.md). Python has no configured
-formatter or linter; keep it PEP 8-aligned. The frontend uses ESLint/Prettier
+Python has no configured formatter or linter; keep it PEP 8-aligned. The frontend uses ESLint/Prettier
 (`npm run lint`, `npm run format` in `apps/web`).

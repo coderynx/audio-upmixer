@@ -221,9 +221,7 @@ time-domain FIRs `H_LL, H_LR, H_RL, H_RR`.
 
 Because the filters are inverted from measured data, no crosstalk-cancellation
 change ships without confirming, per profile, all of the following on the
-measured `C`/`H` pair — the same "no separation-quality change ships without a
-report" discipline `docs/evaluation_harness.md` establishes for the separation
-engine (`packages/core/tests/test_crosstalk.py`):
+measured `C`/`H` pair (`packages/core/tests/test_crosstalk.py`):
 
 | Check | Test |
 |---|---|

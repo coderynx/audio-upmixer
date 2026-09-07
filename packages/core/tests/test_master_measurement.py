@@ -3,7 +3,6 @@
 Skipped by default. Run with:
     uv run pytest packages/core/tests/test_master_measurement.py -m perf -s
 
-The ``-s`` run prints markdown tables for docs/plans/mastering/phase0_report.md.
 Two parts: a compliance baseline (measured delivery numbers for two contrasting
 programmes across three layouts at two loudness targets) and the four audits
 that size later phases — the 5.1-fold loudness delta, the limiter's LFE link

@@ -218,9 +218,6 @@ class UpmixConfig:
     stem_bleed_reduction: bool = False
 
     # Share the remainder each split leaves on its parent back over the
-    # children, so they sum to it. Full re-projection was measured worse on
-    # SDR, fullness and bleedless at every exponent for both stages
-    # (docs/reports/primary_remask.md, docs/reports/drum_remask.md).
     stem_drum_remask: bool = True
     stem_primary_remask: bool = True
 

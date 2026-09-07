@@ -13,9 +13,7 @@ Two departures from ``rotary_embedding_torch.rotate_queries_or_keys``:
 - On MPS the rotation is the single largest cost in the pipeline: the
   library issues ``t * cos``, ``rotate_half(t) * sin``, the add, and the
   concat as separate kernels over a ~100 MB tensor, 48 times per chunk.
-  Compiling the expression fuses it into one kernel — measured 6.5x on the
-  rotation and ~1.4-1.5x end-to-end, bit-exact. See
-  ``docs/plans/mlx/phase0_report.md`` §5.
+  Compiling the expression fuses it into one kernel.
 
 CUDA and CPU keep the library path: the win was measured only on MPS, and
 inductor on CPU needs a C++ toolchain that deployment targets may not have.

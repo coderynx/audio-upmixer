@@ -187,8 +187,7 @@ def test_kit_remask_composes_with_the_shared_primary_stage():
 
 
 def test_kit_pieces_keep_their_model_waveforms():
-    """Re-deriving the pieces from the parent measured worse on every metric
-    than sharing the remainder — docs/reports/drum_remask.md."""
+    """Kit pieces retain their model waveforms."""
     drums, pieces = _kit()
     lossy = {name: (audio * 0.97).astype(np.float32)
              for name, audio in pieces.items()}

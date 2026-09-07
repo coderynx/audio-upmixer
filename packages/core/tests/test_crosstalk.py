@@ -317,9 +317,7 @@ def test_transaural_bed_formats_are_valid_output_formats():
     ],
 )
 def test_xtc_reduces_contralateral_leakage_within_coloration_bound(profile, min_xtc_db, max_coloration_db):
-    """Objective correctness check for the XTC design (see docs/standards/
-    transaural_speakers.md §4 and §6, and the evaluation-harness precedent in
-    docs/evaluation_harness.md): no crosstalk-cancellation change ships
+    """Objective correctness check for the XTC design: no crosstalk-cancellation change ships
     without confirming both halves of the tradeoff — the baked filter must
     measurably suppress contralateral (opposite-ear) leakage relative to
     playing raw binaural on speakers with no cancellation at all, while

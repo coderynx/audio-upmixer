@@ -3,8 +3,7 @@
 ``separate_for_eval`` drives the public ``StemSeparator`` — the same
 inference path production code uses — and records every setting that
 affects its output, so scores are never reported without the configuration
-that produced them (see ``docs/evaluation_harness.md``). ``evaluate_corpus``
-takes a pluggable separation callable so tests can substitute a fast, offline
+that produced them. ``evaluate_corpus`` takes a pluggable separation callable so tests can substitute a fast, offline
 stand-in without downloading model weights.
 """
 

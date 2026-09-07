@@ -205,8 +205,6 @@ shadow and pinna cues; direction-dependent excess phase and common
 measurement latency no longer cause destructive interference when coherent
 content occupies multiple virtual speakers. This is direct-filter preparation,
 not profile EQ or room processing, and applies to all profiles including flat.
-See [the diagnosis](../reports/binaural_renderer_diagnosis.md) for measurements
-and the distinction from Apple's reference renderer.
 
 A full-column-rank left inverse of the layout's order-3 encoder folds these
 conditioned HRIRs into 16×{L,R} filters. Each fixed speaker feed reconstructs

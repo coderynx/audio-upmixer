@@ -64,9 +64,7 @@ def cacheable_plan_stems(
 def _remasks(cfg: UpmixConfig | None, model: str) -> bool:
     """Whether *model*'s stage shares its parent's remainder over its outputs.
 
-    Both stages share out only the remainder their own split left: a full
-    re-projection measured worse on every stem metric for either of them
-    (docs/reports/primary_remask.md, docs/reports/drum_remask.md).
+    Both stages share out only the remainder their own split left.
     """
     if cfg is None:
         return False

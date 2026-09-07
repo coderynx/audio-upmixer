@@ -93,8 +93,7 @@ def normalize_layout_mix(block: dict[str, Any], layout: str, stems: list[str]) -
     The two-channel fold is load-bearing, not cosmetic: the client preview
     reads routing only from the manifest while the export folds the built-in
     base route, so an unfolded route on a `stereo` layout previews several dB
-    below the render — see `docs/project_manifest_parity.md`, "Two-channel
-    (`stereo`) layouts".
+    below the render.
     """
     if layout not in FORMAT_MAP:
         raise ValueError("Unknown channel layout")

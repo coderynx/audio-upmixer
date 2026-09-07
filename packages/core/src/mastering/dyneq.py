@@ -11,10 +11,7 @@ Detection is per band and **linked across channels**: one band-pass per bed
 channel feeds a single RMS, exactly as ``bus_compress``'s sidechain does, and
 the resulting gain is realized as one bell design applied identically to every
 non-LFE channel.  That keeps the stage a shared time-varying filter, which
-commutes with the LF sum the same way the linked compressor's gain does
-(``docs/contracts/preview_export_parity.md`` §1), and makes channel divergence
-— the failure that closed ``docs/plans/mixing/phase13_report.md`` — impossible
-by construction.
+commutes with the LF sum the same way the linked compressor's gain does.
 
 The gain computer is the compressor's, so ``threshold_db`` and ``ratio`` mean
 what they mean there; the soft knee is structural and lives in

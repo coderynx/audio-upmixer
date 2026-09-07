@@ -1,5 +1,4 @@
-"""FastAPI application factory: wires shared infrastructure and registers
-each feature slice's routes. See `docs/web_api_architecture.md`."""
+"""FastAPI application factory that registers feature-slice routes."""
 
 from __future__ import annotations
 

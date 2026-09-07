@@ -47,10 +47,7 @@ static SPA.
 - `src-tauri/` — macOS host, native DSP session, audio decode/resampling, and the native output bridge.
 - `scripts/` — `bench-preview-engine.mjs` (audio-thread realtime budget gate, `npm run bench:engine`).
 
-See `AGENTS.md`, [UI design](../../docs/web_ui_design.md),
-[UI controls](../../docs/web_ui_controls.md), and
-[web architecture](../../docs/web_architecture.md) before adding a page,
-control, or visual state.
+See `AGENTS.md` before adding a page, control, or visual state.
 
 Native audio checks (macOS): `scripts/test-native-audio.sh` validates PCM layout
 and timing. Add `--playback` for BlackHole clock/pause/short-clip checks, or

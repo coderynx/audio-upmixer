@@ -1,8 +1,7 @@
 """Reference corpora for the separation evaluation harness.
 
 A corpus is a set of (mixture, per-stem reference) pairs, each tagged with a
-category so results can be grouped and regression-probed per category (see
-``docs/evaluation_harness.md``). No copyrighted audio ships with this
+category so results can be grouped and regression-probed per category. No copyrighted audio ships with this
 package — ``ReferenceCorpus.from_dir`` points at a user-supplied, lawfully
 licensed directory (MUSDB18-HQ is research-only and not bundled), and
 ``synthetic_corpus`` generates a small lawful corpus in-process for
@@ -135,8 +134,7 @@ def synthetic_corpus(sample_rate: int, out_dir: str) -> ReferenceCorpus:
     harness itself (or a real separator) against ground truth with no
     licensing ambiguity. Includes two AI-killer-style regression-probe
     categories (dense synth stack, detuned choir cluster) alongside a
-    "default" item, per the category-probe requirement in
-    ``docs/evaluation_harness.md``.
+    "default" item.
 
     Args:
         sample_rate: Sample rate for generated audio.

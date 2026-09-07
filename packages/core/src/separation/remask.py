@@ -10,11 +10,6 @@ construction.
 Two ways to apply them: :func:`reproject_stems` re-derives every child from
 the parent's spectrum, and :func:`share_parent_residual` keeps the model's own
 output and splits only what it left over. Both stages run the latter.
-Re-projection replaces the model's waveform output with a magnitude-ratio
-approximation of it, which costs real stem quality where the model is already
-good — see ``docs/reports/primary_remask.md`` and
-``docs/reports/drum_remask.md``.
-
 Pure STFT-domain DSP: arrays in, arrays out, no inference and no file I/O.
 """
 from __future__ import annotations
