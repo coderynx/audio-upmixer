@@ -16,6 +16,9 @@ _Avoid_: surround candidate
 **Secondary stem**: Support or flexible musical material that can expand from the front to side, rear, and height zones as a layout becomes richer.
 _Avoid_: ambience stem
 
+**Front-centered stem**: A separated stem whose direct image remains midway between left and right to avoid directional artifacts.
+_Avoid_: fixed-side stem
+
 **Composer**: The workspace for editing a project mix and delivery settings.
 _Avoid_: dashboard
 

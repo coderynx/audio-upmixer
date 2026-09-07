@@ -47,8 +47,6 @@ pub struct PresetTreatment {
 
 #[derive(Clone, Copy)]
 struct Profile {
-    side: f64,
-    rear: f64,
     height: f64,
     width: f64,
     rear_send: f64,
@@ -58,48 +56,36 @@ struct Profile {
 fn profile(name: &str) -> Option<Profile> {
     Some(match name {
         "intimate" => Profile {
-            side: 45.0,
-            rear: 118.0,
             height: 0.0,
             width: 42.0,
             rear_send: 0.06,
             height_send: 0.0,
         },
         "balanced" => Profile {
-            side: 58.0,
-            rear: 145.0,
             height: 0.0,
             width: 56.0,
             rear_send: 0.14,
             height_send: 0.0,
         },
         "stage" => Profile {
-            side: 68.0,
-            rear: 150.0,
             height: 0.0,
             width: 52.0,
             rear_send: 0.18,
             height_send: 0.0,
         },
         "wide" => Profile {
-            side: 82.0,
-            rear: 135.0,
             height: 0.0,
             width: 46.0,
             rear_send: 0.22,
             height_send: 0.0,
         },
         "immersive" => Profile {
-            side: 72.0,
-            rear: 165.0,
             height: 28.0,
             width: 50.0,
             rear_send: 0.30,
             height_send: 0.24,
         },
         "live" => Profile {
-            side: 72.0,
-            rear: 175.0,
             height: 22.0,
             width: 56.0,
             rear_send: 0.34,
@@ -142,47 +128,8 @@ fn secondary_index(stem: &str, stems: &[&str]) -> Option<usize> {
         .position(|candidate| *candidate == stem)
 }
 
-fn secondary_placement(
-    stem: &str,
-    index: usize,
-    count: usize,
-    channels: &[&str],
-    profile: Profile,
-) -> StemPlacement {
-    let rich = count >= 3;
-    let slot = if rich { index % 4 } else { index % 2 };
-    let rear = rich
-        && slot >= 2
-        && channels
-            .iter()
-            .any(|channel| matches!(*channel, "BL" | "BR"));
-    let azimuth_deg = if rear {
-        if slot == 2 {
-            -profile.rear
-        } else {
-            profile.rear
-        }
-    } else {
-        let angle = if rich && slot >= 2 {
-            profile.side * 0.45
-        } else {
-            profile.side
-        };
-        if slot % 2 == 0 {
-            -angle
-        } else {
-            angle
-        }
-    };
-    let elevation_deg = if rich && slot >= 2 && profile.height > 0.0 && has_height(channels) {
-        profile.height
-    } else {
-        0.0
-    };
-    placement(azimuth_deg, elevation_deg, profile.width, 0.20, lfe(stem)).with_bed_controls(
-        if rear { 0.18 } else { 0.08 },
-        if rear { -1.0 } else { -0.2 },
-    )
+fn secondary_placement(stem: &str, profile: Profile) -> StemPlacement {
+    placement(0.0, 0.0, profile.width, 0.20, lfe(stem)).with_bed_controls(0.08, -0.2)
 }
 
 fn treatment(profile: Profile, stem: &str, stems: &[&str], channels: &[&str]) -> PresetTreatment {
@@ -203,7 +150,7 @@ fn treatment(profile: Profile, stem: &str, stems: &[&str], channels: &[&str]) ->
             .any(|channel| matches!(*channel, "BL" | "BR"));
     let elevated = count >= 3 && index % 4 >= 2 && profile.height > 0.0 && has_height(channels);
     PresetTreatment {
-        placement: secondary_placement(stem, index, count, channels, profile),
+        placement: secondary_placement(stem, profile),
         ambient_rear: if rear {
             profile.rear_send
         } else {

@@ -231,6 +231,8 @@ fn preset_treatments_rebalance_the_selected_stem_and_speaker_layouts() {
         "Kick",
         "Snare",
         "Backing Vocals",
+        "Toms",
+        "Hi-Hat",
         "Guitar",
         "Piano",
         "Other",
@@ -248,12 +250,9 @@ fn preset_treatments_rebalance_the_selected_stem_and_speaker_layouts() {
                 < 90.0
         );
     }
-    assert!(rich
-        .iter()
-        .any(|(_, treatment)| treatment.placement.azimuth_deg.abs() > 120.0));
-    assert!(rich
-        .iter()
-        .any(|(_, treatment)| treatment.placement.elevation_deg > 0.0));
+    let hi_hat = rich.iter().find(|(stem, _)| *stem == "Hi-Hat").unwrap().1;
+    assert!(hi_hat.ambient_rear > 0.12);
+    assert!(hi_hat.ambient_height > 0.0);
 
     let flat = preset_treatments_for_layout("immersive", &rich_stems, &BED_51);
     assert!(flat
@@ -262,6 +261,41 @@ fn preset_treatments_rebalance_the_selected_stem_and_speaker_layouts() {
     assert!(flat
         .iter()
         .all(|(_, treatment)| treatment.placement.azimuth_deg.abs() < 90.0));
+}
+
+#[test]
+fn preset_stems_stay_centered() {
+    use upmixer_dsp_core::spatial::presets::{
+        preset_treatments_for_layout, PRESET_NAMES, PRESET_STEMS,
+    };
+
+    for preset in PRESET_NAMES {
+        let treatments = preset_treatments_for_layout(preset, &PRESET_STEMS, &FULL);
+        for stem in PRESET_STEMS {
+            assert_eq!(
+                treatments
+                    .iter()
+                    .find(|(name, _)| *name == stem)
+                    .unwrap()
+                    .1
+                    .placement
+                    .azimuth_deg,
+                0.0,
+                "{preset}/{stem} has a fixed side bias",
+            );
+            assert_eq!(
+                treatments
+                    .iter()
+                    .find(|(name, _)| *name == stem)
+                    .unwrap()
+                    .1
+                    .placement
+                    .elevation_deg,
+                0.0,
+                "{preset}/{stem} has a fixed height bias",
+            );
+        }
+    }
 }
 
 #[test]

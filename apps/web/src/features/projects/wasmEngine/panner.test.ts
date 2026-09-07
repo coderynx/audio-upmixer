@@ -70,7 +70,7 @@ describe("wasm panner", () => {
     expect(balanced["Lead Vocals"].placement).toEqual({
       azimuth_deg: 0, elevation_deg: 0, width_deg: 60, object_size: 0.1, diversity: 0, center_level_db: 1.5,
     });
-    expect(balanced.Crowd.placement.azimuth_deg).toBeLessThan(-90);
+    expect(balanced.Crowd.placement.azimuth_deg).toBe(0);
     expect(instance.presetTreatments("no-such-preset")).toEqual({});
 
     expect(balanced.Kick.sends.lfe).toBeCloseTo(0.82, 9);
@@ -84,7 +84,7 @@ describe("wasm panner", () => {
     const sparse = instance.presetTreatments("immersive", ["Vocals", "Other"], FULL);
     expect(Math.abs(sparse.Other.placement.azimuth_deg)).toBeLessThan(90);
     const rich = instance.presetTreatments(
-      "immersive", ["Lead Vocals", "Bass", "Kick", "Snare", "Backing Vocals", "Guitar", "Piano", "Other"], FULL,
+      "immersive", ["Lead Vocals", "Bass", "Kick", "Snare", "Backing Vocals", "Toms", "Hi-Hat", "Guitar", "Piano", "Other"], FULL,
     );
     const wide = instance.presetTreatments(
       "wide", ["Lead Vocals", "Bass", "Kick", "Snare", "Backing Vocals", "Guitar", "Piano", "Other"], FULL,
@@ -92,9 +92,13 @@ describe("wasm panner", () => {
     const balancedRich = instance.presetTreatments(
       "balanced", ["Lead Vocals", "Bass", "Kick", "Snare", "Backing Vocals", "Guitar", "Piano", "Other"], FULL,
     );
-    expect(Math.abs(wide.Guitar.placement.azimuth_deg)).toBeGreaterThan(Math.abs(balancedRich.Guitar.placement.azimuth_deg));
-    expect(Math.abs(rich.Other.placement.azimuth_deg)).toBeGreaterThan(120);
-    expect(rich.Other.placement.elevation_deg).toBeGreaterThan(0);
+    for (const stem of ["Backing Vocals", "Toms", "Hi-Hat", "Guitar", "Piano", "Other"]) {
+      expect(rich[stem].placement.azimuth_deg).toBe(0);
+      expect(rich[stem].placement.elevation_deg).toBe(0);
+    }
+    expect(wide.Guitar.placement.width_deg).toBeLessThan(balancedRich.Guitar.placement.width_deg);
+    expect(rich["Hi-Hat"].sends.rear).toBeGreaterThan(0);
+    expect(rich["Hi-Hat"].sends.height).toBeGreaterThan(0);
   });
 
   it("reports the elevation a layout can reach", () => {
