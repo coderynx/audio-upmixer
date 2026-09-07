@@ -307,6 +307,43 @@ fn preset_stems_keep_centered_left_right_images() {
 }
 
 #[test]
+fn presets_separate_centered_front_stems_with_height() {
+    use upmixer_dsp_core::spatial::presets::{preset_treatments_for_layout, PRESET_NAMES};
+
+    let stems = [
+        "Lead Vocals",
+        "Bass",
+        "Kick",
+        "Snare",
+        "Toms",
+        "Guitar",
+        "Other",
+    ];
+    for preset in PRESET_NAMES {
+        let treatments = preset_treatments_for_layout(preset, &stems, &FULL);
+        let position = |stem| {
+            let placement = treatments
+                .iter()
+                .find(|(name, _)| *name == stem)
+                .unwrap()
+                .1
+                .placement;
+            (placement.azimuth_deg, placement.elevation_deg)
+        };
+        assert_ne!(
+            position("Lead Vocals"),
+            position("Toms"),
+            "{preset} stacks toms on lead vocals"
+        );
+        assert_ne!(
+            position("Lead Vocals"),
+            position("Guitar"),
+            "{preset} stacks guitar on lead vocals"
+        );
+    }
+}
+
+#[test]
 fn the_lfe_send_passes_through_untouched() {
     let placement = StemPlacement::new(0.0, 0.0, 60.0, 40.0, 0.75);
     let route = placement_route(&placement, &FULL);

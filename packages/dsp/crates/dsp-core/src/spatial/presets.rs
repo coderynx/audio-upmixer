@@ -55,6 +55,7 @@ struct Profile {
     rear_send: f64,
     height_send: f64,
     enhancement_scale: f64,
+    vertical_scale: f64,
 }
 
 fn profile(name: &str) -> Option<Profile> {
@@ -65,6 +66,7 @@ fn profile(name: &str) -> Option<Profile> {
             rear_send: 0.06,
             height_send: 0.04,
             enhancement_scale: 0.35,
+            vertical_scale: 0.35,
         },
         "balanced" => Profile {
             height: 0.0,
@@ -72,6 +74,7 @@ fn profile(name: &str) -> Option<Profile> {
             rear_send: 0.14,
             height_send: 0.07,
             enhancement_scale: 0.55,
+            vertical_scale: 0.55,
         },
         "stage" => Profile {
             height: 0.0,
@@ -79,6 +82,7 @@ fn profile(name: &str) -> Option<Profile> {
             rear_send: 0.18,
             height_send: 0.09,
             enhancement_scale: 0.70,
+            vertical_scale: 0.70,
         },
         "wide" => Profile {
             height: 0.0,
@@ -86,6 +90,7 @@ fn profile(name: &str) -> Option<Profile> {
             rear_send: 0.22,
             height_send: 0.11,
             enhancement_scale: 0.80,
+            vertical_scale: 0.80,
         },
         "immersive" => Profile {
             height: 28.0,
@@ -93,6 +98,7 @@ fn profile(name: &str) -> Option<Profile> {
             rear_send: 0.30,
             height_send: 0.24,
             enhancement_scale: 1.0,
+            vertical_scale: 1.0,
         },
         "live" => Profile {
             height: 22.0,
@@ -100,6 +106,7 @@ fn profile(name: &str) -> Option<Profile> {
             rear_send: 0.34,
             height_send: 0.18,
             enhancement_scale: 0.90,
+            vertical_scale: 0.90,
         },
         _ => return None,
     })
@@ -154,13 +161,34 @@ fn lfe(stem: &str) -> f64 {
     }
 }
 
-fn anchor_placement(stem: &str) -> StemPlacement {
+fn vertical_elevation(stem: &str, profile: Profile, has_height: bool) -> f64 {
+    if !has_height {
+        return 0.0;
+    }
+    let base = match stem {
+        "Lead Vocals" | "Kick" => 0.0,
+        "Bass" => 2.0,
+        "Vocals" => 3.0,
+        "Snare" => 5.0,
+        "Backing Vocals" | "Drums" | "Piano" => 8.0,
+        "Toms" | "Instrumental" => 10.0,
+        "Guitar" => 12.0,
+        "Other" => 14.0,
+        "Crowd" => 16.0,
+        "Hi-Hat" | "Crash" => 18.0,
+        "Ride" => 20.0,
+        _ => unreachable!("only preset stems are passed here"),
+    };
+    base * profile.vertical_scale
+}
+
+fn anchor_placement(stem: &str, elevation_deg: f64) -> StemPlacement {
     match stem {
-        "Lead Vocals" => placement(0.0, 0.0, 60.0, 0.10, 0.0).with_bed_controls(0.0, 1.5),
-        "Vocals" => placement(0.0, 0.0, 32.0, 0.12, 0.0).with_bed_controls(0.0, 0.6),
-        "Bass" => placement(0.0, 0.0, 50.0, 0.06, lfe(stem)).with_bed_controls(0.0, 0.5),
-        "Kick" => placement(0.0, 0.0, 38.0, 0.05, lfe(stem)).with_bed_controls(0.0, 1.0),
-        "Snare" => placement(0.0, 0.0, 42.0, 0.08, 0.0).with_bed_controls(0.0, 0.8),
+        "Lead Vocals" => placement(0.0, elevation_deg, 60.0, 0.10, 0.0).with_bed_controls(0.0, 1.5),
+        "Vocals" => placement(0.0, elevation_deg, 32.0, 0.12, 0.0).with_bed_controls(0.0, 0.6),
+        "Bass" => placement(0.0, elevation_deg, 50.0, 0.06, lfe(stem)).with_bed_controls(0.0, 0.5),
+        "Kick" => placement(0.0, elevation_deg, 38.0, 0.05, lfe(stem)).with_bed_controls(0.0, 1.0),
+        "Snare" => placement(0.0, elevation_deg, 42.0, 0.08, 0.0).with_bed_controls(0.0, 0.8),
         _ => unreachable!("only anchors are passed here"),
     }
 }
@@ -172,11 +200,16 @@ fn secondary_index(stem: &str, stems: &[&str]) -> Option<usize> {
         .position(|candidate| *candidate == stem)
 }
 
-fn secondary_placement(stem: &str, rear: bool, elevated: bool, profile: Profile) -> StemPlacement {
+fn secondary_placement(
+    stem: &str,
+    rear: bool,
+    elevation_deg: f64,
+    profile: Profile,
+) -> StemPlacement {
     // Keep the direct image centered left/right; preserve its front/rear and height position.
     placement(
         if rear { 180.0 } else { 0.0 },
-        if elevated { profile.height } else { 0.0 },
+        elevation_deg,
         profile.width,
         0.20,
         lfe(stem),
@@ -194,7 +227,7 @@ fn treatment(profile: Profile, stem: &str, stems: &[&str], channels: &[&str]) ->
     let enhancement = enhancement(stem);
     if is_anchor(stem) {
         return PresetTreatment {
-            placement: anchor_placement(stem),
+            placement: anchor_placement(stem, vertical_elevation(stem, profile, height_available)),
             ambient_rear: 0.0,
             ambient_height: 0.0,
             ambient_trim_db: 0.0,
@@ -214,9 +247,13 @@ fn treatment(profile: Profile, stem: &str, stems: &[&str], channels: &[&str]) ->
             .iter()
             .any(|channel| matches!(*channel, "BL" | "BR"));
     let height_zone = height_available && index % 4 >= 2;
-    let elevated = height_zone && profile.height > 0.0;
+    let elevation_deg = vertical_elevation(stem, profile, height_available).max(if height_zone {
+        profile.height
+    } else {
+        0.0
+    });
     PresetTreatment {
-        placement: secondary_placement(stem, rear, elevated, profile),
+        placement: secondary_placement(stem, rear, elevation_deg, profile),
         ambient_rear: if rear { profile.rear_send } else { 0.0 },
         ambient_height: if height_zone {
             profile.height_send
