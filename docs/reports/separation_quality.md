@@ -1,6 +1,6 @@
 # Separation quality implementation ledger
 
-Updated: 2026-09-06. Current branch: `feature/improve-stem-separation`.
+Updated: 2026-09-07. Current branch: `feature/improve-stem-separation`.
 
 This is the resumable handoff for the frozen
 [Q00 protocol](separation_quality_protocol.md) and the
@@ -8,35 +8,36 @@ This is the resumable handoff for the frozen
 
 Current status: Q01/Q02 plumbing and regression work is complete; Q03 has a
 12-recording tuning baseline; Q10 passes its objective equivalence and memory
-gate; Q20 remains partial, while the Q21 native-rate candidate passed its
-automatic production parity gate and was accepted after the owner's 2026-09-06
-quick listening OK; Q21 remains opt-in/default-off. Q30 and Q40 experiments
-are complete but their candidates are rejected for production; both Q50
-candidates (aggregate-Drums v1 and kit-sibling v2) are complete and rejected
-after automatic failures, and their experimental helpers have been removed.
-The Q90 pitch-adviser preflight for the Q40/Q50 ambiguity is complete and
-rejected; Q60/Q80 are ineligible, Q70 is blocked, and Q100 delivery hardening
-for accepted Q21 is complete. Q31 and later quality changes have not started.
-No production default has changed.
+gate; Q20 remains partial, while Q21's native-rate behavior is now always on
+in production after the candidate passed its automatic parity gate and the
+owner gave a quick listening OK on 2026-09-06. Q30 and Q40 experiments are
+complete but their candidates are rejected for production; both Q50 candidates
+(aggregate-Drums v1 and kit-sibling v2) are complete and rejected after
+automatic failures, and their experimental helpers have been removed. The Q90
+pitch-adviser preflight for the Q40/Q50 ambiguity is complete and rejected;
+Q60/Q80 are ineligible, Q70 is blocked, and Q100 delivery hardening for Q21 is
+complete. Q31 and later quality changes have not started. Native-rate
+separation is the production behavior across config, manifest, CLI, API, and
+web.
 
 ## Progress/stage
 
 | Stage | Status | Next eligible work |
 | --- | --- | --- |
-| Q00 | Available; promotion open | Finish category, listening, and heldout gates. |
+| Q00 | Available; research gate open | Finish category, listening, and heldout gates. |
 | Q01/Q02 | Complete | — |
 | Q03 | Partial | — |
 | Q10 | Complete; objective gate passes | — |
-| Q20 | Partial; native-rate automatic gate passed | Finish residual and heldout evidence as needed for later promotion. |
-| Q21 | Accepted after automatic gate and quick owner OK; opt-in/default-off | Q50 was evaluated next and rejected; default promotion remains separate. |
+| Q20 | Partial; native-rate automatic gate passed | Finish residual and heldout evidence for research evaluation. |
+| Q21 | Accepted after automatic gate and quick owner OK; always on | Q50 was evaluated next and rejected. |
 | Q30 | Complete; rejected | No Q31; Q50 was evaluated next and rejected under the sequential candidate workflow. |
 | Q40 | Complete; rejected | No Q41. Q50 is complete/rejected for both candidate arms; Q60/Q80 lack prerequisites; Q70 is blocked; Q90 requires its follow-up preflight. |
 | Q50 | Complete; aggregate v1 and kit v2 rejected | No Q51. Q60/Q80 lack prerequisites; Q70 is blocked; Q90 may be considered only if the Q40/Q50 result is treated as a named ambiguity plus classical-cue failure and adviser provenance preflight passes. |
 | Q60 | Ineligible; no measured spatial/residual defect | No Q60 experiment. |
 | Q70 | Blocked; no accepted magnitude correction | Reopen only after an accepted correction. |
 | Q80 | Ineligible; no measured Q03 quiet-input failure | No Q80 experiment. |
-| Q90 | Preflight complete; pitch advisers rejected for the Q40/Q50 ambiguity | No Q90 implementation. Q100 for accepted Q21 is complete. |
-| Q100 | Complete for accepted Q21; opt-in/default-off | Default promotion remains blocked by the untouched paired 48 kHz heldout and CUDA memory ceiling; generation GC is deferred. |
+| Q90 | Preflight complete; pitch advisers rejected for the Q40/Q50 ambiguity | No Q90 implementation. Q100 for Q21 is complete. |
+| Q100 | Complete for Q21 always-on delivery | Generation GC is deferred; heldout and device-memory evidence remain evaluation work. |
 
 ## Frozen identity and corpus
 
@@ -103,7 +104,8 @@ The selected MUSDB18-HQ subset clears access and broad corpus-size gates, but
 category coverage is not sufficient for every promoted target. No full
 24-recording baseline, heldout result, or human listening panel is claimed.
 Three blinded listening packs exist, but they are tuning-only and unrated.
-Promotion and any default change remain open.
+No Q00 promotion is claimed; the historical protocol remains open for its
+category, listening, and heldout gates.
 
 ### Q01/Q02 — complete plumbing and regression work
 
@@ -147,9 +149,10 @@ so no speed claim is made. CPU and CUDA real-model checks remain open.
 ### Q20 — corrected rate experiment, partial
 
 The Q20 implementation and provenance commits are `7d52093`, `7a2806c`,
-`0186944`, `fa63413`, `62c67d2`, `5e3eb59`, and `8683132`. `--rate-arm`
-remains opt-in evaluation behavior. `delivery` reproduces the incumbent
-requested-rate condition; `native` runs the tree at the model's 44.1 kHz rate
+`0186944`, `fa63413`, `62c67d2`, `5e3eb59`, and `8683132`. Its `--rate-arm`
+distinction is retained as historical evaluation behavior. `delivery`
+reproduces the incumbent requested-rate condition; `native` runs the tree at
+the model's 44.1 kHz rate
 and converts once to delivery with the selected 120 dB FIR. Reports record
 the arm, input/separation/output rates and frame counts, resampler identity,
 stage settings, checkpoint/config hashes, and MPS device.
@@ -314,10 +317,9 @@ separate reconstruction maximum absolute error
 `1.862645149230957e-09`; assigned-policy reconstruction maximum absolute error
 `5.960464477539063e-08`. The separate-Unassigned residual contract remains
 provisional: policy 1 leaves `Other` raw, while policy 2 adds the
-delivery-domain residual. The Q21 native-rate candidate is now implemented,
-its automatic parity gate passes, and its quick owner listening verdict was
-`OK` on 2026-09-06. Any default change remains blocked pending policy freeze
-and one single heldout run. Heldout inference has not run.
+delivery-domain residual. The Q21 native-rate candidate is now the always-on
+production path: its automatic parity gate passes and its quick owner
+listening verdict was `OK` on 2026-09-06. Heldout inference has not run.
 
 The corrected one-item smoke artifacts are:
 
@@ -344,41 +346,37 @@ and `highrate-smoke/analysis-scipy-default-invalid.json`) are audit-only and
 must not be used for conclusions. The corrected artifacts use the selected
 120 dB FIR above.
 
-### Q21 — native-rate production candidate: accepted for opt-in use
+### Q21 — native-rate production: always on
 
-The opt-in production path is implemented by commits `6540f9a`, `9dafcf3`,
-`c8c7855`, and `81d4d79`. The final fix pre-resamples each non-native source
-zone with the selected 120 dB FIR before native inference, so the production
-path and Q20's native evaluator arm receive identical samples. Cache identity,
-resume identity, delivery conversion, exact rounded frame counts, supplied
-stems, and silence-skip paths are covered by the owning tests.
-The current pre-resample uses the zone array already loaded by the pipeline;
-bounded streaming conversion remains a follow-up before any broad default
-promotion.
+The final always-on rollout is recorded by commits `7e3428a`, `2c63a79`,
+`52d495b`, `b870edf`, and `c6f3513`. The earlier Q21 candidate work remains
+the historical basis for the production path: each non-native source zone is
+resampled with the selected 120 dB FIR before native inference, and delivery
+conversion happens once after separation. Cache identity, resume identity,
+exact rounded frame counts, supplied stems, and silence-skip paths remain
+covered by the owning tests. The Q20 `--rate-arm` distinction remains
+research-only evaluation behavior and is not a product control.
 
-The direct production smoke used the genuine 48 kHz tuning input
-`freidi-48k/smoke/q20-conservation-12s`, not heldout material. It ran the
-Deux → BS-Roformer-SW tree on MPS with native inference at 44.1 kHz, delivery
-at 48 kHz, batch size 1, overlap 2, and the default silence-skip policy. The
-six public terminal WAVs were stereo, finite, 576,000 frames, and bit-identical
-to the retained Q20 native arm: maximum absolute and RMS differences were both
-`0.0`. Runtime was `27.46 s` wall time with maximum RSS
-`1,869,807,616` bytes; no OOM fallback occurred. The focused native-rate and
-rate-experiment suite passed `24` tests.
+There is no active native-rate toggle in configuration, the manifest schema,
+the CLI, the API, or the web UI. Legacy keys are ignored or stripped. The
+one-time migration from Alembic head `e6f7a8b9c0d1` requeues old prepared
+projects with no explicit native `True` provenance (`false` or no marker) as
+`expanding`, resets their track state, and bumps the revision; deleting
+projects are skipped. An explicit legacy `True` marker is removed while the
+prepared project stays ready. Worker restart does not repeat this migration.
 
-Retained evidence is at
-`$UPMIXER_EVAL_ROOT/q21/production-native-smoke-freidi-48k-81d4d79`:
-`comparison.json` SHA-256
-`6dfd5863b6aac908f28df9325cc75d51de2d530891fdd6983406b42097597648` and
-`SHA256SUMS` SHA-256
-`d967f72d18853400bc2c7e27d25c23f5edd4f0ff03493af4eb2d591caafd6652`.
-The code revision is
-`81d4d79f7ff8df444734d39c47d8aaa52e02fa2a`.
+Ready project archives carry the derived
+`separation_policy: native-rate-v1` provenance. Archives from expanding or
+failed projects omit that marker. On import, the derived marker or an old
+manifest's explicit native `True` marker preserves prepared stems as ready;
+otherwise prepared stems enter `expanding` with queued tracks for regeneration.
 
-The automatic gate passes. The owner's 2026-09-06 quick listening verdict was
-`OK`. Under the sequential candidate workflow, Q21 is accepted for opt-in use
-and Q50 was evaluated next and rejected. The path remains opt-in/default-off; no
-panel, ratings, defect ledger, or heldout inference is claimed.
+The fresh MPS smoke at
+`/Volumes/External SSD/upmixer-eval/separation-quality/q21/always-native-smoke-b870edf`
+ran both model stages at 44.1 kHz and delivered at 48 kHz. All six terminal
+outputs were finite stereo WAVs and had exact `0.0` maximum and RMS difference
+versus the accepted Q20 native reference. Wall time was `20.4283 s` and peak
+RSS was approximately `1.81 GiB`.
 
 ### Q30 — origin-view experiment complete; candidate rejected
 
@@ -489,16 +487,13 @@ pre-hardening archive remains at
 `/Volumes/External SSD/upmixer-eval/separation-quality/q40/deux-counterfactual-half-v1/results-pre-hardening-24a32dc`
 for audit only.
 
-The stop rule applies: no production default change was made and the evaluation
-harness is retained. The combined Q20/Q21 stage remains partial: Q20 is
-incomplete; Q21 was accepted for opt-in use after the owner's 2026-09-06 quick
-listening `OK` and remains default-off. This Q40 result is diagnostic and
-promotion-prohibited; those entry prerequisites independently continue to block
-production. Under the sequential candidate workflow, Q50 was evaluated next and
-rejected below. Q60 remains conditional on a measured spatial/residual defect,
-and Q80 on a Q03 quiet-input failure. Q70 remains gated on an accepted
-magnitude improvement and Q90 on a named Q40/Q50 ambiguity plus failed
-classical cues.
+The stop rule applies to Q40: its candidate is diagnostic and was not promoted;
+the evaluation harness is retained. Q20 remains incomplete, while the Q21
+always-on rollout is recorded above. Under the sequential candidate workflow,
+Q50 was evaluated next and rejected below. Q60 remains conditional on a
+measured spatial/residual defect, and Q80 on a Q03 quiet-input failure. Q70
+remains gated on an accepted magnitude improvement and Q90 on a named Q40/Q50
+ambiguity plus failed classical cues.
 There is no Q41.
 
 Exact rerun commands (use fresh output directories):
@@ -615,25 +610,23 @@ Neither adviser resolves the observed broadband Snare/Hi-Hat loss or
 overlapping kit ownership. No package or checkpoint was downloaded, no heldout
 inference was run, and no repository code changed. Q90 is therefore rejected
 for this ambiguity; retain the incumbent classical/no-adviser behavior. Q100
-for accepted Q21 is complete below.
+for Q21 is complete below.
 
-### Q100 — accepted Q21 delivery hardening complete
+### Q100 — Q21 always-on delivery hardening complete
 
-Q100 delivery hardening for the accepted Q21 native-rate candidate is recorded
+Q100 delivery hardening for Q21's native-rate production path is recorded
 in commits `ac75a91`, `88be214`, `e0a8bb1`, `3cb0106`, `f7dd7a4`, `1fe573e`, and
-`ed2fd13`. Native-rate separation remains opt-in across the CLI, API, and web.
+`ed2fd13`. Native-rate separation is always on across the CLI, API, and web.
 Project stems and peaks are immutable per generation; queued exports are
 isolated; revision/generation publication is atomic; stale and failed
 preparations are cleaned up; deletion is conditional; per-track subsets are
 validated; and legacy/archive compatibility is retained.
 
-Final validation passed: focused Q100 coverage `36 passed`; API `129 passed`;
-full Python `1643 passed, 38 deselected, 24 warnings`; web `434 passed`;
-`npm run build`; and the macOS Tauri app build. The production native smoke's
-exact parity and the owner's quick listening `OK` are recorded in Q21 above.
-
-The default remains off. Default promotion is blocked by the untouched paired
-48 kHz heldout and the CUDA memory ceiling. Old successful project generations
+Final validation passed: full Python `1644 passed, 38 deselected, 24 warnings`;
+web `434 passed`; `npm run build`; and the macOS Tauri app build. The web
+tests, build, and Tauri validation were completed before the API-only migration
+follow-up. The production native smoke's exact parity and the owner's quick
+listening `OK` are recorded in Q21 above. Old successful project generations
 are retained; garbage collection is deferred.
 
 ## Gates still open
@@ -647,8 +640,8 @@ are retained; garbage collection is deferred.
 - [ ] Measure CUDA when available and freeze a numerical device memory ceiling; the CPU smoke is recorded above.
 - [ ] Verify the normal source-anchor product path separately with anchoring off for the experiment.
 - [x] Q21 native-rate production integration, delivery conversion, cache/resume identity, and direct production parity are implemented and pass the automatic gate; bounded streaming conversion remains a follow-up.
-- [x] Q21 quick owner listening OK recorded on 2026-09-06; Q21 accepted for opt-in use and remains default-off; Q50 was evaluated next and rejected.
-- [x] Q100 delivery hardening for accepted Q21 is complete across the CLI/API/web path; generation isolation/publication, export and cleanup races, conditional deletion, subset validation, and compatibility checks are recorded above.
+- [x] Q21 quick owner listening OK recorded on 2026-09-06; native-rate separation is always on across the product; Q50 was evaluated next and rejected.
+- [x] Q100 delivery hardening for Q21 is complete across the CLI/API/web path; generation isolation/publication, export and cleanup races, conditional deletion, subset validation, and compatibility checks are recorded above.
 - [x] Q90 adviser preflight completed for the Q40/Q50 ambiguity and rejected on modality, compatibility, and provenance; no downloads, heldout inference, or code changes.
 
 ## Restart commands
@@ -709,4 +702,5 @@ uv run python "$UPMIXER_Q20_ROOT/analyze_smokes.py"
 uv run pytest packages/core/tests apps/api/tests apps/cli/tests -q
 ```
 
-Q100 is complete for accepted Q21, but keep native-rate behavior opt-in/default-off. Do not run the heldout arm or promote the default until the open gates above are frozen and recorded.
+Q100 is complete for Q21's always-on native-rate behavior. Keep the heldout
+arm untouched until the open evaluation gates above are frozen and recorded.
