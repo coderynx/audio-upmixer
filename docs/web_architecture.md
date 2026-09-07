@@ -62,7 +62,7 @@ required 7.1.4 side/rear channel reorder. It applies no PHASE calibration or
 LFE fold. Transport volume remains downstream of core meters and calibration.
 
 A serial renderer callback consumes immutable interleaved PCM buffers. The
-producer primes 8192 frames (170.7 ms) before starting at rate 1 and limits
+producer primes 2048 frames (42.7 ms) before starting at rate 1 and limits
 submitted audio to 16384 frames (341.3 ms) ahead of the presentation clock.
 Short clips start when EOF is declared, and EOF drains before pausing.
 Nonblocking capacity checks keep transport commands responsive. Sample-based

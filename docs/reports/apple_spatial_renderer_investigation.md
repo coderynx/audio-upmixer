@@ -164,3 +164,19 @@ EOF drain and explicit automatic-flush errors. Frontend tests: 434 passed;
 native Rust tests: 6 passed. Web production and macOS Tauri app builds passed.
 The desktop app is under
 `apps/web/src-tauri/target/release/bundle/macos/Upmixer.app`.
+
+## Startup latency follow-up
+
+Reduced startup prefill from 8192 to 2048 frames (16 to 4 blocks; 170.7 to
+42.7 ms of programme audio). The 16384-frame running queue remains unchanged.
+This reduces the work required before starting without reducing steady-state
+buffering protection. It does not remove device or Apple spatializer latency.
+
+In sequential BlackHole capture runs using the same synthetic workload, the
+first active 10 ms window moved from frame 3360 to frame 2400 of the recording
+(approximately 70 to 50 ms after capture began). This is a single comparison
+including test setup and capture startup, not an AirPods play-click benchmark.
+Both runs captured 3.01 seconds at 439.20 Hz for a 440 Hz input with no internal
+10 ms gaps. Pause/resume, nonzero start, 127-frame EOF, queue bounds and output
+reset checks passed. Web tests (434), native Rust tests (6), and web production
+build also passed.

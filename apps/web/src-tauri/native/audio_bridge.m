@@ -8,7 +8,7 @@
 
 static const AVAudioFrameCount BUFFER_FRAMES = 512;
 static const NSUInteger BUFFER_COUNT = 4;
-static const int64_t MEDIA_PREFILL_FRAMES = 8192;
+static const int64_t MEDIA_PREFILL_FRAMES = 2048;
 static const int64_t MEDIA_QUEUE_FRAMES = 16384;
 
 @interface UpmixerAudio : NSObject
