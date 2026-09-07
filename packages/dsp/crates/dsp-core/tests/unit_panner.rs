@@ -224,6 +224,9 @@ fn preset_treatments_rebalance_the_selected_stem_and_speaker_layouts() {
         sparse_other.placement.azimuth_deg.abs() < 90.0,
         "sparse main material stays forward"
     );
+    assert_eq!(sparse_other.ambient_rear, 0.0);
+    assert_eq!(sparse_other.ambient_height, 0.0);
+    assert_eq!(sparse_other.height_texture, 0.0);
 
     let rich_stems = [
         "Lead Vocals",
@@ -253,11 +256,25 @@ fn preset_treatments_rebalance_the_selected_stem_and_speaker_layouts() {
     let hi_hat = rich.iter().find(|(stem, _)| *stem == "Hi-Hat").unwrap().1;
     assert!(hi_hat.ambient_rear > 0.12);
     assert!(hi_hat.ambient_height > 0.0);
+    assert_eq!(hi_hat.ambient_trim_db, 0.6);
+    assert_eq!(hi_hat.height_texture, 0.14);
+    assert_eq!(hi_hat.ambient_height_cutoff_hz, 1500.0);
+    let lead = rich
+        .iter()
+        .find(|(stem, _)| *stem == "Lead Vocals")
+        .unwrap()
+        .1;
+    assert_eq!(lead.ambient_rear, 0.0);
+    assert_eq!(lead.ambient_height, 0.0);
+    assert_eq!(lead.height_texture, 0.03);
 
     let flat = preset_treatments_for_layout("immersive", &rich_stems, &BED_51);
     assert!(flat
         .iter()
         .all(|(_, treatment)| treatment.placement.elevation_deg == 0.0));
+    assert!(flat
+        .iter()
+        .all(|(_, treatment)| treatment.ambient_height == 0.0 && treatment.height_texture == 0.0));
     assert!(flat
         .iter()
         .all(|(_, treatment)| treatment.placement.azimuth_deg == 0.0));

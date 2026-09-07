@@ -19,6 +19,15 @@ _Avoid_: ambience stem
 **Front-centered stem**: A separated stem whose direct image remains midway between left and right to avoid directional artifacts.
 _Avoid_: fixed-side stem
 
+**Preset-owned ambient treatment**: The rear/height sends, height crossover, ambience trim, and height texture assigned by a spatial preset; reapplying a preset replaces these values. Every profile contributes a height layer when the zone is available, with Immersive and Live more pronounced.
+_Avoid_: persistent ambient default
+
+**Available spatial zone**: A front, rear, or height region represented by the selected speaker layout; a preset assigns no treatment to an unavailable zone.
+_Avoid_: latent zone
+
+**Height texture**: A high-passed direct-residual layer sent to height speakers. Presets assign it to every named stem, with strength and cutoff tailored independently; it activates only for rich, height-capable layouts.
+_Avoid_: bright-stem-only enhancer
+
 **Composer**: The workspace for editing a project mix and delivery settings.
 _Avoid_: dashboard
 

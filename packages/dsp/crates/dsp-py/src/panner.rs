@@ -11,7 +11,6 @@ use upmixer_dsp_core::spatial::presets;
 
 type PlacementTuple = (f64, f64, f64, f64, f64);
 type PresetPlacementTuple = (f64, f64, f64, f64, f64, f64, f64);
-type PresetTreatmentTuple = (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64);
 
 fn placement(values: PlacementTuple) -> StemPlacement {
     StemPlacement::new(values.0, values.1, values.2, values.3, values.4)
@@ -37,6 +36,25 @@ fn unpack_preset(value: &StemPlacement) -> PresetPlacementTuple {
         value.diversity,
         value.center_level_db,
     )
+}
+
+fn unpack_treatment(value: &presets::PresetTreatment) -> Vec<f64> {
+    let placement = unpack_preset(&value.placement);
+    vec![
+        placement.0,
+        placement.1,
+        placement.2,
+        placement.3,
+        placement.4,
+        placement.5,
+        placement.6,
+        value.ambient_rear,
+        value.ambient_height,
+        value.ambient_trim_db,
+        value.height_texture,
+        value.ambient_height_cutoff_hz,
+        value.ambient_height_crossover_hz,
+    ]
 }
 
 fn as_refs(names: &[String]) -> Vec<&str> {
@@ -143,27 +161,12 @@ fn preset_names() -> Vec<&'static str> {
 }
 
 #[pyfunction]
-fn preset_treatments(preset: &str) -> Vec<(String, PresetTreatmentTuple)> {
+fn preset_treatments(preset: &str) -> Vec<(String, Vec<f64>)> {
     presets::preset_stems(preset)
         .iter()
         .filter_map(|stem| {
             let treatment = presets::preset_treatment(preset, stem)?;
-            let placement = unpack_preset(&treatment.placement);
-            Some((
-                stem.to_string(),
-                (
-                    placement.0,
-                    placement.1,
-                    placement.2,
-                    placement.3,
-                    placement.4,
-                    placement.5,
-                    placement.6,
-                    treatment.ambient_rear,
-                    treatment.ambient_height,
-                    treatment.ambient_height_crossover_hz,
-                ),
-            ))
+            Some((stem.to_string(), unpack_treatment(&treatment)))
         })
         .collect()
 }
@@ -173,27 +176,10 @@ fn preset_treatments_for_layout(
     preset: &str,
     stems: Vec<String>,
     channels: Vec<String>,
-) -> Vec<(String, PresetTreatmentTuple)> {
+) -> Vec<(String, Vec<f64>)> {
     presets::preset_treatments_for_layout(preset, &as_refs(&stems), &as_refs(&channels))
         .into_iter()
-        .map(|(stem, treatment)| {
-            let placement = unpack_preset(&treatment.placement);
-            (
-                stem.to_string(),
-                (
-                    placement.0,
-                    placement.1,
-                    placement.2,
-                    placement.3,
-                    placement.4,
-                    placement.5,
-                    placement.6,
-                    treatment.ambient_rear,
-                    treatment.ambient_height,
-                    treatment.ambient_height_crossover_hz,
-                ),
-            )
-        })
+        .map(|(stem, treatment)| (stem.to_string(), unpack_treatment(&treatment)))
         .collect()
 }
 

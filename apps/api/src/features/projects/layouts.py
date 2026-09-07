@@ -155,8 +155,8 @@ def seed_balanced_mix(block: dict[str, Any], layout: str, stems: list[str]) -> d
             continue
         rear_map.setdefault(stem, treatment.ambient_rear)
         height_map.setdefault(stem, treatment.ambient_height)
-        trim_map.setdefault(stem, 0.0)
-        texture_map.setdefault(stem, 0.0)
-        cutoff_map.setdefault(stem, 2000.0)
+        trim_map.setdefault(stem, treatment.ambient_trim_db)
+        texture_map.setdefault(stem, treatment.height_texture)
+        cutoff_map.setdefault(stem, treatment.ambient_height_cutoff_hz)
         crossover_map.setdefault(stem, treatment.ambient_height_crossover_hz)
     return block

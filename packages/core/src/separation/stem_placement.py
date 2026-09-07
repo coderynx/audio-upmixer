@@ -23,6 +23,7 @@ dataclasses and keeps the layout validation, which is a boundary concern.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import upmixer_dsp
@@ -66,6 +67,9 @@ class PresetTreatment:
     placement: StemPlacement
     ambient_rear: float
     ambient_height: float
+    ambient_trim_db: float
+    height_texture: float
+    ambient_height_cutoff_hz: float
     ambient_height_crossover_hz: float
 
 
@@ -74,8 +78,10 @@ def _placement(values: tuple[float, float, float, float, float, float, float]) -
 
 
 def _treatment(
-    values: tuple[float, float, float, float, float, float, float, float, float, float],
+    values: Sequence[float],
 ) -> PresetTreatment:
+    if len(values) != 13:
+        raise ValueError("preset treatment must contain 13 values")
     return PresetTreatment(_placement(values[:7]), *values[7:])
 
 

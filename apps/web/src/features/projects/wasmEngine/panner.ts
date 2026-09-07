@@ -22,9 +22,10 @@ export type PresetSends = {
   lfe: number;
   rear: number;
   height: number;
+  ambienceTrimDb: number;
+  heightTexture: number;
+  heightCutoffHz: number;
   heightCrossoverHz: number;
-  ambienceTrimDb?: number;
-  heightTexture?: number;
 };
 
 export type PresetTreatment = {
@@ -141,7 +142,7 @@ export class Panner {
     const index = this.presetNames.indexOf(preset);
     if (index < 0) return {};
     const out: Record<string, PresetTreatment> = {};
-    const bytes = 10 * 8;
+    const bytes = 13 * 8;
     const stemIndices = stems?.map((stem) => this.stemIndex.get(stem) ?? -1);
     const channelIndices = channels?.map((channel) => this.channelIndex.get(channel) ?? -1);
     if (stemIndices?.some((index) => index < 0) || channelIndices?.some((index) => index < 0)) return {};
@@ -164,11 +165,12 @@ export class Panner {
         if (status !== 0) continue;
         const [
           azimuth_deg, elevation_deg, width_deg, object_size, lfe, diversity,
-          center_level_db, rear, height, heightCrossoverHz,
-        ] = this.read(ptr, 10);
+          center_level_db, rear, height, ambienceTrimDb, heightTexture, heightCutoffHz,
+          heightCrossoverHz,
+        ] = this.read(ptr, 13);
         out[name] = {
           placement: { azimuth_deg, elevation_deg, width_deg, object_size, diversity, center_level_db },
-          sends: { lfe, rear, height, heightCrossoverHz },
+          sends: { lfe, rear, height, ambienceTrimDb, heightTexture, heightCutoffHz, heightCrossoverHz },
         };
       }
     } finally {

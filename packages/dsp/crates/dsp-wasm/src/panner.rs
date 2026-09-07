@@ -84,11 +84,12 @@ pub extern "C" fn dsp_preset_stem_name_ptr(preset: usize, stem: usize) -> *const
 }
 
 /// Write one complete preset treatment as `[azimuth, elevation, width,
-/// object_size, lfe, diversity, center_level_db, rear, height, crossover]`.
+/// object_size, lfe, diversity, center_level_db, rear, height, trim, texture,
+/// height_cutoff, crossover]`.
 /// Returns 0 on success, -1 when the preset or stem is unknown.
 ///
 /// # Safety
-/// `out` must address 10 writable f64 values.
+/// `out` must address 13 writable f64 values.
 #[no_mangle]
 pub unsafe extern "C" fn dsp_preset_treatment(preset: usize, stem: usize, out: *mut f64) -> i32 {
     let Some(name) = presets::PRESET_NAMES.get(preset) else {
@@ -104,7 +105,7 @@ pub unsafe extern "C" fn dsp_preset_treatment(preset: usize, stem: usize, out: *
         return -1;
     }
     let placement = treatment.placement;
-    std::slice::from_raw_parts_mut(out, 10).copy_from_slice(&[
+    std::slice::from_raw_parts_mut(out, 13).copy_from_slice(&[
         placement.azimuth_deg,
         placement.elevation_deg,
         placement.width_deg,
@@ -114,6 +115,9 @@ pub unsafe extern "C" fn dsp_preset_treatment(preset: usize, stem: usize, out: *
         placement.center_level_db,
         treatment.ambient_rear,
         treatment.ambient_height,
+        treatment.ambient_trim_db,
+        treatment.height_texture,
+        treatment.ambient_height_cutoff_hz,
         treatment.ambient_height_crossover_hz,
     ]);
     0
@@ -123,7 +127,7 @@ pub unsafe extern "C" fn dsp_preset_treatment(preset: usize, stem: usize, out: *
 ///
 /// # Safety
 /// `stems` and `channels` must address readable channel indices; `out` must
-/// address 10 writable f64 values.
+/// address 13 writable f64 values.
 #[no_mangle]
 pub unsafe extern "C" fn dsp_preset_layout_treatment(
     preset: usize,
@@ -160,7 +164,7 @@ pub unsafe extern "C" fn dsp_preset_layout_treatment(
         return -1;
     };
     let placement = treatment.placement;
-    std::slice::from_raw_parts_mut(out, 10).copy_from_slice(&[
+    std::slice::from_raw_parts_mut(out, 13).copy_from_slice(&[
         placement.azimuth_deg,
         placement.elevation_deg,
         placement.width_deg,
@@ -170,6 +174,9 @@ pub unsafe extern "C" fn dsp_preset_layout_treatment(
         placement.center_level_db,
         treatment.ambient_rear,
         treatment.ambient_height,
+        treatment.ambient_trim_db,
+        treatment.height_texture,
+        treatment.ambient_height_cutoff_hz,
         treatment.ambient_height_crossover_hz,
     ]);
     0

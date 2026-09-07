@@ -546,17 +546,17 @@ def test_project_seeds_complete_balanced_preset(tmp_path, monkeypatch):
             assert set(created_mixing[field]) == {"Vocals", "Bass"}
         assert created_mixing["stem_placement"]["Vocals"] == {
             "azimuth_deg": 0.0,
-            "elevation_deg": 2.0,
-            "width_deg": 26.0,
+            "elevation_deg": 0.0,
+            "width_deg": 32.0,
             "object_size": 0.12,
             "diversity": 0.0,
-            "center_level_db": 0.5,
+            "center_level_db": 0.6,
         }
-        assert created_mixing["stem_ambient_rear"]["Vocals"] == 0.06
-        assert created_mixing["stem_ambient_height"]["Vocals"] == 0.04
+        assert created_mixing["stem_ambient_rear"]["Vocals"] == 0.0
+        assert created_mixing["stem_ambient_height"]["Vocals"] == 0.0
         assert created_mixing["stem_ambient_trim_db"]["Vocals"] == 0.0
         assert created_mixing["stem_height_texture"]["Vocals"] == 0.0
-        assert created_mixing["stem_ambient_height_cutoff_hz"]["Vocals"] == 2000.0
+        assert created_mixing["stem_ambient_height_cutoff_hz"]["Vocals"] == 3000.0
         assert created_mixing["stem_ambient_height_crossover_hz"]["Vocals"] == 4000.0
         response = client.post(f"/api/v1/projects/{created.json()['id']}/assets", json={
             "import_id": imported["id"],

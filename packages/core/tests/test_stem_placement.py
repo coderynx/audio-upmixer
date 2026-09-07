@@ -8,6 +8,7 @@ from upmixer.separation.stem_placement import (
     STEM_ROUTING_PRESET_NAMES,
     STEM_ROUTING_PRESET_TREATMENTS,
     StemPlacement,
+    _treatment,
     placement_route,
     preset_routing,
     resolve_placements,
@@ -113,3 +114,8 @@ def test_unknown_preset_or_layout_is_rejected() -> None:
         resolve_placements("spacious", "7.1.4")
     with pytest.raises(ValueError, match="Unknown channel layout"):
         resolve_placements("balanced", "9.1.6")
+
+
+def test_preset_treatment_payload_has_a_stable_shape() -> None:
+    with pytest.raises(ValueError, match="13 values"):
+        _treatment([0.0] * 12)

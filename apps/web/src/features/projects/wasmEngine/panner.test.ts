@@ -75,7 +75,8 @@ describe("wasm panner", () => {
 
     expect(balanced.Kick.sends.lfe).toBeCloseTo(0.82, 9);
     expect(balanced["Lead Vocals"].sends).toEqual({
-      lfe: 0, rear: 0, height: 0, heightCrossoverHz: 4000,
+      lfe: 0, rear: 0, height: 0, ambienceTrimDb: 0,
+      heightTexture: 0.0165, heightCutoffHz: 3000, heightCrossoverHz: 4000,
     });
     expect(balanced.Guitar.sends.heightCrossoverHz).toBe(2000);
     expect(instance.presetTreatments("intimate").Crowd.sends.rear)
@@ -83,6 +84,7 @@ describe("wasm panner", () => {
 
     const sparse = instance.presetTreatments("immersive", ["Vocals", "Other"], FULL);
     expect(Math.abs(sparse.Other.placement.azimuth_deg)).toBeLessThan(90);
+    expect(sparse.Other.sends).toMatchObject({ rear: 0, height: 0, heightTexture: 0 });
     const rich = instance.presetTreatments(
       "immersive", ["Lead Vocals", "Bass", "Kick", "Snare", "Backing Vocals", "Toms", "Hi-Hat", "Guitar", "Piano", "Other"], FULL,
     );
@@ -98,6 +100,8 @@ describe("wasm panner", () => {
     expect(wide.Guitar.placement.width_deg).toBeLessThan(balancedRich.Guitar.placement.width_deg);
     expect(rich["Hi-Hat"].placement.azimuth_deg).toBe(180);
     expect(rich["Hi-Hat"].placement.elevation_deg).toBeGreaterThan(0);
+    expect(rich["Hi-Hat"].sends).toMatchObject({ ambienceTrimDb: 0.6, heightTexture: 0.14, heightCutoffHz: 1500 });
+    expect(rich["Lead Vocals"].sends).toMatchObject({ rear: 0, height: 0, heightTexture: 0.03 });
     expect(rich["Hi-Hat"].sends.rear).toBeGreaterThan(0);
     expect(rich["Hi-Hat"].sends.height).toBeGreaterThan(0);
   });

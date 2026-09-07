@@ -42,6 +42,9 @@ pub struct PresetTreatment {
     pub placement: StemPlacement,
     pub ambient_rear: f64,
     pub ambient_height: f64,
+    pub ambient_trim_db: f64,
+    pub height_texture: f64,
+    pub ambient_height_cutoff_hz: f64,
     pub ambient_height_crossover_hz: f64,
 }
 
@@ -51,6 +54,7 @@ struct Profile {
     width: f64,
     rear_send: f64,
     height_send: f64,
+    enhancement_scale: f64,
 }
 
 fn profile(name: &str) -> Option<Profile> {
@@ -59,40 +63,80 @@ fn profile(name: &str) -> Option<Profile> {
             height: 0.0,
             width: 42.0,
             rear_send: 0.06,
-            height_send: 0.0,
+            height_send: 0.04,
+            enhancement_scale: 0.35,
         },
         "balanced" => Profile {
             height: 0.0,
             width: 56.0,
             rear_send: 0.14,
-            height_send: 0.0,
+            height_send: 0.07,
+            enhancement_scale: 0.55,
         },
         "stage" => Profile {
             height: 0.0,
             width: 52.0,
             rear_send: 0.18,
-            height_send: 0.0,
+            height_send: 0.09,
+            enhancement_scale: 0.70,
         },
         "wide" => Profile {
             height: 0.0,
             width: 46.0,
             rear_send: 0.22,
-            height_send: 0.0,
+            height_send: 0.11,
+            enhancement_scale: 0.80,
         },
         "immersive" => Profile {
             height: 28.0,
             width: 50.0,
             rear_send: 0.30,
             height_send: 0.24,
+            enhancement_scale: 1.0,
         },
         "live" => Profile {
             height: 22.0,
             width: 56.0,
             rear_send: 0.34,
             height_send: 0.18,
+            enhancement_scale: 0.90,
         },
         _ => return None,
     })
+}
+
+#[derive(Clone, Copy)]
+struct StemEnhancement {
+    texture: f64,
+    trim_db: f64,
+    cutoff_hz: f64,
+}
+
+fn enhancement(stem: &str) -> StemEnhancement {
+    let (texture, trim_db, cutoff_hz) = match stem {
+        "Lead Vocals" => (0.03, 0.20, 3000.0),
+        "Vocals" => (0.04, 0.25, 3000.0),
+        "Backing Vocals" => (0.08, 0.45, 2500.0),
+        "Bass" => (0.02, 0.10, 3500.0),
+        "Kick" => (0.02, 0.10, 3500.0),
+        "Snare" => (0.06, 0.25, 2500.0),
+        "Toms" => (0.06, 0.30, 2500.0),
+        "Drums" => (0.07, 0.35, 2500.0),
+        "Hi-Hat" => (0.14, 0.60, 1500.0),
+        "Ride" => (0.14, 0.60, 1500.0),
+        "Crash" => (0.12, 0.50, 1500.0),
+        "Guitar" => (0.09, 0.45, 2200.0),
+        "Piano" => (0.08, 0.40, 2200.0),
+        "Other" => (0.06, 0.35, 2600.0),
+        "Instrumental" => (0.07, 0.35, 2400.0),
+        "Crowd" => (0.10, 0.55, 2000.0),
+        _ => unreachable!("only preset stems are passed here"),
+    };
+    StemEnhancement {
+        texture,
+        trim_db,
+        cutoff_hz,
+    }
 }
 
 fn is_anchor(stem: &str) -> bool {
@@ -144,30 +188,52 @@ fn secondary_placement(stem: &str, rear: bool, elevated: bool, profile: Profile)
 }
 
 fn treatment(profile: Profile, stem: &str, stems: &[&str], channels: &[&str]) -> PresetTreatment {
+    let count = stems.iter().filter(|stem| !is_anchor(stem)).count();
+    let rich = count >= 3;
+    let height_available = rich && has_height(channels);
+    let enhancement = enhancement(stem);
     if is_anchor(stem) {
         return PresetTreatment {
             placement: anchor_placement(stem),
             ambient_rear: 0.0,
             ambient_height: 0.0,
+            ambient_trim_db: 0.0,
+            height_texture: if height_available {
+                enhancement.texture * profile.enhancement_scale
+            } else {
+                0.0
+            },
+            ambient_height_cutoff_hz: enhancement.cutoff_hz,
             ambient_height_crossover_hz: 4000.0,
         };
     }
-    let count = stems.iter().filter(|stem| !is_anchor(stem)).count();
     let index = secondary_index(stem, stems).expect("known selected secondary stem");
-    let rear = count >= 3
+    let rear = rich
         && index % 4 >= 2
         && channels
             .iter()
             .any(|channel| matches!(*channel, "BL" | "BR"));
-    let elevated = count >= 3 && index % 4 >= 2 && profile.height > 0.0 && has_height(channels);
+    let height_zone = height_available && index % 4 >= 2;
+    let elevated = height_zone && profile.height > 0.0;
     PresetTreatment {
         placement: secondary_placement(stem, rear, elevated, profile),
-        ambient_rear: if rear {
-            profile.rear_send
+        ambient_rear: if rear { profile.rear_send } else { 0.0 },
+        ambient_height: if height_zone {
+            profile.height_send
         } else {
-            profile.rear_send * 0.4
+            0.0
         },
-        ambient_height: if elevated { profile.height_send } else { 0.0 },
+        ambient_trim_db: if rear || height_zone {
+            enhancement.trim_db * profile.enhancement_scale
+        } else {
+            0.0
+        },
+        height_texture: if height_available {
+            enhancement.texture * profile.enhancement_scale
+        } else {
+            0.0
+        },
+        ambient_height_cutoff_hz: enhancement.cutoff_hz,
         ambient_height_crossover_hz: if matches!(
             stem,
             "Hi-Hat" | "Ride" | "Crash" | "Guitar" | "Piano" | "Other" | "Instrumental" | "Crowd"
