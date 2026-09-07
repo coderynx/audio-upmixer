@@ -29,15 +29,6 @@ fn stem() -> Arc<StemSource> {
 /// A 5.1.2 bed whose stem is routed to the fronts only, so anything that
 /// reaches SL/SR or the heights got there through an ambient send.
 fn engine(rear: f64, height: f64, downmix_lock: bool) -> PreviewEngine {
-    engine_revision(rear, height, downmix_lock, 1)
-}
-
-fn engine_revision(
-    rear: f64,
-    height: f64,
-    downmix_lock: bool,
-    processing_revision: u32,
-) -> PreviewEngine {
     let params: EngineParams = serde_json::from_str(&format!(
         r#"{{
             "speakers": [
@@ -72,37 +63,11 @@ fn engine_revision(
 }
 
 fn render(rear: f64, height: f64) -> Vec<Vec<f64>> {
-    render_revision(rear, height, 1)
-}
-
-fn render_revision(rear: f64, height: f64, processing_revision: u32) -> Vec<Vec<f64>> {
-    let mut engine = engine_revision(rear, height, false, processing_revision);
+    let mut engine = engine(rear, height, false);
     let mut out = vec![0.0; CHANNELS * N];
     let emitted = engine.render(&mut out, N);
     (0..CHANNELS)
         .map(|ch| out[ch * N..ch * N + emitted].to_vec())
-        .collect()
-}
-
-fn asymmetric_engine(processing_revision: u32) -> PreviewEngine {
-    let mut params = {
-        let template = engine_revision(0.8, 0.0, false, processing_revision);
-        template.params().clone()
-    };
-    // Keep a left surround destination while removing the right one. The
-    // revision-1 route must still use its historical whole-class gate.
-    params.speakers.remove(3);
-    params.shapes.remove(3);
-    PreviewEngine::new(SR, params, vec![stem()])
-}
-
-fn render_asymmetric_revision(processing_revision: u32) -> Vec<Vec<f64>> {
-    let mut engine = asymmetric_engine(processing_revision);
-    let channels = engine.params().speakers.len();
-    let mut out = vec![0.0; channels * N];
-    let emitted = engine.render(&mut out, N);
-    (0..channels)
-        .map(|channel| out[channel * N..channel * N + emitted].to_vec())
         .collect()
 }
 
@@ -171,8 +136,8 @@ fn the_heights_get_the_brighter_half_of_the_ambient() {
 }
 
 #[test]
-fn overlapping_revision_keeps_rear_and_height_from_the_same_broadband_feed() {
-    let bed = render_revision(0.8, 0.8, 2);
+fn overlapping_wet_sends_keep_rear_and_height_from_the_same_broadband_feed() {
+    let bed = render(0.8, 0.8);
     assert!(energy(&bed[2]) > 0.0, "rear feed is silent");
     assert!(energy(&bed[4]) > 0.0, "height feed is silent");
     let rear_high = bed[2]
@@ -229,7 +194,7 @@ fn ambient_distribution_counts_left_and_right_destinations_separately() {
 
 #[test]
 fn overlapping_wet_sends_fade_through_zero_and_back() {
-    let mut engine = engine_revision(0.8, 0.8, false, 2);
+    let mut engine = engine(0.8, 0.8, false);
     let _ = render_block(&mut engine, 4096);
 
     let mut params = engine.params().clone();
@@ -239,7 +204,10 @@ fn overlapping_wet_sends_fade_through_zero_and_back() {
     let faded = render_block(&mut engine, 4096);
     let first = energy(&faded[2][..512]);
     let last = energy(&faded[2][faded[2].len() - 512..]);
-    assert!(last < first, "rear send did not fade toward zero: {first} -> {last}");
+    assert!(
+        last < first,
+        "rear send did not fade toward zero: {first} -> {last}"
+    );
 
     let mut params = engine.params().clone();
     params.stems[0].ambient_rear = 0.8;
@@ -248,23 +216,17 @@ fn overlapping_wet_sends_fade_through_zero_and_back() {
     let restored = render_block(&mut engine, 4096);
     let first = energy(&restored[2][..512]);
     let last = energy(&restored[2][restored[2].len() - 512..]);
-    assert!(last > first, "rear send did not fade back in: {first} -> {last}");
+    assert!(
+        last > first,
+        "rear send did not fade back in: {first} -> {last}"
+    );
 }
 
 #[test]
 fn an_asymmetric_layout_does_not_subtract_an_absent_right_send() {
-    let params = engine_revision(0.8, 0.0, false, 2).params().clone();
+    let params = engine(0.8, 0.0, false).params().clone();
     let mut route = StemRouteState::new(SR, &params.sends, None, None, None);
-    route.set_ambient(
-        SR,
-        &params.sends,
-        true,
-        true,
-        2000.0,
-        2000.0,
-        0.0,
-        0.0,
-    );
+    route.set_ambient(SR, &params.sends, true, true, 2000.0, 2000.0, 0.0, 0.0);
     let mut left_seed = 61;
     let mut right_seed = 62;
     let left: Vec<f32> = (0..N)
@@ -290,12 +252,15 @@ fn an_asymmetric_layout_does_not_subtract_an_absent_right_send() {
         .zip(&right)
         .map(|(actual, source)| (actual - f64::from(*source)).abs())
         .fold(0.0, f64::max);
-    assert!(worst < 1e-12, "right anchor changed without a right destination: {worst:e}");
+    assert!(
+        worst < 1e-12,
+        "right anchor changed without a right destination: {worst:e}"
+    );
 }
 
 #[test]
 fn height_texture_can_run_without_an_ambient_split() {
-    let mut params = engine_revision(0.0, 0.0, false, 2).params().clone();
+    let mut params = engine(0.0, 0.0, false).params().clone();
     params.stems[0].height_texture = 0.2;
     let mut engine = PreviewEngine::new(SR, params, vec![stem()]);
     let mut out = vec![0.0; CHANNELS * N];
@@ -308,7 +273,7 @@ fn height_texture_can_run_without_an_ambient_split() {
 
 #[test]
 fn height_texture_edits_fade_without_a_click() {
-    let mut params = engine_revision(0.0, 0.0, false, 2).params().clone();
+    let mut params = engine(0.0, 0.0, false).params().clone();
     params.stems[0].height_texture = 0.2;
     let mut engine = PreviewEngine::new(SR, params, vec![stem()]);
     let _ = render_block(&mut engine, 2048);
@@ -319,12 +284,15 @@ fn height_texture_edits_fade_without_a_click() {
     let faded = render_block(&mut engine, 4096);
     let first = energy(&faded[4][..512]);
     let last = energy(&faded[4][faded[4].len() - 512..]);
-    assert!(last < first, "texture did not fade toward zero: {first} -> {last}");
+    assert!(
+        last < first,
+        "texture did not fade toward zero: {first} -> {last}"
+    );
 }
 
 #[test]
 fn texture_only_seek_keeps_the_configured_height_route() {
-    let mut params = engine_revision(0.0, 0.0, false, 2).params().clone();
+    let mut params = engine(0.0, 0.0, false).params().clone();
     params.stems[0].height_texture = 0.2;
     let mut engine = PreviewEngine::new(SR, params, vec![stem()]);
     let first = render_block(&mut engine, 1024);
@@ -333,13 +301,16 @@ fn texture_only_seek_keeps_the_configured_height_route() {
     let replay = render_block(&mut engine, 1024);
     assert!(energy(&replay[4]) > 0.0, "texture disappeared after seek");
     for (expected, actual) in first[4].iter().zip(&replay[4]) {
-        assert!((expected - actual).abs() < 1e-12, "height texture changed after seek");
+        assert!(
+            (expected - actual).abs() < 1e-12,
+            "height texture changed after seek"
+        );
     }
 }
 
 #[test]
 fn live_texture_enable_ramps_up_from_zero() {
-    let params = engine_revision(0.0, 0.0, false, 2).params().clone();
+    let params = engine(0.0, 0.0, false).params().clone();
     let mut engine = PreviewEngine::new(SR, params, vec![stem()]);
     let _ = render_block(&mut engine, 2048);
 
@@ -349,22 +320,16 @@ fn live_texture_enable_ramps_up_from_zero() {
     let enabled = render_block(&mut engine, 4096);
     let first = energy(&enabled[4][..512]);
     let last = energy(&enabled[4][enabled[4].len() - 512..]);
-    assert!(first < last * 0.5, "live texture enable stepped in: {first} -> {last}");
+    assert!(
+        first < last * 0.5,
+        "live texture enable stepped in: {first} -> {last}"
+    );
 }
 
 fn routed_with_trim(trim_db: f64) -> (Vec<f64>, Vec<f64>) {
-    let params = engine_revision(0.0, 0.0, false, 2).params().clone();
+    let params = engine(0.0, 0.0, false).params().clone();
     let mut route = StemRouteState::new(SR, &params.sends, None, None, None);
-    route.set_ambient(
-        SR,
-        &params.sends,
-        true,
-        true,
-        2000.0,
-        2000.0,
-        trim_db,
-        0.0,
-    );
+    route.set_ambient(SR, &params.sends, true, true, 2000.0, 2000.0, trim_db, 0.0);
     let mut left_seed = 71;
     let mut right_seed = 72;
     let left: Vec<f32> = (0..N)
@@ -399,7 +364,13 @@ fn ambient_trim_boosts_wet_only_and_leaves_the_anchor_unchanged() {
         .zip(&trimmed_direct)
         .map(|(a, b)| (a - b).abs())
         .fold(0.0, f64::max);
-    assert!(direct_error < 1e-12, "trim changed direct residual: {direct_error:e}");
+    assert!(
+        direct_error < 1e-12,
+        "trim changed direct residual: {direct_error:e}"
+    );
     let ratio = energy(&boosted) / energy(&wet);
-    assert!((ratio - 4.0).abs() < 0.05, "+6 dB wet trim power ratio {ratio:.4}");
+    assert!(
+        (ratio - 4.0).abs() < 0.05,
+        "+6 dB wet trim power ratio {ratio:.4}"
+    );
 }

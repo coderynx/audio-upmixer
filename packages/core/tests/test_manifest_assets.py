@@ -319,9 +319,9 @@ class TestParseAndApplyIntegration:
                 _minimal(format={"downmix": {"enabled": True, "height_coeff": 1.5}})
             )
 
-    def test_rejects_unknown_known_block_field(self):
-        data = _minimal(mixing={"channel_layout": "5.1", "typo": True})
-        with pytest.raises(ManifestError, match="Unknown manifest field"):
+    def test_rejects_retired_processing_revision(self):
+        data = _minimal(mixing={"channel_layout": "5.1", "processing_revision": 1})
+        with pytest.raises(ManifestError, match="mixing.processing_revision"):
             validate_manifest(data)
 
     def test_rejects_invalid_downmix_coefficient(self):
