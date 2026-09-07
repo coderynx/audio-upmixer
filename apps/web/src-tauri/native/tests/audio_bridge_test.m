@@ -69,9 +69,10 @@ static void test_queue_bounds(void) {
     UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
     [[NSNotificationCenter defaultCenter] postNotificationName:AVSampleBufferAudioRendererWasFlushedAutomaticallyNotification
                                                         object:host.renderer];
-    assert(upmixer_audio_ready(opaque, &error) == -1);
-    assert(error && strstr(error, "reset"));
-    free(error);
+    assert(upmixer_audio_take_reset_frame(opaque) == 0);
+    assert(!host.started);
+    assert(upmixer_audio_ready(opaque, &error) == 1);
+    assert(!error);
     upmixer_audio_destroy(opaque);
     error = NULL;
     opaque = upmixer_audio_create("7.1.4", true, false, 0, &error);
@@ -80,7 +81,118 @@ static void test_queue_bounds(void) {
     assert(upmixer_audio_finish(opaque, &error) == 0);
     check(upmixer_audio_schedule(opaque, channels, 12, 127, &error), &error);
     upmixer_audio_destroy(opaque);
-    puts("PASS: bounded paused queue, loop continuation after EOF, and explicit output-reset error");
+    puts("PASS: bounded paused queue, loop continuation after EOF, and recoverable output reset");
+}
+
+static void test_active_output_resets(void) {
+    char *error = NULL;
+    UpmixerAudioHost opaque = upmixer_audio_create("7.1.4", true, false, 0, &error);
+    check(opaque != NULL, &error);
+    float silence[512] = {0};
+    const float *channels[12];
+    for (int c = 0; c < 12; c++) channels[c] = silence;
+    UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
+    upmixer_audio_resume(opaque);
+    for (int reset = 0; reset < 20; reset++) {
+        [[NSNotificationCenter defaultCenter] postNotificationName:(reset % 2
+            ? AVSampleBufferAudioRendererWasFlushedAutomaticallyNotification
+            : AVSampleBufferAudioRendererOutputConfigurationDidChangeNotification)
+                                                            object:host.renderer];
+        int64_t resetFrame = upmixer_audio_take_reset_frame(opaque);
+        assert(resetFrame >= 0);
+        for (int block = 0; block < MEDIA_PREFILL_FRAMES / BUFFER_FRAMES; block++) {
+            assert(upmixer_audio_ready(opaque, &error) == 1);
+            check(upmixer_audio_schedule(opaque, channels, 12, 512, &error), &error);
+        }
+        double deadline = monotonic_seconds() + 3;
+        __block BOOL started = NO;
+        while (!started && monotonic_seconds() < deadline) {
+            dispatch_sync(host.queue, ^{ started = host.started; });
+            if (!started) usleep(1000);
+        }
+        assert(started);
+        while (upmixer_audio_playback_frame(opaque) <= resetFrame && monotonic_seconds() < deadline) {
+            usleep(1000);
+        }
+        assert(upmixer_audio_playback_frame(opaque) > resetFrame);
+    }
+    upmixer_audio_destroy(opaque);
+    puts("PASS: repeated active output resets re-prefill without underrun");
+}
+
+// Hold Apple's consumer unavailable during a route transition. The producer
+// may fill its own queue, but that is not media accepted by the renderer.
+@interface UnreadyRenderer : AVSampleBufferAudioRenderer
+@end
+@implementation UnreadyRenderer
+- (BOOL)isReadyForMoreMediaData { return NO; }
+@end
+
+static void test_route_backpressure(void) {
+    char *error = NULL;
+    UpmixerAudioHost opaque = upmixer_audio_create("7.1.4", true, false, 96000, &error);
+    check(opaque != NULL, &error);
+    UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
+    // Substitute only the readiness boundary; exercise the real queue/start code.
+    host.renderer = [UnreadyRenderer new];
+    float silence[512] = {0};
+    const float *channels[12];
+    for (int c = 0; c < 12; c++) channels[c] = silence;
+    upmixer_audio_resume(opaque);
+    for (int block = 0; block < MEDIA_PREFILL_FRAMES / BUFFER_FRAMES; block++) {
+        check(upmixer_audio_schedule(opaque, channels, 12, 512, &error), &error);
+    }
+    dispatch_sync(host.queue, ^{});
+    assert(!host.started && "Playback must wait for Apple to accept the prefill");
+    assert(upmixer_audio_playback_frame(opaque) == 96000);
+    upmixer_audio_destroy(opaque);
+    puts("PASS: route backpressure holds the playback clock until media is accepted");
+}
+
+static void test_reset_during_render(void) {
+    char *error = NULL;
+    UpmixerAudioHost opaque = upmixer_audio_create("7.1.4", true, false, 96000, &error);
+    check(opaque != NULL, &error);
+    UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
+    float silence[512] = {0};
+    const float *channels[12];
+    for (int c = 0; c < 12; c++) channels[c] = silence;
+    // Same ordering as Session::render_block: poll, render, then schedule.
+    assert(upmixer_audio_take_reset_frame(opaque) == -1);
+    assert(upmixer_audio_ready(opaque, &error) == 1);
+    [[NSNotificationCenter defaultCenter] postNotificationName:AVSampleBufferAudioRendererWasFlushedAutomaticallyNotification
+                                                        object:host.renderer];
+    assert(!upmixer_audio_schedule(opaque, channels, 12, 512, &error)
+        && "A reset must reject the block rendered on the previous timeline");
+    assert(!error);
+    assert(upmixer_audio_finish(opaque, &error) == 0);
+    assert(upmixer_audio_take_reset_frame(opaque) == 96000);
+    check(upmixer_audio_schedule(opaque, channels, 12, 512, &error), &error);
+    assert(host.nextFrame == 96512);
+    upmixer_audio_destroy(opaque);
+    puts("PASS: reset between render and enqueue rejects stale audio without a fatal error");
+}
+
+static void test_underrun_recovery(void) {
+    char *error = NULL;
+    UpmixerAudioHost opaque = upmixer_audio_create("7.1.4", true, false, 96000, &error);
+    check(opaque != NULL, &error);
+    UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
+    float silence[512] = {0};
+    const float *channels[12];
+    for (int c = 0; c < 12; c++) channels[c] = silence;
+    // Deterministically put the clock beyond the producer's next block.
+    dispatch_sync(host.queue, ^{
+        host.started = host.playing = YES;
+        [host.synchronizer setRate:0 time:CMTimeMake(98048, 48000)];
+    });
+    assert(!upmixer_audio_schedule(opaque, channels, 12, 512, &error));
+    assert(!error);
+    assert(upmixer_audio_take_reset_frame(opaque) == 96000);
+    assert(upmixer_audio_playback_frame(opaque) == 96000);
+    check(upmixer_audio_schedule(opaque, channels, 12, 512, &error), &error);
+    upmixer_audio_destroy(opaque);
+    puts("PASS: a late audio block triggers native rebuffering instead of WASM fallback");
 }
 
 static float captured[48000 * 12 * 2];
@@ -127,7 +239,7 @@ static NSString *blackhole_uid(void) {
     return nil;
 }
 
-static void test_playback(NSString *device, int totalFrames, int64_t startFrame, BOOL pause) {
+static void test_playback(NSString *device, int totalFrames, int64_t startFrame, BOOL pause, BOOL resets) {
     char *error = NULL;
     UpmixerAudioHost opaque = upmixer_audio_create("7.1.4", true, true, startFrame, &error);
     check(opaque != NULL, &error);
@@ -140,11 +252,14 @@ static void test_playback(NSString *device, int totalFrames, int64_t startFrame,
     for (int c = 0; c < 12; c++) channels[c] = data[c];
     int offset = 0;
     BOOL paused = NO;
+    int resetCount = 0;
     double began = monotonic_seconds();
     double started = 0;
     int64_t previous = startFrame;
     while (offset < totalFrames) {
         assert(monotonic_seconds() - began < 10);
+        int64_t resetFrame = upmixer_audio_take_reset_frame(opaque);
+        if (resetFrame >= 0) offset = (int)(resetFrame - startFrame);
         int ready = upmixer_audio_ready(opaque, &error);
         check(ready >= 0, &error);
         int64_t position = upmixer_audio_playback_frame(opaque);
@@ -162,7 +277,18 @@ static void test_playback(NSString *device, int totalFrames, int64_t startFrame,
         if (!ready) { usleep(1000); continue; }
         unsigned frames = MIN(512, totalFrames - offset);
         for (unsigned f = 0; f < frames; f++) data[0][f] = 0.03f * sin(2 * M_PI * 440 * (offset + f) / 48000.0);
-        check(upmixer_audio_schedule(opaque, channels, 12, frames, &error), &error);
+        if (resets && resetCount < 3 && position > startFrame + (resetCount + 1) * 24000) {
+            // Interrupt after producing a block, exactly where the old tests never reset.
+            [[NSNotificationCenter defaultCenter] postNotificationName:(resetCount % 2
+                ? AVSampleBufferAudioRendererWasFlushedAutomaticallyNotification
+                : AVSampleBufferAudioRendererOutputConfigurationDidChangeNotification)
+                                                                object:host.renderer];
+            resetCount++;
+        }
+        if (!upmixer_audio_schedule(opaque, channels, 12, frames, &error)) {
+            check(error == NULL, &error);
+            continue;
+        }
         offset += frames;
         if (offset < MEDIA_PREFILL_FRAMES) assert(upmixer_audio_playback_frame(opaque) == startFrame);
         if (!started && offset >= MEDIA_PREFILL_FRAMES) started = monotonic_seconds();
@@ -178,26 +304,33 @@ static void test_playback(NSString *device, int totalFrames, int64_t startFrame,
         usleep(1000);
     }
     double elapsed = monotonic_seconds() - started - (paused ? 0.18 : 0);
-    assert(fabs(elapsed - totalFrames / 48000.0) < 0.12);
+    // Resets pause the device while it reopens. Check bounded recovery here;
+    // the capture check measures programme duration independently of those pauses.
+    assert(fabs(elapsed - totalFrames / 48000.0) < (resets ? 3.0 : 0.12));
+    if (resets) assert(resetCount == 3);
     assert(upmixer_audio_playback_frame(opaque) == startFrame + totalFrames);
     upmixer_audio_pause(opaque);
     upmixer_audio_destroy(opaque);
-    printf("PASS: %d frames, start=%lld, pause=%d, elapsed=%.3fs (expected %.3fs)\n",
-           totalFrames, startFrame, pause, elapsed, totalFrames / 48000.0);
+    printf("PASS: %d frames, start=%lld, pause=%d, resets=%d, elapsed=%.3fs (expected %.3fs)\n",
+           totalFrames, startFrame, pause, resetCount, elapsed, totalFrames / 48000.0);
 }
 
 int main(int argc, const char **argv) {
     @autoreleasepool {
         test_samples();
         test_queue_bounds();
+        test_reset_during_render();
+        test_route_backpressure();
+        test_underrun_recovery();
+        test_active_output_resets();
         if (argc == 1) return 0;
         assert(argc == 2 && (strcmp(argv[1], "--capture") == 0 || strcmp(argv[1], "--playback") == 0));
         NSString *device = blackhole_uid();
         assert(device && "Install BlackHole 2ch for the output capture check");
         if (strcmp(argv[1], "--playback") == 0) {
-            test_playback(device, 144137, 0, NO);
-            test_playback(device, 144137, 96000, YES);
-            test_playback(device, 127, 480000, NO);
+            test_playback(device, 144137, 0, NO, YES);
+            test_playback(device, 144137, 96000, YES, YES);
+            test_playback(device, 127, 480000, NO, NO);
             return 0;
         }
         __block BOOL permissionDone = NO;
@@ -250,7 +383,7 @@ int main(int argc, const char **argv) {
         atomic_store(&capturedCount, 0);
         for (int i = 0; i < 3; i++) assert(AudioQueueEnqueueBuffer(queue, captureBuffers[i], 0, NULL) == noErr);
         assert(AudioQueueStart(queue, NULL) == noErr);
-        test_playback(device, 144137, 0, NO);
+        test_playback(device, 144137, 0, NO, NO);
         usleep(250000);
         assert(AudioQueueStop(queue, true) == noErr);
         assert(AudioQueueDispose(queue, true) == noErr);
@@ -274,8 +407,8 @@ int main(int argc, const char **argv) {
         double frequency = crossings * 48000.0 / (last - first);
         assert(fabs(frequency - 440) < 3);
         printf("PASS: captured %.2fs, %.2fHz, no internal 10ms gaps\n", active / 100.0, frequency);
-        test_playback(device, 144137, 96000, YES);
-        test_playback(device, 127, 480000, NO);
+        test_playback(device, 144137, 96000, YES, NO);
+        test_playback(device, 127, 480000, NO, NO);
         puts("PASS: capture and transport checks complete");
     }
 }

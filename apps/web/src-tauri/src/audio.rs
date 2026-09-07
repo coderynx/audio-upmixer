@@ -25,6 +25,7 @@ extern "C" {
     ) -> bool;
     fn upmixer_audio_ready(host: *mut c_void, error: *mut *mut c_char) -> i32;
     fn upmixer_audio_finish(host: *mut c_void, error: *mut *mut c_char) -> i32;
+    fn upmixer_audio_take_reset_frame(host: *mut c_void) -> i64;
     fn upmixer_audio_playback_frame(host: *mut c_void) -> i64;
     fn upmixer_audio_destroy(host: *mut c_void);
     fn upmixer_audio_free_error(error: *mut c_char);
@@ -78,7 +79,7 @@ impl AudioHost {
         unsafe { upmixer_audio_set_head_tracking(self.0, enabled) };
     }
 
-    pub fn schedule(&self, channels: &[Vec<f32>], frames: usize) -> Result<(), String> {
+    pub fn schedule(&self, channels: &[Vec<f32>], frames: usize) -> Result<bool, String> {
         let pointers = channels
             .iter()
             .map(|channel| channel.as_ptr())
@@ -93,7 +94,9 @@ impl AudioHost {
                 &mut error,
             )
         } {
-            Ok(())
+            Ok(true)
+        } else if error.is_null() {
+            Ok(false)
         } else {
             Err(take_error(error, "Could not schedule native audio"))
         }
@@ -116,6 +119,10 @@ impl AudioHost {
             )),
             result => Ok(result != 0),
         }
+    }
+
+    pub fn take_reset_frame(&self) -> Option<usize> {
+        usize::try_from(unsafe { upmixer_audio_take_reset_frame(self.0) }).ok()
     }
 
     pub fn playback_frame(&self) -> Option<usize> {

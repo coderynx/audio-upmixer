@@ -182,6 +182,14 @@ fn take_presented_frame(
     latest
 }
 
+fn engine_frame_for_output_frame(frame: usize, looping: bool, total_frames: usize) -> usize {
+    if looping && total_frames > 0 {
+        frame % total_frames
+    } else {
+        frame.min(total_frames)
+    }
+}
+
 impl Session {
     fn load(
         request: OpenRequest,
@@ -420,6 +428,15 @@ impl Session {
     }
 
     fn render_block(&mut self) -> Result<(), String> {
+        if let Some(frame) = self.audio.take_reset_frame() {
+            self.engine.seek(engine_frame_for_output_frame(
+                frame,
+                self.looping,
+                self.engine.total_frames(),
+            ));
+            self.scheduled_frame = frame;
+            self.pending_frames.clear();
+        }
         self.report_presented_frames();
         if !self.audio.ready()? {
             thread::sleep(Duration::from_millis(1));
@@ -455,7 +472,11 @@ impl Session {
             }
         }
         self.current_gain = target_gain;
-        self.audio.schedule(&self.channels, written)?;
+        if !self.audio.schedule(&self.channels, written)? {
+            // A route reset raced this render. The next turn seeks to its
+            // reset frame before producing replacement audio.
+            return Ok(());
+        }
         self.scheduled_frame += written;
         self.report_blocks += 1;
         if self.report_blocks >= REPORT_BLOCKS {
@@ -494,11 +515,11 @@ impl Session {
     fn report_presented_frames(&mut self) {
         if let Some(presented_at) = self.audio.playback_frame() {
             if let Some(frame) = take_presented_frame(&mut self.pending_frames, presented_at) {
-                let position = if self.looping && self.engine.total_frames() > 0 {
-                    presented_at % self.engine.total_frames()
-                } else {
-                    presented_at.min(self.engine.total_frames())
-                };
+                let position = engine_frame_for_output_frame(
+                    presented_at,
+                    self.looping,
+                    self.engine.total_frames(),
+                );
                 let _ = self.events.send(NativeEvent::Frame {
                     position,
                     meters: frame.meters,
@@ -648,6 +669,12 @@ mod tests {
 
         assert_eq!(frame.meters, vec![2.0]);
         assert_eq!(frames.front().unwrap().presented_at, 300);
+    }
+
+    #[test]
+    fn output_reset_rewinds_into_the_current_loop() {
+        assert_eq!(engine_frame_for_output_frame(1_250, true, 1_000), 250);
+        assert_eq!(engine_frame_for_output_frame(1_250, false, 1_000), 1_000);
     }
 
     #[test]

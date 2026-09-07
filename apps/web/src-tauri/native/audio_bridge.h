@@ -13,10 +13,12 @@ void upmixer_audio_set_head_tracking(UpmixerAudioHost host, bool enabled);
 bool upmixer_audio_start(UpmixerAudioHost host, char **error);
 void upmixer_audio_pause(UpmixerAudioHost host);
 void upmixer_audio_resume(UpmixerAudioHost host);
+// False with no error means a reset interrupted rendering; take the reset frame and retry.
 bool upmixer_audio_schedule(UpmixerAudioHost host, const float *const *channels,
                             uint32_t channel_count, uint32_t frames, char **error);
 int upmixer_audio_ready(UpmixerAudioHost host, char **error);
 int upmixer_audio_finish(UpmixerAudioHost host, char **error);
+int64_t upmixer_audio_take_reset_frame(UpmixerAudioHost host);
 int64_t upmixer_audio_playback_frame(UpmixerAudioHost host);
 void upmixer_audio_destroy(UpmixerAudioHost host);
 void upmixer_audio_free_error(char *error);

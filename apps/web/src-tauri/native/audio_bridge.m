@@ -30,7 +30,9 @@ static const int64_t MEDIA_QUEUE_FRAMES = 16384;
 @property(nonatomic) BOOL upmixer714;
 @property(nonatomic) int64_t startFrame;
 @property(nonatomic) int64_t nextFrame;
+@property(nonatomic) int64_t enqueuedFrame;
 @property(nonatomic) int64_t lastFrame;
+@property(nonatomic) int64_t resetFrame;
 @property(nonatomic) double lastProgress;
 @property(nonatomic) double lastEnqueue;
 @end
@@ -99,8 +101,9 @@ static BOOL media_ok(UpmixerAudio *host, char **error) {
 }
 
 static void start_media_if_ready(UpmixerAudio *host) {
-    if (!host.playing || host.started || host.nextFrame == host.startFrame) return;
-    if (!host.finished && host.nextFrame - host.startFrame < MEDIA_PREFILL_FRAMES) return;
+    if (!host.playing || host.started || host.resetFrame >= 0 || host.enqueuedFrame == host.startFrame) return;
+    if (host.enqueuedFrame - host.startFrame < MEDIA_PREFILL_FRAMES
+        && !(host.finished && host.pending.count == 0)) return;
     host.started = YES;
     host.lastProgress = host.lastEnqueue = monotonic_seconds();
     [host.synchronizer setRate:1.0f time:CMTimeMake(host.startFrame, 48000)];
@@ -116,14 +119,33 @@ static void request_media(UpmixerAudio *host) {
         while (strongHost.pending.count && strongHost.renderer.readyForMoreMediaData) {
             CMSampleBufferRef sample = (__bridge CMSampleBufferRef)strongHost.pending.firstObject;
             [strongHost.renderer enqueueSampleBuffer:sample];
+            strongHost.enqueuedFrame = CMTimeConvertScale(CMTimeAdd(
+                CMSampleBufferGetPresentationTimeStamp(sample), CMSampleBufferGetDuration(sample)),
+                48000, kCMTimeRoundingMethod_RoundTowardZero).value;
             strongHost.lastEnqueue = monotonic_seconds();
             [strongHost.pending removeObjectAtIndex:0];
         }
+        start_media_if_ready(strongHost);
         if (strongHost.pending.count == 0) {
             [strongHost.renderer stopRequestingMediaData];
             strongHost.requesting = NO;
         }
     }];
+}
+
+// Runs on the same serial queue as enqueueing. Hold the clock while Rust
+// acknowledges the new timeline and Apple accepts a replacement prefill.
+static void reset_media(UpmixerAudio *host) {
+    host.synchronizer.rate = 0.0f;
+    int64_t frame = MIN(host.nextFrame, media_frame(host));
+    [host.renderer stopRequestingMediaData];
+    host.requesting = NO;
+    [host.renderer flush];
+    [host.pending removeAllObjects];
+    host.startFrame = host.resetFrame = host.nextFrame = host.enqueuedFrame = frame;
+    host.started = NO;
+    host.finished = NO;
+    host.lastProgress = host.lastEnqueue = monotonic_seconds();
 }
 
 UpmixerAudioHost upmixer_audio_create(const char *layout_name, bool spatial, bool head_tracking,
@@ -139,7 +161,8 @@ UpmixerAudioHost upmixer_audio_create(const char *layout_name, bool spatial, boo
         AVAudioChannelLayout *layout = [[AVAudioChannelLayout alloc] initWithLayoutTag:layout_tag(name)];
         UpmixerAudio *host = [UpmixerAudio new];
         host.upmixer714 = [name isEqualToString:@"7.1.4"];
-        host.startFrame = host.nextFrame = host.lastFrame = start_frame;
+        host.startFrame = host.nextFrame = host.enqueuedFrame = host.lastFrame = start_frame;
+        host.resetFrame = -1;
         host.lastProgress = host.lastEnqueue = monotonic_seconds();
         BOOL media = upmixer_audio_uses_media_pipeline(layout_name, spatial);
         host.format = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
@@ -166,13 +189,14 @@ UpmixerAudioHost upmixer_audio_create(const char *layout_name, bool spatial, boo
             [host.synchronizer setRate:0.0f time:CMTimeMake(start_frame, 48000)];
             __weak UpmixerAudio *weakHost = host;
             host.flushObserver = [[NSNotificationCenter defaultCenter]
-                addObserverForName:AVSampleBufferAudioRendererWasFlushedAutomaticallyNotification
+                addObserverForName:nil
                 object:host.renderer queue:nil usingBlock:^(NSNotification *note) {
-                    (void)note;
+                    if (![note.name isEqualToString:AVSampleBufferAudioRendererWasFlushedAutomaticallyNotification]
+                        && ![note.name isEqualToString:AVSampleBufferAudioRendererOutputConfigurationDidChangeNotification]) return;
                     UpmixerAudio *strongHost = weakHost;
                     if (!strongHost) return;
                     dispatch_async(strongHost.queue, ^{
-                        strongHost.failure = @"Apple media output was reset; restart preview";
+                        reset_media(strongHost);
                     });
                 }];
         } else {
@@ -301,6 +325,7 @@ bool upmixer_audio_schedule(UpmixerAudioHost opaque, const float *const *channel
         if (host.renderer) {
             __block BOOL ok = NO;
             dispatch_sync(host.queue, ^{
+                if (host.resetFrame >= 0) return;
                 if (!media_ok(host, error)) return;
                 if (host.nextFrame > INT64_MAX - frames
                     || host.pending.count >= MEDIA_QUEUE_FRAMES / BUFFER_FRAMES
@@ -309,7 +334,7 @@ bool upmixer_audio_schedule(UpmixerAudioHost opaque, const float *const *channel
                     return;
                 }
                 if (host.started && host.playing && media_frame(host) > host.nextFrame + BUFFER_FRAMES) {
-                    set_error(error, nil, @"Apple audio underrun: realtime rendering could not keep up");
+                    reset_media(host);
                     return;
                 }
                 CMSampleBufferRef sample = media_sample(host, channels, frames, error);
@@ -354,11 +379,23 @@ int64_t upmixer_audio_playback_frame(UpmixerAudioHost opaque) {
     return frame;
 }
 
+int64_t upmixer_audio_take_reset_frame(UpmixerAudioHost opaque) {
+    UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
+    if (!host.renderer) return -1;
+    __block int64_t frame;
+    dispatch_sync(host.queue, ^{
+        frame = host.resetFrame;
+        host.resetFrame = -1;
+    });
+    return frame;
+}
+
 int upmixer_audio_finish(UpmixerAudioHost opaque, char **error) {
     UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
     if (!host.renderer) return 1;
-    __block int drained;
+    __block int drained = 0;
     dispatch_sync(host.queue, ^{
+        if (host.resetFrame >= 0) return;
         host.finished = YES;
         start_media_if_ready(host);
         drained = media_ok(host, error) ? (host.pending.count == 0 && media_frame(host) >= host.nextFrame) : -1;
