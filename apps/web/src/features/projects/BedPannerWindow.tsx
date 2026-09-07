@@ -63,6 +63,9 @@ export function BedPannerWindow({
   maxElevationDeg,
   ambientRear = 0,
   ambientHeight = 0,
+  ambientTrimDb = 0,
+  heightTexture = 0,
+  ambientHeightCutoffHz = 2000,
   ambientHeightCrossoverHz = 2000,
   ariaLabel = "Bed panner",
   onPlacement,
@@ -77,11 +80,14 @@ export function BedPannerWindow({
   maxElevationDeg: number;
   ambientRear?: number;
   ambientHeight?: number;
+  ambientTrimDb?: number;
+  heightTexture?: number;
+  ambientHeightCutoffHz?: number;
   ambientHeightCrossoverHz?: number;
   ariaLabel?: string;
   onPlacement: (next: StemPlacement) => void;
   onRoute: (patch: Record<string, number>) => void;
-  onAmbient?: (patch: { rear?: number; height?: number; heightCrossoverHz?: number }) => void;
+  onAmbient?: (patch: { rear?: number; height?: number; ambientTrimDb?: number; heightTexture?: number; heightCrossoverHz?: number; heightCutoffHz?: number }) => void;
 }) {
   const [mode, setMode] = React.useState<PannerMode>("planar");
   const ringInsets = [12.5, 25, 37.5];
@@ -93,8 +99,9 @@ export function BedPannerWindow({
   const diversity = placement.diversity ?? 0;
   const centerLevel = placement.center_level_db ?? 0;
   const lfeLevel = dbFromGain(route.LFE ?? 0);
-  const heightCrossover = Math.min(4000, Math.max(500, ambientHeightCrossoverHz));
-  const heightCrossoverPosition = Math.log(heightCrossover / 500) / Math.log(8);
+  const heightTone = Math.min(4000, Math.max(500, ambientHeightCutoffHz));
+  const heightTonePosition = Math.log(heightTone / 500) / Math.log(8);
+  const heightToneLabel = "Height cutoff";
   const point = puckPoint(placement, mode, maxElevationDeg);
   const left = channelPoint(placement.azimuth_deg + placement.width_deg / 2, Math.hypot(point.x - 0.5, point.y - 0.5));
   const right = channelPoint(placement.azimuth_deg - placement.width_deg / 2, Math.hypot(point.x - 0.5, point.y - 0.5));
@@ -210,9 +217,19 @@ export function BedPannerWindow({
             value={[ambientHeight]} onValueChange={([height]) => onAmbient({ height })} />
         </label>}
         {hasHeight && <label className="block text-[11px] text-muted-foreground">
-          <span className="flex items-center gap-1"><MoveVertical className="h-3 w-3" />Height crossover <span className="ml-auto">{Math.round(heightCrossover)} Hz</span></span>
-          <Slider aria-label="Height crossover" className="mt-2" min={0} max={1} step={0.01}
-            value={[heightCrossoverPosition]} onValueChange={([value]) => onAmbient({ heightCrossoverHz: 500 * 8 ** value })} />
+          <span className="flex items-center gap-1"><MoveVertical className="h-3 w-3" />{heightToneLabel} <span className="ml-auto">{Math.round(heightTone)} Hz</span></span>
+          <Slider aria-label={heightToneLabel} className="mt-2" min={0} max={1} step={0.01}
+            value={[heightTonePosition]} onValueChange={([value]) => onAmbient({ heightCutoffHz: 500 * 8 ** value })} />
+        </label>}
+        {(hasSurround || hasHeight) && <label className="block text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1"><CloudFog className="h-3 w-3" />Ambience trim <span className="ml-auto tabular-nums">{ambientTrimDb > 0 ? "+" : ""}{ambientTrimDb.toFixed(1)} dB</span></span>
+          <Slider aria-label="Ambience trim" className="mt-2" min={0} max={6} step={0.5}
+            value={[ambientTrimDb]} onValueChange={([trim]) => onAmbient({ ambientTrimDb: trim })} />
+        </label>}
+        {hasHeight && <label className="block text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1"><MoveVertical className="h-3 w-3" />Height texture <span className="ml-auto tabular-nums">{Math.round(heightTexture * 100)}%</span></span>
+          <Slider aria-label="Height texture" className="mt-2" min={0} max={0.25} step={0.01}
+            value={[heightTexture]} onValueChange={([texture]) => onAmbient({ heightTexture: texture })} />
         </label>}
       </div>}
     </div>

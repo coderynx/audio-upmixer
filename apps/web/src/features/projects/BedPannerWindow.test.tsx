@@ -40,8 +40,8 @@ describe("BedPannerWindow", () => {
     fireEvent.keyDown(screen.getByRole("slider", { name: "Ambience to height" }), { key: "ArrowRight" });
     expect(onAmbient).toHaveBeenLastCalledWith({ height: 0.51 });
 
-    fireEvent.keyDown(screen.getByRole("slider", { name: "Height crossover" }), { key: "ArrowRight" });
-    expect(onAmbient).toHaveBeenLastCalledWith({ heightCrossoverHz: expect.any(Number) });
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Height cutoff" }), { key: "ArrowRight" });
+    expect(onAmbient).toHaveBeenLastCalledWith({ heightCutoffHz: expect.any(Number) });
   });
 
   it("uses the spherical puck radius for elevation and hides stereo spread on mono beds", async () => {
@@ -57,5 +57,32 @@ describe("BedPannerWindow", () => {
 
     expect(onPlacement).toHaveBeenLastCalledWith(expect.objectContaining({ elevation_deg: 1 }));
     expect(screen.queryByRole("slider", { name: "Spread" })).not.toBeInTheDocument();
+  });
+
+  it("uses the height cutoff", async () => {
+    const user = userEvent.setup();
+    const onAmbient = vi.fn();
+    render(<BedPannerWindow stemName="Bass" placement={PLACEMENT} route={{}} channels={CHANNELS}
+      inputChannels={1} maxElevationDeg={30} ambientHeightCutoffHz={500}
+      ambientHeightCrossoverHz={4000} onPlacement={vi.fn()} onRoute={vi.fn()} onAmbient={onAmbient} />);
+
+    await user.click(screen.getByRole("button", { name: "Bed panner" }));
+    expect(screen.getByRole("slider", { name: "Height cutoff" })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Height cutoff" }), { key: "ArrowRight" });
+    expect(onAmbient).toHaveBeenLastCalledWith({ heightCutoffHz: expect.any(Number) });
+  });
+
+  it("edits revision-2 wet trim and height texture", async () => {
+    const user = userEvent.setup();
+    const onAmbient = vi.fn();
+    render(<BedPannerWindow stemName="Bass" placement={PLACEMENT} route={{}} channels={CHANNELS}
+      inputChannels={1} maxElevationDeg={30} ambientTrimDb={3} heightTexture={0.1}
+      onPlacement={vi.fn()} onRoute={vi.fn()} onAmbient={onAmbient} />);
+
+    await user.click(screen.getByRole("button", { name: "Bed panner" }));
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Ambience trim" }), { key: "ArrowRight" });
+    expect(onAmbient).toHaveBeenLastCalledWith({ ambientTrimDb: 3.5 });
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Height texture" }), { key: "ArrowRight" });
+    expect(onAmbient).toHaveBeenLastCalledWith({ heightTexture: 0.11 });
   });
 });

@@ -171,6 +171,21 @@ fn elevation_eq<'py>(
     PyArray1::from_vec(py, out)
 }
 
+/// High-pass direct-residual detail for the revision-2 height texture. The
+/// caller applies the same existing height elevation EQ as ambient feeds.
+#[pyfunction(signature = (signal, sample_rate, cutoff_hz = ambient::AMBIENT_HEIGHT_CROSSOVER_HZ))]
+fn height_texture<'py>(
+    py: Python<'py>,
+    signal: PyReadonlyArray1<'py, f64>,
+    sample_rate: u32,
+    cutoff_hz: f64,
+) -> Bound<'py, PyArray1<f64>> {
+    PyArray1::from_vec(
+        py,
+        sends::height_texture(signal.as_array().to_vec().as_slice(), sample_rate, cutoff_hz),
+    )
+}
+
 /// Magnitude response of the whole `elevation_eq` chain at each frequency, so
 /// the STFT height mask and the time-domain send share one filter design.
 #[pyfunction]
@@ -227,6 +242,75 @@ fn ambient_split<'py>(
     let mut split = ambient::AmbientSplit::with_height_crossover(sample_rate, height_crossover_hz);
     let block = split.advance(0, &left, &right, 0, n);
     (
+        PyArray1::from_slice(py, block.rear[0]),
+        PyArray1::from_slice(py, block.rear[1]),
+        PyArray1::from_slice(py, block.height[0]),
+        PyArray1::from_slice(py, block.height[1]),
+    )
+}
+
+/// Run the revision-2 splitter and return the direct residual, raw ambient
+/// pair, and the two destination feeds. The tuple order is
+/// `(direct_l, direct_r, raw_l, raw_r, rear_l, rear_r, height_l, height_r)`.
+/// Rear and height are still unvoiced here; the existing `highpass` and
+/// `elevation_eq` bindings apply the destination voicing used by export.
+/// The four optional side flags gate subtraction for asymmetric layouts while
+/// retaining the six-argument call used by existing exporters.
+#[pyfunction]
+#[pyo3(signature = (left, right, sample_rate, rear_amount, height_amount,
+                    height_crossover_hz = ambient::AMBIENT_HEIGHT_CROSSOVER_HZ,
+                    rear_left = true, rear_right = true, height_left = true,
+                    height_right = true))]
+fn ambient_route<'py>(
+    py: Python<'py>,
+    left: PyReadonlyArray1<'py, f64>,
+    right: PyReadonlyArray1<'py, f64>,
+    sample_rate: u32,
+    rear_amount: f64,
+    height_amount: f64,
+    height_crossover_hz: f64,
+    rear_left: bool,
+    rear_right: bool,
+    height_left: bool,
+    height_right: bool,
+) -> (
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+    Bound<'py, PyArray1<f64>>,
+) {
+    let left = left.as_array().to_vec();
+    let right = right.as_array().to_vec();
+    let n = left.len().min(right.len());
+    let mut split = ambient::AmbientSplit::with_height_crossover_and_cutoff(
+        sample_rate,
+        ambient::AMBIENT_HEIGHT_CROSSOVER_HZ,
+        height_crossover_hz,
+    );
+    let block = split.advance_with_side_amounts(
+        0,
+        &left,
+        &right,
+        0,
+        n,
+        [
+            if rear_left { rear_amount } else { 0.0 },
+            if rear_right { rear_amount } else { 0.0 },
+        ],
+        [
+            if height_left { height_amount } else { 0.0 },
+            if height_right { height_amount } else { 0.0 },
+        ],
+    );
+    (
+        PyArray1::from_slice(py, block.direct[0]),
+        PyArray1::from_slice(py, block.direct[1]),
+        PyArray1::from_slice(py, block.rear[0]),
+        PyArray1::from_slice(py, block.rear[1]),
         PyArray1::from_slice(py, block.rear[0]),
         PyArray1::from_slice(py, block.rear[1]),
         PyArray1::from_slice(py, block.height[0]),
@@ -305,6 +389,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(soft_limit, m)?)?;
     m.add_function(wrap_pyfunction!(velvet_pair_send, m)?)?;
     m.add_function(wrap_pyfunction!(elevation_eq, m)?)?;
+    m.add_function(wrap_pyfunction!(height_texture, m)?)?;
     m.add_function(wrap_pyfunction!(elevation_response, m)?)?;
     m.add("VELVET_LENGTH_MS", decorrelate::VELVET_LENGTH_MS)?;
     m.add("VELVET_TAPS_PER_SIDE", decorrelate::VELVET_TAPS_PER_SIDE)?;
@@ -312,6 +397,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("VELVET_SEED_HEIGHT", decorrelate::VELVET_SEED_HEIGHT)?;
     m.add("VELVET_WET", decorrelate::VELVET_WET)?;
     m.add_function(wrap_pyfunction!(ambient_split, m)?)?;
+    m.add_function(wrap_pyfunction!(ambient_route, m)?)?;
     m.add_function(wrap_pyfunction!(stem_eq, m)?)?;
     m.add_function(wrap_pyfunction!(stem_dynamics, m)?)?;
     m.add_function(wrap_pyfunction!(stem_dynamic_eq, m)?)?;

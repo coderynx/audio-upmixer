@@ -337,7 +337,7 @@ describe("ProjectDetailPage tabs", () => {
     expect(screen.getByRole("slider", { name: "LFE level" })).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Ambience to rear" })).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Ambience to height" })).toBeInTheDocument();
-    expect(screen.getByRole("slider", { name: "Height crossover" })).toBeInTheDocument();
+    expect(screen.getByRole("slider", { name: "Height cutoff" })).toBeInTheDocument();
     expect(screen.queryByRole("slider", { name: "LFE send" })).not.toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole("slider", { name: "Ambience to height" }), { key: "ArrowUp" });
     await waitFor(() => expect(api.saveProjectTrackLayout).toHaveBeenCalled());
@@ -406,6 +406,33 @@ describe("ProjectDetailPage tabs", () => {
       mixing: { stem_ambient_height: Record<string, number> };
     };
     expect(saved.mixing.stem_ambient_height.Vocals).toBeCloseTo(0.01);
+  });
+
+  it("shows phase-2 enhancements in the selected-stem sidebar and persists them", async () => {
+    const config = {
+      choices: {
+        layout_channels: {
+          "7.1.4": ["FL", "FR", "C", "LFE", "SL", "SR", "TFL", "TFR", "TBL", "TBR"],
+        },
+      },
+    } as unknown as Configuration;
+    const user = userEvent.setup();
+    renderPage(config);
+    await waitFor(() => expect(screen.getByText("Editable master")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Mixer" }));
+    await user.click(screen.getByRole("button", { name: "Vocals" }));
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Ambience trim" }), { key: "ArrowRight" });
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Height texture" }), { key: "ArrowRight" });
+
+    await waitFor(() => expect(api.saveProjectTrackLayout).toHaveBeenCalled());
+    const [, , , payload] = vi.mocked(api.saveProjectTrackLayout).mock.calls.at(-1)!;
+    const saved = payload.manifest_overrides as unknown as {
+      mixing: { stem_ambient_trim_db: Record<string, number>; stem_height_texture: Record<string, number> };
+    };
+    expect(saved.mixing.stem_ambient_trim_db.Vocals).toBeCloseTo(0.5);
+    expect(saved.mixing.stem_height_texture.Vocals).toBeCloseTo(0.01);
+    vi.mocked(api.getProject).mockResolvedValue(project);
   });
 
   it("writes the downmix lock to the mixing block", async () => {

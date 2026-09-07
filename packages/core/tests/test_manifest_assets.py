@@ -350,6 +350,12 @@ class TestListManifestKeys:
         ):
             assert k in keys
 
+    def test_ambient_routing_parameters_are_discoverable(self):
+        keys = list_manifest_keys()
+        assert keys["mixing.stem_ambient_trim_db"] == "dict"
+        assert keys["mixing.stem_height_texture"] == "dict"
+        assert keys["mixing.stem_ambient_height_cutoff_hz"] == "dict"
+
     def test_stem_ensemble_manifest_parameter_has_config_default(self):
         parameter = next(item for item in manifest_parameter_schema() if item["path"] == "engine.stem_ensemble")
         assert parameter["type"] == "bool"

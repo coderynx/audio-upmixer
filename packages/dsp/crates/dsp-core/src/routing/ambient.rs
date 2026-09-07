@@ -9,6 +9,9 @@ use rustfft::num_complex::Complex64;
 use crate::kernels::fft::RealFft;
 use crate::kernels::stft::hann_periodic;
 
+mod ambient_bands;
+use ambient_bands::{erb_bands, Band, BandInterpolation};
+
 /// Analysis length. 21 ms at 48 kHz keeps the look-ahead small while
 /// resolving a reverb tail from the note that caused it.
 pub const AMBIENT_FFT_SIZE: usize = 1024;
@@ -36,6 +39,8 @@ const RELATIVE_ENERGY_FLOOR: f64 = 1e-6;
 
 /// One block of ambient signal, already split into its two destinations.
 pub struct AmbientBlock<'a> {
+    /// Direct residual after bounded ambient removal.
+    pub direct: [&'a [f64]; 2],
     pub rear: [&'a [f64]; 2],
     pub height: [&'a [f64]; 2],
 }
@@ -111,19 +116,6 @@ impl AmbientMatrix {
     }
 }
 
-struct Band {
-    start: usize,
-    end: usize,
-    centre_erb: f64,
-}
-
-#[derive(Clone, Copy)]
-struct BandInterpolation {
-    lower: usize,
-    upper: usize,
-    amount: f64,
-}
-
 pub struct AmbientSplit {
     fft: RealFft,
     n: usize,
@@ -147,6 +139,11 @@ pub struct AmbientSplit {
     ring: usize,
     height_crossover_hz: f64,
     target_height_crossover_hz: f64,
+    height_cutoff_hz: f64,
+    target_height_cutoff_hz: f64,
+    rear_amount: [f64; 2],
+    height_amount: [f64; 2],
+    direct: [Vec<f64>; 2],
     rear: [Vec<f64>; 2],
     height: [Vec<f64>; 2],
     cursor: Option<usize>,
@@ -166,6 +163,9 @@ impl AmbientSplit {
         let mut cola = vec![0.0; hop];
         for (i, w) in window.iter().enumerate() {
             cola[i % hop] += w * w;
+        }
+        for value in &mut cola {
+            *value = 1.0 / *value;
         }
         let ring = (n + 4 * hop).next_power_of_two();
         let bins = n / 2 + 1;
@@ -200,6 +200,11 @@ impl AmbientSplit {
             ring,
             height_crossover_hz,
             target_height_crossover_hz: height_crossover_hz,
+            height_cutoff_hz: AMBIENT_HEIGHT_CROSSOVER_HZ,
+            target_height_cutoff_hz: AMBIENT_HEIGHT_CROSSOVER_HZ,
+            rear_amount: [0.0; 2],
+            height_amount: [0.0; 2],
+            direct: [Vec::new(), Vec::new()],
             rear: [Vec::new(), Vec::new()],
             height: [Vec::new(), Vec::new()],
             cursor: None,
@@ -211,6 +216,17 @@ impl AmbientSplit {
         }
     }
 
+    pub fn with_height_crossover_and_cutoff(
+        sample_rate: u32,
+        height_crossover_hz: f64,
+        height_cutoff_hz: f64,
+    ) -> Self {
+        let mut split = Self::with_height_crossover(sample_rate, height_crossover_hz);
+        split.height_cutoff_hz = valid_height_crossover(height_cutoff_hz);
+        split.target_height_cutoff_hz = split.height_cutoff_hz;
+        split
+    }
+
     /// Samples the split reads past the end of the block it is asked for.
     pub fn look_ahead(&self) -> usize {
         self.n
@@ -219,6 +235,11 @@ impl AmbientSplit {
     /// Move a live crossover edit at the analysis-frame cadence.
     pub fn set_height_crossover(&mut self, height_crossover_hz: f64) {
         self.target_height_crossover_hz = valid_height_crossover(height_crossover_hz);
+    }
+
+    /// Move the revision-2 height voicing cutoff at the analysis-frame rate.
+    pub fn set_height_cutoff(&mut self, height_cutoff_hz: f64) {
+        self.target_height_cutoff_hz = valid_height_crossover(height_cutoff_hz);
     }
 
     pub fn reset(&mut self) {
@@ -255,6 +276,54 @@ impl AmbientSplit {
         start: usize,
         len: usize,
     ) -> AmbientBlock<'_> {
+        self.advance_with_amounts(base, left, right, start, len, 0.0, 0.0)
+    }
+
+    /// Ambient pairs plus a direct residual whose removal is bounded
+    /// independently at every STFT bin. It uses `R = r + min(h, 1-r) * H`;
+    /// this conservative overlap
+    /// keeps `R` in `[0, 1]` while reusing the rear and height transforms.
+    /// `rear_amount` and `height_amount` are layout-gated by the caller.
+    pub fn advance_with_amounts(
+        &mut self,
+        base: usize,
+        left: &[f64],
+        right: &[f64],
+        start: usize,
+        len: usize,
+        rear_amount: f64,
+        height_amount: f64,
+    ) -> AmbientBlock<'_> {
+        self.advance_with_side_amounts(
+            base,
+            left,
+            right,
+            start,
+            len,
+            [rear_amount; 2],
+            [height_amount; 2],
+        )
+    }
+
+    /// The same route with independent left/right destination amounts. A
+    /// layout with no destination for one side passes zero for that side, so
+    /// its direct anchor is never attenuated by an unrendered send.
+    pub fn advance_with_side_amounts(
+        &mut self,
+        base: usize,
+        left: &[f64],
+        right: &[f64],
+        start: usize,
+        len: usize,
+        rear_amount: [f64; 2],
+        height_amount: [f64; 2],
+    ) -> AmbientBlock<'_> {
+        self.rear_amount = rear_amount.map(valid_amount);
+        self.height_amount = height_amount.map(valid_amount);
+        let height_removal = [
+            self.height_amount[0].min(1.0 - self.rear_amount[0]),
+            self.height_amount[1].min(1.0 - self.rear_amount[1]),
+        ];
         if self.cursor != Some(start) {
             self.reset();
             self.cursor = Some(start);
@@ -262,6 +331,7 @@ impl AmbientSplit {
         }
 
         for channel in 0..2 {
+            self.direct[channel].resize(len, 0.0);
             self.rear[channel].resize(len, 0.0);
             self.height[channel].resize(len, 0.0);
         }
@@ -277,11 +347,28 @@ impl AmbientSplit {
             let until = ((frame + 1) * self.hop).min(start + len);
             for offset in position..until {
                 let slot = offset & (self.ring - 1);
-                let cola = self.cola[offset & (self.hop - 1)];
+                let cola_inv = self.cola[offset & (self.hop - 1)];
                 let index = offset - start;
+                let source_index = offset.checked_sub(base);
+                let source_left = source_index
+                    .and_then(|source_index| left.get(source_index))
+                    .copied()
+                    .unwrap_or(0.0);
+                let source_right = source_index
+                    .and_then(|source_index| right.get(source_index))
+                    .copied()
+                    .unwrap_or(0.0);
                 for channel in 0..2 {
-                    self.rear[channel][index] = self.ola[0][channel][slot] / cola;
-                    self.height[channel][index] = self.ola[1][channel][slot] / cola;
+                    let source_sample = if channel == 0 {
+                        source_left
+                    } else {
+                        source_right
+                    };
+                    let removal = self.rear_amount[channel] * self.ola[0][channel][slot]
+                        + height_removal[channel] * self.ola[1][channel][slot];
+                    self.direct[channel][index] = source_sample - removal * cola_inv;
+                    self.rear[channel][index] = self.ola[0][channel][slot] * cola_inv;
+                    self.height[channel][index] = self.ola[1][channel][slot] * cola_inv;
                     self.ola[0][channel][slot] = 0.0;
                     self.ola[1][channel][slot] = 0.0;
                 }
@@ -291,6 +378,7 @@ impl AmbientSplit {
         self.cursor = Some(start + len);
 
         AmbientBlock {
+            direct: [&self.direct[0], &self.direct[1]],
             rear: [&self.rear[0], &self.rear[1]],
             height: [&self.height[0], &self.height[1]],
         }
@@ -299,6 +387,8 @@ impl AmbientSplit {
     fn process_frame(&mut self, base: usize, left: &[f64], right: &[f64], index: usize) {
         self.height_crossover_hz +=
             (self.target_height_crossover_hz - self.height_crossover_hz) * 0.5;
+        self.height_cutoff_hz +=
+            (self.target_height_cutoff_hz - self.height_cutoff_hz) * 0.5;
         let frame_start = index * self.hop;
         self.windowed(left, base, frame_start, 0);
         self.windowed(right, base, frame_start, 1);
@@ -350,9 +440,9 @@ impl AmbientSplit {
             let right = self.spectrum[1][bin];
             let ambient_left = left * matrix.ll + right * matrix.lr;
             let ambient_right = left * matrix.lr.conj() + right * matrix.rr;
-            let height = height_mask(bin as f64 * self.bin_hz, self.height_crossover_hz);
-            self.masked[0][0][bin] = ambient_left * (1.0 - height);
-            self.masked[0][1][bin] = ambient_right * (1.0 - height);
+            let height = height_mask(bin as f64 * self.bin_hz, self.height_cutoff_hz);
+            self.masked[0][0][bin] = ambient_left;
+            self.masked[0][1][bin] = ambient_right;
             self.masked[1][0][bin] = ambient_left * height;
             self.masked[1][1][bin] = ambient_right * height;
         }
@@ -361,13 +451,13 @@ impl AmbientSplit {
 
     /// Windowed transform of one channel at `base`, left in `spectrum[side]`.
     fn windowed(&mut self, signal: &[f64], base: usize, frame_start: usize, side: usize) {
-        for i in 0..self.n {
-            let sample = (frame_start + i)
-                .checked_sub(base)
-                .and_then(|index| signal.get(index))
-                .copied()
-                .unwrap_or(0.0);
-            self.frame[i] = sample * self.window[i];
+        self.frame.fill(0.0);
+        if let Some(start) = frame_start.checked_sub(base) {
+            let available = signal.len().saturating_sub(start).min(self.n);
+            self.frame[..available].copy_from_slice(&signal[start..start + available]);
+            for (sample, window) in self.frame[..available].iter_mut().zip(&self.window) {
+                *sample *= *window;
+            }
         }
         self.fft
             .rfft_into(&mut self.frame, &mut self.spectrum[side]);
@@ -394,6 +484,14 @@ fn valid_height_crossover(value: f64) -> f64 {
         value
     } else {
         AMBIENT_HEIGHT_CROSSOVER_HZ
+    }
+}
+
+fn valid_amount(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        0.0
     }
 }
 
@@ -435,61 +533,4 @@ fn ambient_matrix(mut covariance: Covariance, gate: f64) -> AmbientMatrix {
         lr: -covariance.lr / lambda_max,
         rr: covariance.ll / lambda_max,
     }
-}
-
-fn erb_bands(bins: usize, sample_rate: u32, n: usize) -> (Vec<Band>, Vec<BandInterpolation>) {
-    let bin_hz = sample_rate as f64 / n as f64;
-    let mut bands: Vec<Band> = Vec::new();
-    let mut start = 0;
-    while start < bins {
-        let remaining = bins - start;
-        if remaining < AMBIENT_BAND_MIN_BINS && !bands.is_empty() {
-            bands.last_mut().expect("band exists").end = bins;
-            break;
-        }
-        let start_hz = start as f64 * bin_hz;
-        let end_hz = erb_hz(erb_rate(start_hz) + 1.0);
-        let mut end = (end_hz / bin_hz).ceil() as usize;
-        end = end.max(start + AMBIENT_BAND_MIN_BINS).min(bins);
-        if bins - end < AMBIENT_BAND_MIN_BINS {
-            end = bins;
-        }
-        let centre_erb = (erb_rate(start_hz) + erb_rate((end - 1) as f64 * bin_hz)) * 0.5;
-        bands.push(Band {
-            start,
-            end,
-            centre_erb,
-        });
-        start = end;
-    }
-
-    let mut interpolation = Vec::with_capacity(bins);
-    let mut lower = 0;
-    for bin in 0..bins {
-        let rate = erb_rate(bin as f64 * bin_hz);
-        while lower + 1 < bands.len() && rate > bands[lower + 1].centre_erb {
-            lower += 1;
-        }
-        let upper = (lower + 1).min(bands.len() - 1);
-        let amount = if lower == upper {
-            0.0
-        } else {
-            ((rate - bands[lower].centre_erb) / (bands[upper].centre_erb - bands[lower].centre_erb))
-                .clamp(0.0, 1.0)
-        };
-        interpolation.push(BandInterpolation {
-            lower,
-            upper,
-            amount,
-        });
-    }
-    (bands, interpolation)
-}
-
-fn erb_rate(hz: f64) -> f64 {
-    21.4 * (1.0 + 0.00437 * hz).log10()
-}
-
-fn erb_hz(rate: f64) -> f64 {
-    (10.0_f64.powf(rate / 21.4) - 1.0) / 0.00437
 }

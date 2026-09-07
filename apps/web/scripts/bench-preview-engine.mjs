@@ -19,6 +19,14 @@ const SEEK_FRAMES = 1024;
 const DEADLINE_MS = (QUANTUM / SR) * 1000;
 const SECONDS = 5;
 const RUNS = Number.parseInt(process.env.BENCH_RUNS ?? "3", 10);
+// The ambient case is intentionally identical apart from the processing
+// revision so its cost can be compared against the legacy route.
+const AMBIENT_REVISION = Number.parseInt(process.env.BENCH_AMBIENT_REVISION ?? "2", 10);
+const AMBIENT_TRIM_DB = Number.parseFloat(process.env.BENCH_AMBIENT_TRIM_DB ?? "0");
+const HEIGHT_TEXTURE = Number.parseFloat(process.env.BENCH_HEIGHT_TEXTURE ?? "0");
+const WASM_PATH = process.env.BENCH_WASM_PATH
+  ? path.resolve(process.env.BENCH_WASM_PATH)
+  : path.join(webRoot, "public/wasm/upmixer_dsp.wasm");
 
 // Worst case we ship: a full 7.1.4 bed, every stem a separation can produce,
 // order-3 binaural decode, and the whole mastering chain lit up.
@@ -138,7 +146,7 @@ const CASES = {
 };
 
 function instantiate() {
-  const bytes = readFileSync(path.join(webRoot, "public/wasm/upmixer_dsp.wasm"));
+  const bytes = readFileSync(WASM_PATH);
   return new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports;
 }
 
@@ -160,6 +168,8 @@ function params(mode, decodeTaps, options = {}) {
     surround_downmix_coeff: 0.7071067811865476,
     height_downmix_coeff: 0.7071067811865476,
     spatial_downmix_lock: downmixLock,
+    // Exercise the selected ambient path explicitly; omitted revisions are
+    // the legacy renderer and would make this case understate its work.
     sends: {
       surround_bass_cutoff_hz: 250,
       height_low_rolloff_hz: 150, height_low_rolloff_gain: 0.15,
@@ -172,6 +182,10 @@ function params(mode, decodeTaps, options = {}) {
       rebalance_db: 0, enabled: true, eq_fir: [], route_scale: 1,
       ambient_rear: ambient ? 0.8 : 0, ambient_height: ambient ? 0.8 : 0,
       ambient_height_crossover_hz: 2000,
+      ...(ambient && AMBIENT_REVISION === 2 ? {
+        ambient_trim_db: AMBIENT_TRIM_DB,
+        height_texture: HEIGHT_TEXTURE,
+      } : {}),
       object_mode: objectMode ? "linked-stereo" : null,
       object_placement: objectMode
         ? { azimuth_deg: 45, elevation_deg: 20, width_deg: 60, object_size: 0.4 }
@@ -363,6 +377,15 @@ function run({ label, mode, decode, kind, ambient, objectMode, downmixLock, prod
 
 if (!Number.isInteger(RUNS) || RUNS < 1) {
   throw new Error("BENCH_RUNS must be a positive integer");
+}
+if (![1, 2].includes(AMBIENT_REVISION)) {
+  throw new Error("BENCH_AMBIENT_REVISION must be 1 or 2");
+}
+if (!Number.isFinite(AMBIENT_TRIM_DB) || AMBIENT_TRIM_DB < 0 || AMBIENT_TRIM_DB > 6) {
+  throw new Error("BENCH_AMBIENT_TRIM_DB must be between 0 and 6");
+}
+if (!Number.isFinite(HEIGHT_TEXTURE) || HEIGHT_TEXTURE < 0 || HEIGHT_TEXTURE > 0.25) {
+  throw new Error("BENCH_HEIGHT_TEXTURE must be between 0 and 0.25");
 }
 
 function median(values) {

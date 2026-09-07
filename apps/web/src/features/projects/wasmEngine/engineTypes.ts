@@ -20,6 +20,9 @@ export type MixPreview = {
   stem_dynamics?: Record<string, StemDynamicsSettings>;
   stem_ambient_rear?: Record<string, number>;
   stem_ambient_height?: Record<string, number>;
+  stem_ambient_trim_db?: Record<string, number>;
+  stem_height_texture?: Record<string, number>;
+  stem_ambient_height_cutoff_hz?: Record<string, number>;
   stem_ambient_height_crossover_hz?: Record<string, number>;
   stem_object_mode?: Record<string, "linked-stereo" | "mono">;
   stem_placement?: Record<string, { azimuth_deg: number; elevation_deg: number; width_deg: number; object_size: number; diversity?: number; center_level_db?: number }>;

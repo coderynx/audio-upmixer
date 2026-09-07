@@ -519,22 +519,47 @@ def validate_manifest(data: dict) -> None:
                     raise ManifestError(
                         f"{location}.mixing.{field}.{stem_key} must be in 0..1."
                     )
-        crossovers = mixing.get("stem_ambient_height_crossover_hz")
-        if crossovers is not None:
-            if not isinstance(crossovers, dict):
-                raise ManifestError(
-                    f"{location}.mixing.stem_ambient_height_crossover_hz must be a mapping."
-                )
-            for stem_key, value in crossovers.items():
+        for field, minimum, maximum in (
+            ("stem_ambient_trim_db", 0.0, 6.0),
+            ("stem_height_texture", 0.0, 0.25),
+        ):
+            values = mixing.get(field)
+            if values is None:
+                continue
+            if not isinstance(values, dict):
+                raise ManifestError(f"{location}.mixing.{field} must be a mapping.")
+            for stem_key, value in values.items():
                 if not _valid_route_stem(stem_key):
                     raise ManifestError(f"Unknown stem routing key '{stem_key}'.")
                 if isinstance(value, bool) or not isinstance(value, (int, float)):
                     raise ManifestError(
-                        f"{location}.mixing.stem_ambient_height_crossover_hz.{stem_key} must be a number in 500..4000."
+                        f"{location}.mixing.{field}.{stem_key} must be a number in "
+                        f"{minimum}..{maximum}."
+                    )
+                if not math.isfinite(float(value)) or not minimum <= float(value) <= maximum:
+                    raise ManifestError(
+                        f"{location}.mixing.{field}.{stem_key} must be in "
+                        f"{minimum}..{maximum}."
+                    )
+        for field in (
+            "stem_ambient_height_crossover_hz",
+            "stem_ambient_height_cutoff_hz",
+        ):
+            values = mixing.get(field)
+            if values is None:
+                continue
+            if not isinstance(values, dict):
+                raise ManifestError(f"{location}.mixing.{field} must be a mapping.")
+            for stem_key, value in values.items():
+                if not _valid_route_stem(stem_key):
+                    raise ManifestError(f"Unknown stem routing key '{stem_key}'.")
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ManifestError(
+                        f"{location}.mixing.{field}.{stem_key} must be a number in 500..4000."
                     )
                 if not math.isfinite(float(value)) or not 500.0 <= float(value) <= 4000.0:
                     raise ManifestError(
-                        f"{location}.mixing.stem_ambient_height_crossover_hz.{stem_key} must be in 500..4000."
+                        f"{location}.mixing.{field}.{stem_key} must be in 500..4000."
                     )
         routing = mixing.get("stem_routing")
         if routing is None:

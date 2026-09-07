@@ -3,24 +3,28 @@
 //! Mirrors `separation/stem_router.py::StemRouter.route` block by block: each
 //! shaped send carries the filter state and decorrelator history its offline
 //! counterpart would have accumulated, so the two agree sample for sample.
-
 use crate::kernels::biquad::SosFilter;
-use crate::kernels::butter::{butter_sos, linkwitz_riley_lowpass_sos, BandType};
+use crate::kernels::butter::{butter_sos, BandType};
 use crate::routing::ambient::AmbientSplit;
 use crate::routing::decorrelate::{
     velvet_pair_seeded, VelvetFir, VelvetLine, VELVET_SEED, VELVET_SEED_HEIGHT,
 };
-use crate::routing::sends::directional_band_sos;
+use crate::routing::sends::{directional_band_sos, height_texture_sos};
 use crate::stem_dynamics::{StemDynamics, StemDynamicsParams};
 use crate::stem_dynamic_eq::{StemDynamicEq, StemDynamicEqParams};
 use crate::stem_eq::{StemEq, StemEqParams};
-
 use super::params::{SendParams, SendShape};
+use super::state::OnePole;
+
+const AMBIENT_GAIN_RAMP_MS: f64 = 8.0;
+
+mod routing_ambient;
+pub use routing_ambient::LfeBus;
 
 /// One shaped send: a filter chain and, for a send fed from the dry stem,
 /// one side of a decorrelator pair. The ambient sends carry no decorrelator:
 /// their two sides are already independent signals — that is what the split
-/// selected them for — so a velvet pair would only smear them.
+    /// selected them for, so a velvet pair would only smear them.
 struct Send {
     filters: Vec<SosFilter>,
     velvet: Option<VelvetLine>,
@@ -178,6 +182,7 @@ pub const SIGNALS: usize = 13;
 /// when the stem asks for it — the primary/ambient split and the four extra
 /// sends its ambient half plays through.
 pub struct StemRouteState {
+    sample_rate_hz: f64,
     pub eq: Option<StemEq>,
     dynamic_eq: Option<StemDynamicEq>,
     dynamics: Option<StemDynamics>,
@@ -191,9 +196,25 @@ pub struct StemRouteState {
     ahead: Ahead,
     ambient_surround: [Send; 2],
     ambient_height: [Send; 2],
+    ambient_texture: [Send; 2],
+    ambient_texture_cutoff: [SosFilter; 2],
+    ambient_rear_gain: [OnePole; 2],
+    ambient_height_gain: [OnePole; 2],
+    ambient_trim_gain: OnePole,
+    height_texture_gain: [OnePole; 2],
+    height_texture_cutoff: OnePole,
+    ambient_trim_target: f64,
+    height_texture_cutoff_target: f64,
+    ambient_gains_initialized: bool,
+    height_texture_initialized: bool,
+    /// Distinguishes a fresh route from a live texture enable. A fresh
+    /// configured route starts at its target; a live edit must ramp from zero.
+    texture_started: bool,
+    texture_active: bool,
     /// The dry pair of the block being shaped, after the ambient half has
     /// been taken out of it.
     scratch: [Vec<f64>; 2],
+    texture_scratch: [Vec<f64>; 2],
     /// Last block's signals, indexed by [`shape_index`]: the dry pair, their
     /// mono sum, the four shaped sends, then the four ambient sends.
     shaped: [Vec<f64>; SIGNALS],
@@ -215,6 +236,10 @@ impl StemRouteState {
             p.height_directional_band_hz,
             sample_rate,
             p.height_directional_band_gain,
+        );
+        let texture_cutoff = height_texture_sos(
+            sample_rate,
+            crate::routing::ambient::AMBIENT_HEIGHT_CROSSOVER_HZ,
         );
 
         let (surround_l, surround_r) = velvet_pair_seeded(sample_rate, VELVET_SEED);
@@ -240,6 +265,7 @@ impl StemRouteState {
         };
 
         Self {
+            sample_rate_hz: sample_rate as f64,
             eq: eq.map(|params| StemEq::new(sample_rate, params)),
             dynamic_eq: dynamic_eq.map(|params| StemDynamicEq::new(sample_rate, params)),
             dynamics: dynamics.map(|params| StemDynamics::new(sample_rate, params)),
@@ -252,41 +278,40 @@ impl StemRouteState {
             ahead: Ahead::default(),
             ambient_surround: [surround_send(None), surround_send(None)],
             ambient_height: [height_send(None), height_send(None)],
+            ambient_texture: [height_send(None), height_send(None)],
+            ambient_texture_cutoff: [
+                SosFilter::from_flat(&texture_cutoff),
+                SosFilter::from_flat(&texture_cutoff),
+            ],
+            ambient_rear_gain: std::array::from_fn(|_| {
+                OnePole::new(AMBIENT_GAIN_RAMP_MS, sample_rate as f64)
+            }),
+            ambient_height_gain: std::array::from_fn(|_| {
+                OnePole::new(AMBIENT_GAIN_RAMP_MS, sample_rate as f64)
+            }),
+            ambient_trim_gain: OnePole::new_at(AMBIENT_GAIN_RAMP_MS, sample_rate as f64, 1.0),
+            height_texture_gain: std::array::from_fn(|_| {
+                OnePole::new(AMBIENT_GAIN_RAMP_MS, sample_rate as f64)
+            }),
+            height_texture_cutoff: OnePole::new_at(
+                AMBIENT_GAIN_RAMP_MS,
+                sample_rate as f64,
+                crate::routing::ambient::AMBIENT_HEIGHT_CROSSOVER_HZ,
+            ),
+            ambient_trim_target: 1.0,
+            height_texture_cutoff_target: crate::routing::ambient::AMBIENT_HEIGHT_CROSSOVER_HZ,
+            ambient_gains_initialized: false,
+            height_texture_initialized: false,
+            texture_started: false,
+            texture_active: false,
             scratch: Default::default(),
+            texture_scratch: Default::default(),
             shaped: Default::default(),
         }
     }
 
-    /// Build or drop the ambient half.
-    pub fn set_ambient(
-        &mut self,
-        sample_rate: u32,
-        p: &SendParams,
-        wanted: bool,
-        height_crossover_hz: f64,
-    ) {
-        if !wanted {
-            self.split = None;
-            return;
-        }
-        if self.split.is_none() {
-            self.split = Some(AmbientSplit::with_height_crossover(
-                sample_rate,
-                height_crossover_hz,
-            ));
-        } else if let Some(split) = &mut self.split {
-            split.set_height_crossover(height_crossover_hz);
-        }
-        for s in self.ambient_surround.iter_mut() {
-            s.retune_surround(sample_rate, p);
-        }
-        for s in self.ambient_height.iter_mut() {
-            s.retune_height(sample_rate, p);
-        }
-    }
-
     pub fn has_ambient(&self) -> bool {
-        self.split.is_some()
+        self.split.is_some() || self.texture_active
     }
 
     /// Shape one block of a stem into every signal a speaker can draw on.
@@ -302,8 +327,9 @@ impl StemRouteState {
         stem_right: &[f32],
         start: usize,
         count: usize,
-        rear: f64,
-        height: f64,
+        rear: [f64; 2],
+        height: [f64; 2],
+        texture: [f64; 2],
         surround: bool,
         height_send: bool,
     ) {
@@ -338,44 +364,40 @@ impl StemRouteState {
             self.shaped[STEM_INPUT + i].clear();
             self.shaped[STEM_INPUT + i].extend_from_slice(&self.scratch[i]);
         }
-        if self.split.is_some() && (rear > 0.0 || height > 0.0) {
+        let ambient_target = rear.iter().any(|value| *value > 0.0)
+            || height.iter().any(|value| *value > 0.0);
+        let ambient_fading = self
+                .ambient_rear_gain
+                .iter()
+                .any(|gain| !gain.is_settled(0.0))
+                || self
+                    .ambient_height_gain
+                    .iter()
+                    .any(|gain| !gain.is_settled(0.0));
+        let texture_target = texture.iter().any(|value| *value > 0.0);
+        let texture_fading = self
+                .height_texture_gain
+                .iter()
+                .any(|gain| !gain.is_settled(0.0));
+        let ambient_source_active = ambient_target || ambient_fading;
+        if self.split.is_some() && ambient_source_active {
             self.split_ambient(start, count, rear, height);
+        } else if !ambient_source_active {
+            for slot in AMBIENT_SURROUND..AMBIENT_SURROUND + 4 {
+                self.shaped[slot].clear();
+                self.shaped[slot].resize(count, 0.0);
+            }
         }
         self.shape_sends(count, surround, height_send);
+        if self.texture_active && (texture_target || texture_fading) {
+            self.apply_height_texture(count, texture);
+        }
+        if !ambient_source_active && !texture_target && !texture_fading {
+            self.split = None;
+            self.texture_active = false;
+        }
+        self.texture_started = true;
         self.ahead.trim(start + count);
-    }
-
-    /// Take the block's ambient half out of the scratch pair and leave it,
-    /// shaped, in the four ambient signals.
-    fn split_ambient(&mut self, start: usize, count: usize, rear: f64, height: f64) {
-        let Some(split) = &mut self.split else { return };
-        let block = split.advance(
-            self.ahead.base,
-            &self.ahead.left,
-            &self.ahead.right,
-            start,
-            count,
-        );
-        let sources = [
-            (AMBIENT_SURROUND, block.rear[0]),
-            (AMBIENT_SURROUND + 1, block.rear[1]),
-            (AMBIENT_HEIGHT, block.height[0]),
-            (AMBIENT_HEIGHT + 1, block.height[1]),
-        ];
-        for (slot, source) in sources {
-            self.shaped[slot].clear();
-            self.shaped[slot].extend_from_slice(source);
-        }
-        for i in 0..count {
-            self.scratch[0][i] -=
-                rear * self.shaped[AMBIENT_SURROUND][i] + height * self.shaped[AMBIENT_HEIGHT][i];
-            self.scratch[1][i] -= rear * self.shaped[AMBIENT_SURROUND + 1][i]
-                + height * self.shaped[AMBIENT_HEIGHT + 1][i];
-        }
-        for i in 0..2 {
-            self.ambient_surround[i].process_in_place(&mut self.shaped[AMBIENT_SURROUND + i]);
-            self.ambient_height[i].process_in_place(&mut self.shaped[AMBIENT_HEIGHT + i]);
-        }
     }
 
     pub fn reset(&mut self) {
@@ -394,12 +416,29 @@ impl StemRouteState {
             .chain(self.height.iter_mut())
             .chain(self.ambient_surround.iter_mut())
             .chain(self.ambient_height.iter_mut())
+            .chain(self.ambient_texture.iter_mut())
         {
             s.reset();
+        }
+        for filter in &mut self.ambient_texture_cutoff {
+            filter.reset();
         }
         if let Some(split) = &mut self.split {
             split.reset();
         }
+        for side in 0..2 {
+            self.ambient_rear_gain[side].reset();
+            self.ambient_height_gain[side].reset();
+            self.height_texture_gain[side].reset();
+        }
+        self.ambient_trim_gain.set(1.0);
+        self.height_texture_cutoff
+            .set(crate::routing::ambient::AMBIENT_HEIGHT_CROSSOVER_HZ);
+        self.ambient_gains_initialized = false;
+        self.height_texture_initialized = false;
+        // Keep the configured texture route across a seek. `rewind` resets
+        // filter state but does not reapply the parameter block.
+        self.texture_started = false;
         self.ahead.clear(0);
     }
 
@@ -425,6 +464,9 @@ impl StemRouteState {
                 s.retune_surround(sample_rate, sends);
             }
             for s in self.height.iter_mut() {
+                s.retune_height(sample_rate, sends);
+            }
+            for s in self.ambient_texture.iter_mut() {
                 s.retune_height(sample_rate, sends);
             }
         }
@@ -521,9 +563,7 @@ impl StemRouteState {
 }
 
 /// Index into the dry signals a speaker can draw on: the three dry shapes,
-/// then the four shaped sends. The ambient sends are addressed by
-/// [`AMBIENT_SURROUND`]/[`AMBIENT_HEIGHT`] instead — a speaker's shape says
-/// which class it belongs to, not which of the two feeds it draws.
+/// then the four shaped sends. Ambient sends use their dedicated slots.
 pub fn shape_index(shape: SendShape) -> usize {
     match shape {
         SendShape::Left => 0,
@@ -533,41 +573,5 @@ pub fn shape_index(shape: SendShape) -> usize {
         SendShape::SurroundRight => 4,
         SendShape::HeightLeft => 5,
         SendShape::HeightRight => 6,
-    }
-}
-
-/// The LFE bus: stems sum in dry, then the whole bus is filtered once.
-pub struct LfeBus {
-    filter: SosFilter,
-    gain: f64,
-}
-
-impl LfeBus {
-    pub fn new(sample_rate: u32, p: &SendParams) -> Self {
-        let nyq = sample_rate as f64 / 2.0;
-        Self {
-            filter: SosFilter::from_flat(&linkwitz_riley_lowpass_sos(
-                p.lfe_filter_order,
-                p.lfe_cutoff_hz / nyq,
-            )),
-            gain: p.lfe_gain,
-        }
-    }
-
-    pub fn reset(&mut self) {
-        self.filter.reset();
-    }
-
-    /// Re-derive the lowpass and gain in place, keeping the filter state.
-    pub fn retune(&mut self, sample_rate: u32, p: &SendParams) {
-        let nyq = sample_rate as f64 / 2.0;
-        let sos = linkwitz_riley_lowpass_sos(p.lfe_filter_order, p.lfe_cutoff_hz / nyq);
-        self.filter.retune_flat(&sos);
-        self.gain = p.lfe_gain;
-    }
-
-    #[inline]
-    pub fn tick(&mut self, summed: f64) -> f64 {
-        self.filter.tick(summed) * self.gain
     }
 }

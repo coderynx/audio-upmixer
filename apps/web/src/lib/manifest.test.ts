@@ -15,4 +15,9 @@ describe("normalizeManifest", () => {
     expect(manifest.mixing.bed_trim_db).toBe(2.5);
     expect(manifest.mixing.stem_routing).toEqual(defaultManifest.mixing.stem_routing);
   });
+
+  it("keeps enhancement defaults off", () => {
+    expect(defaultManifest.mixing.stem_ambient_trim_db).toEqual({});
+    expect(defaultManifest.mixing.stem_height_texture).toEqual({});
+  });
 });

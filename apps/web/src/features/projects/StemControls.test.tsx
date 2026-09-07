@@ -259,7 +259,7 @@ describe("ambience sends", () => {
     renderControls({ channels: ["FL", "FR", "C", "LFE", "SL", "SR"] });
     expect(screen.getByLabelText("Ambience to rear")).toBeInTheDocument();
     expect(screen.queryByLabelText("Ambience to height")).toBeNull();
-    expect(screen.queryByLabelText("Height crossover")).toBeNull();
+    expect(screen.queryByLabelText("Height cutoff")).toBeNull();
   });
 
   it("offers neither send on a stereo layout", () => {
@@ -268,9 +268,27 @@ describe("ambience sends", () => {
     expect(screen.queryByLabelText("Ambience to height")).toBeNull();
   });
 
-  it("writes a logarithmic height crossover", () => {
-    const { onAmbient } = renderControls({ ambientHeightCrossoverHz: 2000 });
-    step("Height crossover", 1);
-    expect(onAmbient).toHaveBeenLastCalledWith({ heightCrossoverHz: expect.any(Number) });
+  it("writes a logarithmic height cutoff", () => {
+    const { onAmbient } = renderControls({
+      ambientHeightCutoffHz: 500,
+      ambientHeightCrossoverHz: 4000,
+    });
+    step("Height cutoff", 1);
+    expect(onAmbient).toHaveBeenLastCalledWith({ heightCutoffHz: expect.any(Number) });
   });
+
+  it("exposes wet trim and height texture", () => {
+    const { onAmbient } = renderControls({
+      ambientTrimDb: 3,
+      heightTexture: 0.1,
+      showAmbientEnhancements: true,
+    });
+    expect(screen.getByLabelText("Ambience trim")).toHaveAttribute("aria-valuenow", "3");
+    expect(screen.getByLabelText("Height texture")).toHaveAttribute("aria-valuenow", "0.1");
+    step("Ambience trim", 1);
+    expect(onAmbient).toHaveBeenLastCalledWith({ ambientTrimDb: 3.5 });
+    step("Height texture", 1);
+    expect(onAmbient).toHaveBeenLastCalledWith({ heightTexture: 0.11 });
+  });
+
 });

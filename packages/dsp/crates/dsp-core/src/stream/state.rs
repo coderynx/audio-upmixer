@@ -42,6 +42,11 @@ impl OnePole {
         self.state = value;
     }
 
+    #[inline]
+    pub fn current(&self) -> f64 {
+        self.state
+    }
+
     /// Recompute the time constant, keeping the current state — a config
     /// edit (e.g. a new attack/release) should not restart the envelope.
     pub fn retune(&mut self, ms: f64, sample_rate: f64) {

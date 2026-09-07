@@ -153,6 +153,9 @@ class UpmixConfig:
     # surround speakers, and the height speakers.  Keyed like stem_rebalance.
     stem_ambient_rear: dict | None = None
     stem_ambient_height: dict | None = None
+    stem_ambient_trim_db: dict | None = None
+    stem_height_texture: dict | None = None
+    stem_ambient_height_cutoff_hz: dict | None = None
     stem_ambient_height_crossover_hz: dict | None = None
     spatial_downmix_lock: bool = False
     spatial_render_model: str = "object-bed"

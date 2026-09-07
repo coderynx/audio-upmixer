@@ -324,6 +324,9 @@ class StemRouter:
         self._stem_enabled = config.stem_enabled or {}
         self._ambient_rear = config.stem_ambient_rear or {}
         self._ambient_height = config.stem_ambient_height or {}
+        self._ambient_trim_db = config.stem_ambient_trim_db or {}
+        self._height_texture = config.stem_height_texture or {}
+        self._ambient_height_cutoff = config.stem_ambient_height_cutoff_hz or {}
         self._ambient_height_crossover = config.stem_ambient_height_crossover_hz or {}
         self._stem_solo = set(config.stem_solo or [])
         self._sr = sample_rate
@@ -482,12 +485,49 @@ class StemRouter:
         )
         return float(value)
 
-    def _class_share(self, labels: set[ChannelLabel]) -> float:
-        """Per-speaker share of an ambient send: the amount is spread over the
-        class as 1/sqrt(n), so a 7.1.4's four surrounds carry the same total as
-        a 5.1's two.  Mirrors ``EngineParams::ambient_share``."""
-        count = sum(1 for label in self._fmt.channels if label in labels)
-        return 1.0 / math.sqrt(count) if count else 0.0
+    def _ambient_height_cutoff_for(self, stem_key: str) -> float:
+        stem_name = stem_key.rsplit("@", 1)[0]
+        value = self._ambient_height_cutoff.get(
+            stem_key, self._ambient_height_cutoff.get(stem_name, 2000.0)
+        )
+        return float(value)
+
+    def _ambient_trim_for(self, stem_key: str) -> float:
+        stem_name = stem_key.rsplit("@", 1)[0]
+        value = self._ambient_trim_db.get(
+            stem_key, self._ambient_trim_db.get(stem_name, 0.0)
+        )
+        return max(0.0, min(6.0, float(value)))
+
+    def _height_texture_for(self, stem_key: str) -> float:
+        stem_name = stem_key.rsplit("@", 1)[0]
+        value = self._height_texture.get(
+            stem_key, self._height_texture.get(stem_name, 0.0)
+        )
+        return max(0.0, min(0.25, float(value)))
+
+    def _class_shares(
+        self, labels: set[ChannelLabel], skip: set[str]
+    ) -> tuple[float, float]:
+        """Return independent left/right class shares.
+
+        A pair is distributed independently on each side. Counting the whole
+        class makes a symmetric 7.1.4 lose 3 dB per side, and counting an
+        absent side would subtract ambience from a direct signal that has
+        nowhere to go. Passthrough channels are excluded because the caller
+        injects them after stem routing.
+        """
+        counts = [
+            sum(
+                1
+                for label in self._fmt.channels
+                if label in labels
+                and label in (_LEFT_CHANNELS if side == 0 else _RIGHT_CHANNELS)
+                and label.value not in skip
+            )
+            for side in (0, 1)
+        ]
+        return tuple(1.0 / math.sqrt(count) if count else 0.0 for count in counts)
 
     def _is_enabled(self, stem_key: str) -> bool:
         stem_name = stem_key.rsplit("@", 1)[0]
@@ -521,6 +561,20 @@ class StemRouter:
             self._config.height_directional_band_hz,
             self._config.height_directional_band_gain,
         )
+
+    def _height_texture_send(self, signal: np.ndarray, cutoff_hz: float) -> np.ndarray:
+        """Shape direct-residual detail with the shared height-send DSP.
+
+        The cutoff is a separate revision-2 high-pass ahead of the existing
+        height voicing.  Both stages are provided by ``packages/dsp`` so the
+        export path does not grow a Python filter implementation.
+        """
+        highpassed = upmixer_dsp.height_texture(
+            np.ascontiguousarray(signal, dtype=np.float64),
+            self._sr,
+            cutoff_hz,
+        )
+        return self._height_send(highpassed)
 
     def _surround_send(self, signal: np.ndarray) -> np.ndarray:
         return upmixer_dsp.highpass(
@@ -608,11 +662,13 @@ class StemRouter:
                 stem_L = self._bed_trim * stem_L
                 stem_R = self._bed_trim * stem_R
             rear_amount, height_amount = self._ambient_for(stem_key)
-            rear_share = self._class_share(_SURROUND_CHANNELS)
-            height_share = self._class_share(_HEIGHT_CHANNELS)
-            if not rear_share:
+            rear_share = self._class_shares(_SURROUND_CHANNELS, skip)
+            height_share = self._class_shares(_HEIGHT_CHANNELS, skip)
+            rear_destinations = any(rear_share)
+            height_destinations = any(height_share)
+            if not rear_destinations:
                 rear_amount = 0.0
-            if not height_share:
+            if not height_destinations:
                 height_amount = 0.0
             # The stem's own level, before the sends take their share: the
             # route normalization matches the routed sum to this, or a stem
@@ -623,20 +679,49 @@ class StemRouter:
                 # A send the layout has no speaker for gets no ambient: the
                 # amount is taken out of the dry pair, so sending it nowhere
                 # would be a hole rather than a move.
-                rear_L, rear_R, height_L_amb, height_R_amb = upmixer_dsp.ambient_split(
+                (
+                    stem_L,
+                    stem_R,
+                    _raw_L,
+                    _raw_R,
+                    rear_L,
+                    rear_R,
+                    height_L_amb,
+                    height_R_amb,
+                ) = upmixer_dsp.ambient_route(
                     np.ascontiguousarray(stem_L, dtype=np.float64),
                     np.ascontiguousarray(stem_R, dtype=np.float64),
                     self._sr,
-                    self._ambient_height_crossover_for(stem_key),
+                    rear_amount,
+                    height_amount,
+                    self._ambient_height_cutoff_for(stem_key),
+                    bool(rear_share[0]),
+                    bool(rear_share[1]),
+                    bool(height_share[0]),
+                    bool(height_share[1]),
                 )
-                stem_L = stem_L - rear_amount * rear_L - height_amount * height_L_amb
-                stem_R = stem_R - rear_amount * rear_R - height_amount * height_R_amb
                 ambient = {
                     ChannelLabel.SL: self._surround_send(rear_L),
                     ChannelLabel.SR: self._surround_send(rear_R),
                     ChannelLabel.TFL: self._height_send(height_L_amb),
                     ChannelLabel.TFR: self._height_send(height_R_amb),
                 }
+
+            texture_amount = self._height_texture_for(stem_key)
+            texture: dict[ChannelLabel, np.ndarray] = {}
+            if texture_amount > 0.0 and any(height_share):
+                # Texture is an enhancement sourced from the post-subtraction
+                # direct residual. It is deliberately absent from the ambient
+                # removal calculation above.
+                texture = {
+                    ChannelLabel.TFL: self._height_texture_send(
+                        stem_L, self._ambient_height_cutoff_for(stem_key)
+                    ),
+                    ChannelLabel.TFR: self._height_texture_send(
+                        stem_R, self._ambient_height_cutoff_for(stem_key)
+                    ),
+                }
+            wet_trim = 10.0 ** (self._ambient_trim_for(stem_key) / 20.0)
 
             stem_mono = (stem_L + stem_R) * 0.5
             needs_surround = any(
@@ -716,15 +801,38 @@ class StemRouter:
                     signal = ambient[
                         ChannelLabel.SL if label in _LEFT_CHANNELS else ChannelLabel.SR
                     ]
-                    gain = rear_amount * rear_share * self._channel_gain(label)
+                    side = 0 if label in _LEFT_CHANNELS else 1
+                    gain = (
+                        wet_trim
+                        * rear_amount
+                        * rear_share[side]
+                        * self._channel_gain(label)
+                    )
                 elif label in _HEIGHT_CHANNELS and height_amount > 0.0:
                     signal = ambient[
                         ChannelLabel.TFL if label in _LEFT_CHANNELS else ChannelLabel.TFR
                     ]
-                    gain = height_amount * height_share * self._channel_gain(label)
+                    side = 0 if label in _LEFT_CHANNELS else 1
+                    gain = (
+                        wet_trim
+                        * height_amount
+                        * height_share[side]
+                        * self._channel_gain(label)
+                    )
                 else:
                     continue
                 route_items.append((label, gain, signal))
+
+            if texture:
+                for label in self._fmt.channels:
+                    if label.value in skip or label not in _HEIGHT_CHANNELS:
+                        continue
+                    side = 0 if label in _LEFT_CHANNELS else 1
+                    signal = texture[
+                        ChannelLabel.TFL if side == 0 else ChannelLabel.TFR
+                    ]
+                    gain = texture_amount * height_share[side] * self._channel_gain(label)
+                    route_items.append((label, gain, signal))
 
             route_scale = self._route_scale(route_items, input_L, input_R)
             if author_objects and object_routes is not None:

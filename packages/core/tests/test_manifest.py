@@ -374,6 +374,39 @@ class TestSingleAssetParse:
         _, jobs = parse_manifest(data)
         assert jobs[0].config.get("format") == "7.1.4"
 
+    def test_height_cutoff_maps_separately_from_legacy_crossover(self):
+        data = _minimal(mixing={
+            "stem_ambient_trim_db": {"Vocals": 3.0},
+            "stem_height_texture": {"Vocals": 0.12},
+            "stem_ambient_height_cutoff_hz": {"Vocals": 1333.0},
+            "stem_ambient_height_crossover_hz": {"Vocals": 3999.0},
+        })
+        _, jobs = parse_manifest(data)
+        assert jobs[0].config["stem_ambient_trim_db"] == {"Vocals": 3.0}
+        assert jobs[0].config["stem_height_texture"] == {"Vocals": 0.12}
+        assert jobs[0].config["stem_ambient_height_cutoff_hz"] == {"Vocals": 1333.0}
+        assert jobs[0].config["stem_ambient_height_crossover_hz"] == {"Vocals": 3999.0}
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("stem_ambient_trim_db", {"Vocals": -0.01}),
+            ("stem_ambient_trim_db", {"Vocals": 6.01}),
+            ("stem_height_texture", {"Vocals": -0.01}),
+            ("stem_height_texture", {"Vocals": 0.26}),
+        ],
+    )
+    def test_revision_two_wet_controls_reject_out_of_range_values(self, field, value):
+        with pytest.raises(ManifestError, match=field):
+            validate_manifest(_minimal(mixing={field: value}))
+
+    @pytest.mark.parametrize("value", [499.0, 4001.0, True, "1333"])
+    def test_height_cutoff_rejects_invalid_values(self, value):
+        with pytest.raises(ManifestError, match="stem_ambient_height_cutoff_hz"):
+            validate_manifest(_minimal(mixing={
+                "stem_ambient_height_cutoff_hz": {"Vocals": value},
+            }))
+
     def test_global_routing(self):
         data = _minimal(routing={"center_gain": 0.9, "lfe_cutoff": 80.0})
         _, jobs = parse_manifest(data)

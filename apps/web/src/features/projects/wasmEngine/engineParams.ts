@@ -78,6 +78,12 @@ export type StemMix = {
   ambientRear?: number;
   ambientHeight?: number;
   ambientHeightCrossoverHz?: number;
+  /** Revision-2 height-feed cutoff; legacy crossover remains independent. */
+  ambientHeightCutoffHz?: number;
+  /** Revision-2 wet-feed trim, in dB. */
+  ambientTrimDb?: number;
+  /** Revision-2 optional direct-residual height texture amount. */
+  heightTexture?: number;
   objectMode?: "linked-stereo" | "mono";
   objectPlacement?: {
     azimuth_deg: number;
@@ -207,6 +213,9 @@ export function buildEngineParams(input: BuildEngineParamsInput): Record<string,
       route_scale: stem.routeScale ?? 1,
       ambient_rear: stem.ambientRear ?? 0,
       ambient_height: stem.ambientHeight ?? 0,
+      ambient_trim_db: Math.min(6, Math.max(0, stem.ambientTrimDb ?? 0)),
+      height_texture: Math.min(0.25, Math.max(0, stem.heightTexture ?? 0)),
+      ambient_height_cutoff_hz: stem.ambientHeightCutoffHz ?? 2000,
       ambient_height_crossover_hz: stem.ambientHeightCrossoverHz ?? 2000,
       object_mode: stem.objectMode ?? null,
       object_placement: stem.objectPlacement ?? null,

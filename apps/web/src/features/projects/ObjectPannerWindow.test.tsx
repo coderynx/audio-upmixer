@@ -171,6 +171,33 @@ describe("ObjectPannerWindow", () => {
     expect(onAmbient).toHaveBeenCalledWith({ height: 0.51 });
   });
 
+  it("exposes the revision-2 height cutoff separately", async () => {
+    const user = userEvent.setup();
+    const onAmbient = vi.fn();
+    render(<ObjectPannerWindow stemName="Vocals" placement={PLACEMENT} maxElevationDeg={35}
+      channels={["FL", "FR", "TFL", "TFR"]} ambientHeightCutoffHz={500}
+      ambientHeightCrossoverHz={4000} onPlacement={vi.fn()} onAmbient={onAmbient} />);
+    await user.click(screen.getByRole("button", { name: "Object panner" }));
+
+    expect(screen.getByLabelText("Height cutoff")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByLabelText("Height cutoff"), { key: "ArrowRight" });
+    expect(onAmbient).toHaveBeenLastCalledWith({ heightCutoffHz: expect.any(Number) });
+  });
+
+  it("edits revision-2 wet trim and height texture", async () => {
+    const user = userEvent.setup();
+    const onAmbient = vi.fn();
+    render(<ObjectPannerWindow stemName="Vocals" placement={PLACEMENT} maxElevationDeg={35}
+      channels={["FL", "FR", "SL", "SR", "TFL", "TFR"]}
+      ambientTrimDb={3} heightTexture={0.1} onPlacement={vi.fn()} onAmbient={onAmbient} />);
+    await user.click(screen.getByRole("button", { name: "Object panner" }));
+
+    fireEvent.keyDown(screen.getByLabelText("Ambience trim"), { key: "ArrowRight" });
+    expect(onAmbient).toHaveBeenLastCalledWith({ ambientTrimDb: 3.5 });
+    fireEvent.keyDown(screen.getByLabelText("Height texture"), { key: "ArrowRight" });
+    expect(onAmbient).toHaveBeenLastCalledWith({ heightTexture: 0.11 });
+  });
+
   it("places the L and R markers at the ends of the stereo image width", () => {
     const channels = objectChannelPositions({ ...PLACEMENT, width_deg: 60 });
 

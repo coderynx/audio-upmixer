@@ -62,6 +62,35 @@ def test_separation_settings_treats_missing_keys_as_client_defaults():
     assert separation_settings(minimal) == separation_settings(client_defaults)
 
 
+def test_revision_two_wet_controls_survive_project_settings_round_trip(web_client):
+    created = web_client.post("/api/v1/projects", json={
+        "name": "Wet controls",
+        "manifest": {
+            "version": "1.0.0",
+            "engine": {"mode": "stem", "stems": ["Vocals"]},
+            "mixing": {
+                "channel_layout": "7.1.4",
+                "stem_ambient_trim_db": {"Vocals": 3.0},
+                "stem_height_texture": {"Vocals": 0.12},
+            },
+        },
+    })
+    assert created.status_code == 201, created.text
+    project = created.json()
+    assert project["manifest"]["mixing"]["stem_ambient_trim_db"] == {"Vocals": 3.0}
+    assert project["manifest"]["mixing"]["stem_height_texture"] == {"Vocals": 0.12}
+
+    saved_manifest = project["manifest"]
+    saved_manifest["mixing"]["stem_ambient_trim_db"] = {"Vocals": 6.0}
+    saved = web_client.put(f"/api/v1/projects/{project['id']}/settings", json={
+        "manifest": saved_manifest,
+        "scene": project["scene"],
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["manifest"]["mixing"]["stem_ambient_trim_db"] == {"Vocals": 6.0}
+    assert saved.json()["manifest"]["mixing"]["stem_height_texture"] == {"Vocals": 0.12}
+
+
 def test_project_lifecycle_persists_settings_and_expansion(tmp_path, monkeypatch):
     settings = Settings(
         data_dir=tmp_path,
@@ -350,6 +379,8 @@ def test_reprepare_project_stems_requeues_a_ready_project_and_rejects_in_flight(
                 "stem_routing",
                 "stem_ambient_rear",
                 "stem_ambient_height",
+                "stem_ambient_trim_db",
+                "stem_height_texture",
                 "stem_ambient_height_crossover_hz",
             ):
                 assert set(mixing[field]) == {"Vocals", "Bass"}
@@ -507,6 +538,9 @@ def test_project_seeds_complete_balanced_preset(tmp_path, monkeypatch):
             "stem_routing",
             "stem_ambient_rear",
             "stem_ambient_height",
+            "stem_ambient_trim_db",
+            "stem_height_texture",
+            "stem_ambient_height_cutoff_hz",
             "stem_ambient_height_crossover_hz",
         ):
             assert set(created_mixing[field]) == {"Vocals", "Bass"}
@@ -520,6 +554,9 @@ def test_project_seeds_complete_balanced_preset(tmp_path, monkeypatch):
         }
         assert created_mixing["stem_ambient_rear"]["Vocals"] == 0.06
         assert created_mixing["stem_ambient_height"]["Vocals"] == 0.04
+        assert created_mixing["stem_ambient_trim_db"]["Vocals"] == 0.0
+        assert created_mixing["stem_height_texture"]["Vocals"] == 0.0
+        assert created_mixing["stem_ambient_height_cutoff_hz"]["Vocals"] == 2000.0
         assert created_mixing["stem_ambient_height_crossover_hz"]["Vocals"] == 4000.0
         response = client.post(f"/api/v1/projects/{created.json()['id']}/assets", json={
             "import_id": imported["id"],
@@ -534,6 +571,9 @@ def test_project_seeds_complete_balanced_preset(tmp_path, monkeypatch):
             "stem_routing",
             "stem_ambient_rear",
             "stem_ambient_height",
+            "stem_ambient_trim_db",
+            "stem_height_texture",
+            "stem_ambient_height_cutoff_hz",
             "stem_ambient_height_crossover_hz",
         ):
             assert set(track_mixing[field]) == {"Vocals", "Bass"}

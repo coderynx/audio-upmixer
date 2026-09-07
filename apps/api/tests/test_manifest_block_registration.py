@@ -1,5 +1,4 @@
 """Every mastering block the web can send must survive validation.
-
 `MasteringChain` imports its stage modules lazily inside `process()`, so the
 manifest blocks they register (`mastering.highpass`, `.clip`, `.dynamic_eq`,
 …) exist only once something has imported those modules. `shared/manifests.py`

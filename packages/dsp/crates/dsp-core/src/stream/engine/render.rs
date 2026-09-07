@@ -33,8 +33,9 @@ impl PreviewEngine {
         // A send the layout has no speaker for gets no ambient: the amount
         // is taken out of the dry pair, so sending it nowhere would be a hole
         // rather than a move.
-        let rear = sp.ambient_rear * f64::from(mix.has_surround);
-        let height = sp.ambient_height * f64::from(mix.has_height);
+        let rear = mix.has_surround.map(|has| sp.ambient_rear * f64::from(has));
+        let height = mix.has_height.map(|has| sp.ambient_height * f64::from(has));
+        let texture = mix.has_height.map(|has| sp.height_texture * f64::from(has));
 
         let route = &mut self.graph.routes[stem_index];
         route.process_block(
@@ -44,6 +45,7 @@ impl PreviewEngine {
             count,
             rear,
             height,
+            texture,
             mix.needs_surround,
             mix.needs_height,
         );

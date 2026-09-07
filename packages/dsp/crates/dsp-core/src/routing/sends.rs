@@ -4,6 +4,24 @@
 use crate::kernels::biquad::{peaking_sos, sos_cascade_response, sos_magnitude, sosfilt};
 use crate::kernels::butter::{butter_sos, BandType};
 
+/// Stateful high-pass design shared by the direct-residual height texture in
+/// the streaming route and the whole-buffer Python export.
+pub fn height_texture_sos(sample_rate: u32, cutoff_hz: f64) -> Vec<[f64; 6]> {
+    let nyq = sample_rate as f64 / 2.0;
+    let cutoff = if cutoff_hz.is_finite() {
+        cutoff_hz.clamp(500.0, 4000.0)
+    } else {
+        2000.0
+    };
+    butter_sos(2, (cutoff / nyq).clamp(1e-4, 0.999), BandType::High)
+}
+
+/// Extract only the high-frequency detail used by revision-2 height texture.
+/// Destination elevation voicing remains a separate `elevation_eq` stage.
+pub fn height_texture(signal: &[f64], sample_rate: u32, cutoff_hz: f64) -> Vec<f64> {
+    sosfilt(&height_texture_sos(sample_rate, cutoff_hz), signal)
+}
+
 /// Q of the directional-band peak. Structural, not served: the band is a
 /// psychoacoustic cue (Blauert), its width is not a mix control.
 pub const DIRECTIONAL_BAND_Q: f64 = 1.0;

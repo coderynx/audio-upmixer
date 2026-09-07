@@ -142,6 +142,9 @@ export function useTrackLayoutRealization({
     const routing: StemRouting = {};
     const rear = { ...manifest.mixing.stem_ambient_rear };
     const height = { ...manifest.mixing.stem_ambient_height };
+    const trim = { ...manifest.mixing.stem_ambient_trim_db };
+    const texture = { ...manifest.mixing.stem_height_texture };
+    const cutoff = { ...manifest.mixing.stem_ambient_height_cutoff_hz };
     const crossover = { ...manifest.mixing.stem_ambient_height_crossover_hz };
     for (const stem of stems) {
       const treatment = treatments[stem.split("@", 1)[0]];
@@ -150,9 +153,12 @@ export function useTrackLayoutRealization({
       routing[stem] = panner.placementRoute(treatment.placement, channels, treatment.sends.lfe);
       rear[stem] = treatment.sends.rear;
       height[stem] = treatment.sends.height;
+      if (treatment.sends.ambienceTrimDb !== undefined) trim[stem] = treatment.sends.ambienceTrimDb;
+      if (treatment.sends.heightTexture !== undefined) texture[stem] = treatment.sends.heightTexture;
+      cutoff[stem] ??= 2000;
       crossover[stem] = treatment.sends.heightCrossoverHz;
     }
-    update({ ...manifest, mixing: { ...manifest.mixing, stem_placement: placements, stem_routing: routing, stem_ambient_rear: rear, stem_ambient_height: height, stem_ambient_height_crossover_hz: crossover } });
+    update({ ...manifest, mixing: { ...manifest.mixing, stem_placement: placements, stem_routing: routing, stem_ambient_rear: rear, stem_ambient_height: height, stem_ambient_trim_db: trim, stem_height_texture: texture, stem_ambient_height_cutoff_hz: cutoff, stem_ambient_height_crossover_hz: crossover } });
   }, [channels, manifest, panner, update]);
 
   const retry = React.useCallback(() => { if (key) void commit(key); }, [commit, key]);

@@ -25,8 +25,12 @@ pub(crate) fn build_route(
     route.set_ambient(
         sample_rate,
         sends,
+        stem.wants_ambient_or_texture(),
         stem.wants_ambient(),
         stem.ambient_height_crossover_hz,
+        stem.ambient_height_cutoff_hz,
+        stem.ambient_trim_db,
+        stem.height_texture,
     );
     route
 }
@@ -60,6 +64,9 @@ fn routing_changed(old: &EngineParams, new: &EngineParams) -> bool {
             || a.dynamics != b.dynamics
             || a.ambient_rear != b.ambient_rear
             || a.ambient_height != b.ambient_height
+            || a.ambient_trim_db != b.ambient_trim_db
+            || a.height_texture != b.height_texture
+            || a.ambient_height_cutoff_hz != b.ambient_height_cutoff_hz
             || a.ambient_height_crossover_hz != b.ambient_height_crossover_hz
             || a.object_mode != b.object_mode
             || a.object_placement != b.object_placement
@@ -245,16 +252,29 @@ impl PreviewEngine {
                     dynamics_changed,
                 );
             }
-            let wants_ambient = self.params.stems.get(i).is_some_and(|s| s.wants_ambient());
+            let wants_ambient = self.params.stems.get(i).is_some_and(|s| {
+                s.wants_ambient_or_texture()
+            });
             let crossover_changed = old.stems.get(i).is_none_or(|stem| {
                 stem.ambient_height_crossover_hz != self.params.stems[i].ambient_height_crossover_hz
+                    || stem.ambient_height_cutoff_hz
+                        != self.params.stems[i].ambient_height_cutoff_hz
+                    || stem.ambient_trim_db != self.params.stems[i].ambient_trim_db
+                    || stem.height_texture != self.params.stems[i].height_texture
             });
-            if wants_ambient != route.has_ambient() || sends_changed || crossover_changed {
+            if wants_ambient != route.has_ambient()
+                || sends_changed
+                || crossover_changed
+            {
                 route.set_ambient(
                     self.sample_rate,
                     &self.params.sends,
                     wants_ambient,
+                    self.params.stems[i].wants_ambient(),
                     self.params.stems[i].ambient_height_crossover_hz,
+                    self.params.stems[i].ambient_height_cutoff_hz,
+                    self.params.stems[i].ambient_trim_db,
+                    self.params.stems[i].height_texture,
                 );
             }
         }
@@ -408,7 +428,9 @@ impl PreviewEngine {
             .params
             .stems
             .iter()
-            .map(|s| build_route(self.sample_rate, &self.params.sends, s))
+            .map(|s| {
+                build_route(self.sample_rate, &self.params.sends, s)
+            })
             .collect();
         self.stem_gain = self
             .params

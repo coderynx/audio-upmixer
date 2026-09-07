@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "format": "prettier --write src vite.config.ts eslint.config.js package.json",
-    "bench:engine": "node scripts/bench-preview-engine.mjs"
+    "bench:engine": "node scripts/bench-preview-engine.mjs",
+    "check:parity": "node scripts/check-routing-parity.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

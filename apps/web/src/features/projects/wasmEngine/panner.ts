@@ -23,6 +23,8 @@ export type PresetSends = {
   rear: number;
   height: number;
   heightCrossoverHz: number;
+  ambienceTrimDb?: number;
+  heightTexture?: number;
 };
 
 export type PresetTreatment = {

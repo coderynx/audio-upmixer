@@ -170,6 +170,48 @@ def test_spatial_downmix_lock_and_ambient_flags_override_the_manifest():
     assert config.stem_ambient_height_crossover_hz == {"Vocals": 500.0}
 
 
+def test_height_cutoff_overrides_the_manifest_value():
+    config = UpmixConfig(stem_ambient_height_cutoff_hz={"Vocals": 500.0})
+    args = _parsed(["--stem-ambient-height-cutoff", "Vocals=1333"])
+
+    _apply_cli_flags(config, args, sample_rate_set=False)
+
+    assert config.stem_ambient_height_cutoff_hz == {"Vocals": 1333.0}
+
+
+def test_revision_two_wet_controls_merge_and_override_manifest_values():
+    config = UpmixConfig(
+        stem_ambient_trim_db={"Bass": 1.0, "Vocals": 2.0},
+        stem_height_texture={"Bass": 0.05},
+    )
+    args = _parsed([
+        "--stem-ambient-trim-db", "Vocals=5,Other=3",
+        "--stem-height-texture", "Vocals=0.2",
+    ])
+
+    _apply_cli_flags(config, args, sample_rate_set=False)
+
+    assert config.stem_ambient_trim_db == {"Bass": 1.0, "Vocals": 5.0, "Other": 3.0}
+    assert config.stem_height_texture == {"Bass": 0.05, "Vocals": 0.2}
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--stem-ambient-trim-db", "Vocals=-0.1"),
+        ("--stem-ambient-trim-db", "Vocals=6.1"),
+        ("--stem-height-texture", "Vocals=-0.01"),
+        ("--stem-height-texture", "Vocals=0.26"),
+    ],
+)
+def test_revision_two_wet_controls_reject_out_of_range_values(flag, value):
+    config = UpmixConfig()
+    args = _parsed([flag, value])
+
+    with pytest.raises(SystemExit):
+        _apply_cli_flags(config, args, sample_rate_set=False)
+
+
 def test_ambient_height_crossover_rejects_an_out_of_range_value():
     config = UpmixConfig()
     args = _parsed(["--stem-ambient-height-crossover", "Vocals=4001"])

@@ -66,7 +66,7 @@ def normalize_project_stems(stems: Iterable[str]) -> list[str]:
 
 
 def normalize_project_manifest(
-    manifest: dict[str, Any], *, seed_balanced: bool = True
+    manifest: dict[str, Any], *, seed_balanced: bool = True,
 ) -> tuple[dict[str, Any], list[str]]:
     migrated = copy.deepcopy(manifest)
     mixing = migrated.setdefault("mixing", {})

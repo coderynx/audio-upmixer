@@ -85,10 +85,28 @@ def add_stem_args(parser: argparse.ArgumentParser) -> None:
         help="Per-stem ambient send to heights, 0.0-1.0 (stem mode only).",
     )
     parser.add_argument(
+        "--stem-ambient-trim-db",
+        default=None,
+        metavar="STEM=DB[,...]",
+        help="Revision-2 wet ambience trim per stem, 0-6 dB (stem mode only).",
+    )
+    parser.add_argument(
+        "--stem-height-texture",
+        default=None,
+        metavar="STEM=AMOUNT[,...]",
+        help="Revision-2 direct-residual height texture per stem, 0.0-0.25 (stem mode only).",
+    )
+    parser.add_argument(
         "--stem-ambient-height-crossover",
         default=None,
         metavar="STEM=HZ[,...]",
         help="Per-stem ambient height crossover, 500-4000 Hz (stem mode only).",
+    )
+    parser.add_argument(
+        "--stem-ambient-height-cutoff",
+        default=None,
+        metavar="STEM=HZ[,...]",
+        help="Revision-2 per-stem height ambience cutoff, 500-4000 Hz (stem mode only).",
     )
 
     parser.add_argument(

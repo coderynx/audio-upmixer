@@ -291,19 +291,25 @@ describe("buildEngineParams", () => {
 
   it("forwards the per-stem ambient sends", () => {
     const params = buildEngineParams(
-      input({ stems: [{ id: "V", routing: { FL: 1 }, ambientRear: 0.4, ambientHeight: 0.9, ambientHeightCrossoverHz: 500 }] }),
+      input({ stems: [{ id: "V", routing: { FL: 1 }, ambientRear: 0.4, ambientHeight: 0.9, ambientTrimDb: 3, heightTexture: 0.12, ambientHeightCutoffHz: 750, ambientHeightCrossoverHz: 500 }] }),
     );
-    const stems = params.stems as { ambient_rear: number; ambient_height: number; ambient_height_crossover_hz: number }[];
+    const stems = params.stems as { ambient_rear: number; ambient_height: number; ambient_trim_db: number; height_texture: number; ambient_height_cutoff_hz: number; ambient_height_crossover_hz: number }[];
     expect(stems[0].ambient_rear).toBe(0.4);
     expect(stems[0].ambient_height).toBe(0.9);
+    expect(stems[0].ambient_trim_db).toBe(3);
+    expect(stems[0].height_texture).toBe(0.12);
+    expect(stems[0].ambient_height_cutoff_hz).toBe(750);
     expect(stems[0].ambient_height_crossover_hz).toBe(500);
   });
 
   it("defaults the ambient sends to zero, which is the pre-split routing", () => {
     const params = buildEngineParams(input());
-    const stems = params.stems as { ambient_rear: number; ambient_height: number; ambient_height_crossover_hz: number }[];
+    const stems = params.stems as { ambient_rear: number; ambient_height: number; ambient_trim_db: number; height_texture: number; ambient_height_cutoff_hz: number; ambient_height_crossover_hz: number }[];
     expect(stems[0].ambient_rear).toBe(0);
     expect(stems[0].ambient_height).toBe(0);
+    expect(stems[0].ambient_trim_db).toBe(0);
+    expect(stems[0].height_texture).toBe(0);
+    expect(stems[0].ambient_height_cutoff_hz).toBe(2000);
     expect(stems[0].ambient_height_crossover_hz).toBe(2000);
   });
 

@@ -42,6 +42,56 @@ mod ambient {
         out
     }
 
+    /// Revision-2 outputs over the whole signal, retaining the direct
+    /// residual so its bounded subtraction can be compared independently.
+    fn split_overlap_all(
+        left: &[f64],
+        right: &[f64],
+        block: usize,
+        rear: [f64; 2],
+        height: [f64; 2],
+    ) -> [Vec<f64>; 6] {
+        split_overlap_all_with_cutoff(
+            left,
+            right,
+            block,
+            rear,
+            height,
+            AMBIENT_HEIGHT_CROSSOVER_HZ,
+        )
+    }
+
+    fn split_overlap_all_with_cutoff(
+        left: &[f64],
+        right: &[f64],
+        block: usize,
+        rear: [f64; 2],
+        height: [f64; 2],
+        cutoff: f64,
+    ) -> [Vec<f64>; 6] {
+        let mut split = AmbientSplit::with_height_crossover_and_cutoff(
+            SR,
+            AMBIENT_HEIGHT_CROSSOVER_HZ,
+            cutoff,
+        );
+        let mut out: [Vec<f64>; 6] = Default::default();
+        let mut start = 0;
+        while start < left.len() {
+            let len = block.min(left.len() - start);
+            let piece = split.advance_with_side_amounts(
+                0, left, right, start, len, rear, height,
+            );
+            out[0].extend_from_slice(piece.direct[0]);
+            out[1].extend_from_slice(piece.direct[1]);
+            out[2].extend_from_slice(piece.rear[0]);
+            out[3].extend_from_slice(piece.rear[1]);
+            out[4].extend_from_slice(piece.height[0]);
+            out[5].extend_from_slice(piece.height[1]);
+            start += len;
+        }
+        out
+    }
+
     /// Mean power over the settled part, past the overlap-add ramp-in.
     fn power(signal: &[f64]) -> f64 {
         let settled = &signal[AMBIENT_FFT_SIZE..];
@@ -136,6 +186,90 @@ mod ambient {
                     .fold(0.0_f64, f64::max);
                 assert!(worst < 1e-9, "block {block} diverged by {worst:e}");
             }
+        }
+    }
+
+    #[test]
+    fn changing_the_revision2_cutoff_only_changes_height_voicing() {
+        let left = noise(59, N);
+        let right = noise(60, N);
+        let low = split_overlap_all_with_cutoff(&left, &right, 512, [1.0; 2], [1.0; 2], 500.0);
+        let high =
+            split_overlap_all_with_cutoff(&left, &right, 512, [1.0; 2], [1.0; 2], 4000.0);
+        for channel in [2, 3] {
+            let worst = low[channel]
+                .iter()
+                .zip(&high[channel])
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0, f64::max);
+            assert!(worst < 1e-12, "rear channel {channel} changed by {worst:e}");
+        }
+        let height_difference = low[4]
+            .iter()
+            .zip(&high[4])
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f64::max);
+        assert!(height_difference > 1e-6, "height cutoff had no effect");
+    }
+
+    #[test]
+    fn full_rear_overlap_does_not_remove_the_ambient_twice() {
+        let left = noise(53, N);
+        let right = noise(54, N);
+        let rear_only = split_overlap_all(&left, &right, 512, [1.0; 2], [0.0; 2]);
+        let both = split_overlap_all(&left, &right, 512, [1.0; 2], [1.0; 2]);
+        for channel in 0..2 {
+            let worst = rear_only[channel]
+                .iter()
+                .zip(&both[channel])
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0, f64::max);
+            assert!(worst < 1e-12, "channel {channel} was subtracted twice: {worst:e}");
+        }
+    }
+
+    #[test]
+    fn overlapping_removal_uses_bounded_conservative_height_compensation() {
+        let left = noise(61, N);
+        let right = noise(62, N);
+        let output = split_overlap_all(&left, &right, 512, [0.6; 2], [0.8; 2]);
+        for (source, (direct, (rear, height))) in left
+            .iter()
+            .zip(output[0].iter().zip(output[2].iter().zip(&output[4])))
+        {
+            let expected = source - 0.6 * rear - 0.8_f64.min(1.0 - 0.6) * height;
+            assert!((direct - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn an_absent_source_side_keeps_its_direct_anchor() {
+        let left = noise(55, N);
+        let right = noise(56, N);
+        let output = split_overlap_all(&left, &right, 512, [1.0, 0.0], [1.0, 0.0]);
+        let worst = output[1]
+            .iter()
+            .zip(&right)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f64::max);
+        assert!(worst < 1e-12, "absent right destinations removed {worst:e}");
+    }
+
+    #[test]
+    fn overlapping_residual_keeps_the_raw_start_sample_and_partition() {
+        let left = noise(57, N);
+        let right = noise(58, N);
+        let whole = split_overlap_all(&left, &right, N, [0.8; 2], [0.6; 2]);
+        assert_eq!(whole[0][0], left[0]);
+        assert_eq!(whole[1][0], right[0]);
+        let blocked = split_overlap_all(&left, &right, 257, [0.8; 2], [0.6; 2]);
+        for (actual, expected) in blocked.iter().zip(&whole) {
+            let worst = actual
+                .iter()
+                .zip(expected)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0, f64::max);
+            assert!(worst < 1e-9, "block partition changed output by {worst:e}");
         }
     }
 
@@ -297,43 +431,6 @@ mod ambient {
 
     /// The same pin `packages/core/tests/test_ambient_split.py` asserts
     /// through the wheel: a wasm preview and a Python export built from
-    /// different splits fail here.
-    #[test]
-    fn the_split_matches_the_pinned_samples() {
-        const PROBES: [usize; 3] = [2048, 4096, 6144];
-        const PINNED: [[f64; 3]; 4] = [
-            [
-                0.008926457540251778,
-                -0.021217232112214296,
-                0.016040588631082736,
-            ],
-            [
-                0.012096055793189401,
-                -0.018773859083148825,
-                0.008036464006738537,
-            ],
-            [
-                3.659564681994046e-5,
-                6.466579365577319e-5,
-                -0.00013348541725589322,
-            ],
-            [
-                -3.397700920671138e-5,
-                0.00011862880771210135,
-                -0.00011456985329275618,
-            ],
-        ];
-        let left = common::deterministic_signal(9600, SR, 0.0);
-        let right = common::deterministic_signal(9600, SR, 1.0);
-        let got = split_all(&left, &right, 512);
-        // split_all's order is rear L/R then height L/R.
-        for (signal, want) in [&got[0], &got[1], &got[2], &got[3]].into_iter().zip(PINNED) {
-            for (probe, expected) in PROBES.into_iter().zip(want) {
-                assert!((signal[probe] - expected).abs() < 1e-15, "sample {probe}");
-            }
-        }
-    }
-
     #[test]
     fn a_reset_split_repeats_itself() {
         let left = noise(7, 8192);

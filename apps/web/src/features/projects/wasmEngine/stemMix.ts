@@ -16,6 +16,9 @@ export type MixPreviewShape = {
   stem_dynamics?: Record<string, StemDynamicsSettings>;
   stem_ambient_rear?: Record<string, number>;
   stem_ambient_height?: Record<string, number>;
+  stem_ambient_trim_db?: Record<string, number>;
+  stem_height_texture?: Record<string, number>;
+  stem_ambient_height_cutoff_hz?: Record<string, number>;
   stem_ambient_height_crossover_hz?: Record<string, number>;
   spatial_downmix_lock?: boolean;
   stem_object_mode?: Record<string, "linked-stereo" | "mono">;
@@ -67,6 +70,15 @@ export function resolveStemMixes(options: {
     const crossover = mix?.stem_ambient_height_crossover_hz?.[stem.stem_key]
       ?? mix?.stem_ambient_height_crossover_hz?.[base]
       ?? 2000;
+    const cutoff = mix?.stem_ambient_height_cutoff_hz?.[stem.stem_key]
+      ?? mix?.stem_ambient_height_cutoff_hz?.[base]
+      ?? 2000;
+    const trimDb = mix?.stem_ambient_trim_db?.[stem.stem_key]
+      ?? mix?.stem_ambient_trim_db?.[base]
+      ?? 0;
+    const heightTexture = mix?.stem_height_texture?.[stem.stem_key]
+      ?? mix?.stem_height_texture?.[base]
+      ?? 0;
     const placement = mix?.stem_placement?.[stem.stem_key]
       ?? mix?.stem_placement?.[base]
       ?? (scene.azimuth_deg != null ? {
@@ -105,7 +117,10 @@ export function resolveStemMixes(options: {
       routeScale: objectMode ? 1 : estimateRouteScale(routing, constants.channelGains),
       ambientRear: send(mix?.stem_ambient_rear),
       ambientHeight: send(mix?.stem_ambient_height),
+      ambientTrimDb: Math.min(6, Math.max(0, trimDb)),
+      heightTexture: Math.min(0.25, Math.max(0, heightTexture)),
       ambientHeightCrossoverHz: Math.min(4000, Math.max(500, crossover)),
+      ambientHeightCutoffHz: Math.min(4000, Math.max(500, cutoff)),
       objectMode,
       objectPlacement: placement && {
         ...placement,

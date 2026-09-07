@@ -195,6 +195,20 @@ def _apply_cli_flags(config: UpmixConfig, args: argparse.Namespace, sample_rate_
             if not math.isfinite(amount) or not 0.0 <= amount <= 1.0:
                 raise SystemExit(f"--{field.replace('_', '-')} amount for '{stem}' must be in 0.0..1.0, got {amount}.")
         setattr(config, field, {**(getattr(config, field) or {}), **sends})
+    for arg, field, minimum, maximum in (
+        (args.stem_ambient_trim_db, "stem_ambient_trim_db", 0.0, 6.0),
+        (args.stem_height_texture, "stem_height_texture", 0.0, 0.25),
+    ):
+        if arg is None:
+            continue
+        values = _parse_key_value_pairs(arg, float)
+        for stem, value in values.items():
+            if not math.isfinite(value) or not minimum <= value <= maximum:
+                raise SystemExit(
+                    f"--{field.replace('_', '-')} value for '{stem}' must be in "
+                    f"{minimum}..{maximum}, got {value}."
+                )
+        setattr(config, field, {**(getattr(config, field) or {}), **values})
     if args.stem_ambient_height_crossover is not None:
         crossovers = _parse_key_value_pairs(args.stem_ambient_height_crossover, float)
         for stem, crossover in crossovers.items():
@@ -205,6 +219,17 @@ def _apply_cli_flags(config: UpmixConfig, args: argparse.Namespace, sample_rate_
         config.stem_ambient_height_crossover_hz = {
             **(config.stem_ambient_height_crossover_hz or {}),
             **crossovers,
+        }
+    if args.stem_ambient_height_cutoff is not None:
+        cutoffs = _parse_key_value_pairs(args.stem_ambient_height_cutoff, float)
+        for stem, cutoff in cutoffs.items():
+            if not math.isfinite(cutoff) or not 500.0 <= cutoff <= 4000.0:
+                raise SystemExit(
+                    f"--stem-ambient-height-cutoff value for '{stem}' must be in 500..4000, got {cutoff}."
+                )
+        config.stem_ambient_height_cutoff_hz = {
+            **(config.stem_ambient_height_cutoff_hz or {}),
+            **cutoffs,
         }
     if args.stem_cache_dir is not None:
         config.stem_cache_dir = args.stem_cache_dir

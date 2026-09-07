@@ -157,7 +157,8 @@ def update_project_settings(
     mastering_reference: MasteringReference | None = None,
     preview_quality: str | None = None,
 ) -> Project:
-    normalized, stems = normalize_project_manifest(manifest, seed_balanced=False)
+    incoming = copy.deepcopy(manifest)
+    normalized, stems = normalize_project_manifest(incoming, seed_balanced=False)
     if stems != project.requested_stems:
         raise ValueError("Use the project stem expansion action to add extraction targets")
     if preview_quality is not None and preview_quality not in PREVIEW_QUALITY_LEVELS:

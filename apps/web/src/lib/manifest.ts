@@ -62,6 +62,9 @@ export type Manifest = {
     stem_dynamics: Record<string, StemDynamicsSettings>;
     stem_ambient_rear: Record<string, number>;
     stem_ambient_height: Record<string, number>;
+    stem_ambient_trim_db: Record<string, number>;
+    stem_height_texture: Record<string, number>;
+    stem_ambient_height_cutoff_hz: Record<string, number>;
     stem_ambient_height_crossover_hz: Record<string, number>;
     spatial_downmix_lock: boolean;
     stem_object_mode: Record<string, "linked-stereo" | "mono">;
@@ -200,6 +203,9 @@ export const defaultManifest: Manifest = {
     stem_dynamics: {},
     stem_ambient_rear: {},
     stem_ambient_height: {},
+    stem_ambient_trim_db: {},
+    stem_height_texture: {},
+    stem_ambient_height_cutoff_hz: {},
     stem_ambient_height_crossover_hz: {},
     spatial_downmix_lock: false,
     stem_object_mode: {},
@@ -298,6 +304,18 @@ export function normalizeManifest(source: Record<string, unknown>): Manifest {
       stem_ambient_height: {
         ...defaultManifest.mixing.stem_ambient_height,
         ...value.mixing?.stem_ambient_height,
+      },
+      stem_ambient_trim_db: {
+        ...defaultManifest.mixing.stem_ambient_trim_db,
+        ...value.mixing?.stem_ambient_trim_db,
+      },
+      stem_height_texture: {
+        ...defaultManifest.mixing.stem_height_texture,
+        ...value.mixing?.stem_height_texture,
+      },
+      stem_ambient_height_cutoff_hz: {
+        ...defaultManifest.mixing.stem_ambient_height_cutoff_hz,
+        ...value.mixing?.stem_ambient_height_cutoff_hz,
       },
       stem_ambient_height_crossover_hz: {
         ...defaultManifest.mixing.stem_ambient_height_crossover_hz,

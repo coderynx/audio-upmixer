@@ -11,8 +11,8 @@ pub(crate) struct StemMixRoute {
     pub ambient: Vec<(usize, usize, f64)>,
     pub needs_surround: bool,
     pub needs_height: bool,
-    pub has_surround: bool,
-    pub has_height: bool,
+    pub has_surround: [bool; 2],
+    pub has_height: [bool; 2],
 }
 
 pub(crate) struct ObjectMixRoute {
@@ -65,8 +65,10 @@ pub(crate) fn assemble_stem_into(
                     route.signal(signal)[i] * weight * speakers[channel].group_gain * gain;
             }
         }
-        for &(channel, signal, weight) in &mix.ambient {
-            bed[channel][i] += route.signal(signal)[i] * weight * gain;
+        if route.has_ambient() {
+            for &(channel, signal, weight) in &mix.ambient {
+                bed[channel][i] += route.signal(signal)[i] * weight * gain;
+            }
         }
         if let Some(lfe_sum) = lfe_sum.as_deref_mut() {
             lfe_sum[i] += route.signal(shape_index(SendShape::Mono))[i] * mix.lfe_weight * gain;
@@ -131,8 +133,14 @@ pub(crate) fn build_stem_mix_routes(
                 ambient: ambient_feeds(params, stem),
                 needs_surround,
                 needs_height,
-                has_surround: params.ambient_share(SendShape::SurroundLeft) > 0.0,
-                has_height: params.ambient_share(SendShape::HeightLeft) > 0.0,
+                has_surround: [
+                    params.ambient_side_share(SendShape::SurroundLeft) > 0.0,
+                    params.ambient_side_share(SendShape::SurroundRight) > 0.0,
+                ],
+                has_height: [
+                    params.ambient_side_share(SendShape::HeightLeft) > 0.0,
+                    params.ambient_side_share(SendShape::HeightRight) > 0.0,
+                ],
             }
         })
         .collect()
@@ -199,20 +207,17 @@ fn direct_object_routes(
     ))
 }
 
-fn ambient_feeds(params: &EngineParams, stem: &StemParams) -> Vec<(usize, usize, f64)> {
+fn ambient_feeds(params: &EngineParams, _stem: &StemParams) -> Vec<(usize, usize, f64)> {
     let mut feeds = Vec::new();
     for (channel, shape) in params.shapes.iter().enumerate() {
-        let (amount, slot) = match shape {
-            SendShape::SurroundLeft => (stem.ambient_rear, AMBIENT_SURROUND),
-            SendShape::SurroundRight => (stem.ambient_rear, AMBIENT_SURROUND + 1),
-            SendShape::HeightLeft => (stem.ambient_height, AMBIENT_HEIGHT),
-            SendShape::HeightRight => (stem.ambient_height, AMBIENT_HEIGHT + 1),
+        let slot = match shape {
+            SendShape::SurroundLeft => AMBIENT_SURROUND,
+            SendShape::SurroundRight => AMBIENT_SURROUND + 1,
+            SendShape::HeightLeft => AMBIENT_HEIGHT,
+            SendShape::HeightRight => AMBIENT_HEIGHT + 1,
             _ => continue,
         };
-        if amount <= 0.0 {
-            continue;
-        }
-        let weight = amount * params.ambient_share(*shape) * params.speakers[channel].group_gain;
+        let weight = params.ambient_side_share(*shape) * params.speakers[channel].group_gain;
         feeds.push((channel, slot, weight));
     }
     feeds

@@ -35,4 +35,36 @@ describe("resolveStemMixes", () => {
     );
     expect(stems[1].rebalanceDb).toBe(5);
   });
+
+  it("keeps the revision-2 cutoff independent from the legacy crossover", () => {
+    const stems = resolveStemMixes({
+      stems: [{ id: "v", stem_key: "Vocals" } as ProjectStem],
+      scene: { stems: {} },
+      mix: {
+        stem_ambient_height_cutoff_hz: { Vocals: 750 },
+        stem_ambient_height_crossover_hz: { Vocals: 4000 },
+      },
+      stemEqTaps: new Map(),
+      constants: TEST_ENGINE_CONSTANTS,
+    });
+
+    expect(stems[0].ambientHeightCutoffHz).toBe(750);
+    expect(stems[0].ambientHeightCrossoverHz).toBe(4000);
+  });
+
+  it("clamps revision-2 wet trim and height texture", () => {
+    const stems = resolveStemMixes({
+      stems: [{ id: "v", stem_key: "Vocals" } as ProjectStem],
+      scene: { stems: {} },
+      mix: {
+        stem_ambient_trim_db: { Vocals: 9 },
+        stem_height_texture: { Vocals: -1 },
+      },
+      stemEqTaps: new Map(),
+      constants: TEST_ENGINE_CONSTANTS,
+    });
+
+    expect(stems[0].ambientTrimDb).toBe(6);
+    expect(stems[0].heightTexture).toBe(0);
+  });
 });

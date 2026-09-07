@@ -124,6 +124,15 @@ pub struct StemParams {
     pub ambient_rear: f64,
     #[serde(default)]
     pub ambient_height: f64,
+    /// Gain in dB applied to extracted rear/height feeds only.
+    #[serde(default)]
+    pub ambient_trim_db: f64,
+    /// Direct-residual detail sent to the height bed.
+    #[serde(default)]
+    pub height_texture: f64,
+    /// Height-feed voicing cutoff.
+    #[serde(default = "ambient_height_cutoff_default")]
+    pub ambient_height_cutoff_hz: f64,
     /// Per-stem crossover which shares the ambient half between rear and
     /// height sends.
     #[serde(default = "ambient_height_crossover_default")]
@@ -139,9 +148,17 @@ fn ambient_height_crossover_default() -> f64 {
     AMBIENT_HEIGHT_CROSSOVER_HZ
 }
 
+fn ambient_height_cutoff_default() -> f64 {
+    AMBIENT_HEIGHT_CROSSOVER_HZ
+}
+
 impl StemParams {
     pub fn wants_ambient(&self) -> bool {
         self.ambient_rear > 0.0 || self.ambient_height > 0.0
+    }
+
+    pub fn wants_ambient_or_texture(&self) -> bool {
+        self.wants_ambient() || self.height_texture > 0.0
     }
 }
 
@@ -265,6 +282,17 @@ impl EngineParams {
             )
         };
         let count = self.shapes.iter().filter(|s| class(**s)).count();
+        if count == 0 {
+            0.0
+        } else {
+            1.0 / (count as f64).sqrt()
+        }
+    }
+
+    /// Per-speaker share. Each source side keeps
+    /// its own pair energy when the layout has asymmetric left/right counts.
+    pub fn ambient_side_share(&self, shape: SendShape) -> f64 {
+        let count = self.shapes.iter().filter(|candidate| **candidate == shape).count();
         if count == 0 {
             0.0
         } else {

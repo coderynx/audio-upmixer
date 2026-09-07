@@ -59,7 +59,9 @@ export function StemProcessingControls({
 
 export const StemControls = React.memo(function StemControls({
   stemName = "Stem", placement, route, channels, eq, maxElevationDeg, ambientRear, ambientHeight, ambientHeightCrossoverHz,
+  ambientTrimDb = 0, heightTexture = 0, ambientHeightCutoffHz,
   onPlacement, onRoute, onEq, onDynamicEq = () => undefined, onDynamics, onAmbient, stemEqProfiles, stemEqSettings, dynamicEq, dynamicEqProfiles, dynamicsProfiles, stemProcessingPresets, dynamics, dynamicsMeterSource, dynamicEqMeterSource, showPositionControls = true, showObjectSends = true, showLfeSend = true, showProcessingControls = true,
+  showAmbientEnhancements = false,
 }: {
   stemName?: string;
   placement: StemPlacement;
@@ -70,13 +72,16 @@ export const StemControls = React.memo(function StemControls({
   /** Fraction of the stem's ambient half sent to the surrounds / heights. */
   ambientRear: number;
   ambientHeight: number;
+  ambientTrimDb?: number;
+  heightTexture?: number;
   ambientHeightCrossoverHz: number;
+  ambientHeightCutoffHz?: number;
   onPlacement: (next: StemPlacement) => void;
   onRoute: (patch: Record<string, number>) => void;
   onEq: (eq: string | StemEqSettings | null) => void;
   onDynamicEq?: (value: StemDynamicEqSettings | null) => void;
   onDynamics: (value: StemDynamicsSettings | null) => void;
-  onAmbient: (patch: { rear?: number; height?: number; heightCrossoverHz?: number }) => void;
+  onAmbient: (patch: { rear?: number; height?: number; ambientTrimDb?: number; heightTexture?: number; heightCrossoverHz?: number; heightCutoffHz?: number }) => void;
   stemEqProfiles?: string[];
   stemEqSettings?: Record<string, StemEqSettings>;
   dynamics?: StemDynamicsSettings;
@@ -92,6 +97,7 @@ export const StemControls = React.memo(function StemControls({
   dynamicEqMeterSource?: () => number;
   showPositionControls?: boolean;
   showObjectSends?: boolean;
+  showAmbientEnhancements?: boolean;
   showLfeSend?: boolean;
   showProcessingControls?: boolean;
 }) {
@@ -140,8 +146,9 @@ export const StemControls = React.memo(function StemControls({
   const height = maxElevationDeg > 0
     ? Math.min(1, Math.max(0, placement.elevation_deg / maxElevationDeg))
     : 0;
-  const heightCrossover = Math.min(4000, Math.max(500, ambientHeightCrossoverHz));
-  const heightCrossoverPosition = Math.log(heightCrossover / 500) / Math.log(8);
+  const heightTone = Math.min(4000, Math.max(500, ambientHeightCutoffHz ?? 2000));
+  const heightTonePosition = Math.log(heightTone / 500) / Math.log(8);
+  const heightToneLabel = "Height cutoff";
 
   const lateralSlider = (
     <label className="block text-[11px] text-muted-foreground">
@@ -190,11 +197,25 @@ export const StemControls = React.memo(function StemControls({
               value={[ambientHeight]} onValueChange={([height]) => onAmbient({ height })} />
           </label>
           <label className="block text-[11px] text-muted-foreground">
-            <span className="flex items-center gap-1"><MoveVertical className="h-3 w-3" />Height crossover <span className="ml-auto">{Math.round(heightCrossover)} Hz</span></span>
-            <Slider aria-label="Height crossover" className="mt-1.5" min={0} max={1} step={0.01}
-              value={[heightCrossoverPosition]} onValueChange={([value]) => onAmbient({ heightCrossoverHz: 500 * 8 ** value })} />
+            <span className="flex items-center gap-1"><MoveVertical className="h-3 w-3" />{heightToneLabel} <span className="ml-auto">{Math.round(heightTone)} Hz</span></span>
+            <Slider aria-label={heightToneLabel} className="mt-1.5" min={0} max={1} step={0.01}
+              value={[heightTonePosition]} onValueChange={([value]) => onAmbient({ heightCutoffHz: 500 * 8 ** value })} />
           </label>
         </>
+      )}
+      {showAmbientEnhancements && (hasSurround || hasHeight) && (
+        <label className="block text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1"><CloudFog className="h-3 w-3" />Ambience trim <span className="ml-auto tabular-nums">{ambientTrimDb > 0 ? "+" : ""}{ambientTrimDb.toFixed(1)} dB</span></span>
+          <Slider aria-label="Ambience trim" className="mt-1.5" min={0} max={6} step={0.5}
+            value={[ambientTrimDb]} onValueChange={([trim]) => onAmbient({ ambientTrimDb: trim })} />
+        </label>
+      )}
+      {showAmbientEnhancements && hasHeight && (
+        <label className="block text-[11px] text-muted-foreground">
+          <span className="flex items-center gap-1"><MoveVertical className="h-3 w-3" />Height texture <span className="ml-auto tabular-nums">{Math.round(heightTexture * 100)}%</span></span>
+          <Slider aria-label="Height texture" className="mt-1.5" min={0} max={0.25} step={0.01}
+            value={[heightTexture]} onValueChange={([texture]) => onAmbient({ heightTexture: texture })} />
+        </label>
       )}
       {showLfeSend && hasLfe && (
         <label className="block text-[11px] text-muted-foreground">

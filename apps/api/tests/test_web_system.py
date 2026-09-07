@@ -52,6 +52,9 @@ def test_configuration_lists_every_stem_and_runtime_capability(web_client):
     ]
     assert "vocal-presence" in configuration["choices"]["stem_eq_profiles"]
     assert configuration["manifest_keys"]["engine.stem_ensemble"] == "bool"
+    assert configuration["manifest_keys"]["mixing.stem_ambient_trim_db"] == "dict"
+    assert configuration["manifest_keys"]["mixing.stem_height_texture"] == "dict"
+    assert configuration["manifest_keys"]["mixing.stem_ambient_height_cutoff_hz"] == "dict"
     assert "engine.stem_native_rate" not in configuration["manifest_keys"]
     ensemble_parameter = next(
         item for item in configuration["manifest_parameters"]
