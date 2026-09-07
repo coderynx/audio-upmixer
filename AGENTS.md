@@ -22,3 +22,17 @@ Read a standards document only when its subject is changed:
 
 Use concise Conventional Commit subjects. Pull requests state behavioural or
 audio impact and validation run.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical labels are used. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Multi-context layout. See `docs/agents/domain.md`.
