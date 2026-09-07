@@ -408,7 +408,7 @@ describe("ProjectDetailPage tabs", () => {
     expect(saved.mixing.stem_ambient_height.Vocals).toBeCloseTo(0.01);
   });
 
-  it("shows phase-2 enhancements in the selected-stem sidebar and persists them", async () => {
+  it("keeps ambience enhancements in the stem panner and persists them", async () => {
     const config = {
       choices: {
         layout_channels: {
@@ -422,6 +422,9 @@ describe("ProjectDetailPage tabs", () => {
 
     await user.click(screen.getByRole("button", { name: "Mixer" }));
     await user.click(screen.getByRole("button", { name: "Vocals" }));
+    expect(screen.queryByRole("slider", { name: "Ambience trim" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Height texture" })).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: /^Object panner$/ }).at(-1)!);
     fireEvent.keyDown(screen.getByRole("slider", { name: "Ambience trim" }), { key: "ArrowRight" });
     fireEvent.keyDown(screen.getByRole("slider", { name: "Height texture" }), { key: "ArrowRight" });
 
