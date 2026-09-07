@@ -7,13 +7,15 @@ distributed by the AudioLab, University of York:
 
 - Dataset record: <https://doi.org/10.5281/zenodo.10886409>
 - Official database page: <https://www.york.ac.uk/sadie-project/database.html>
-- Source archive: [`D1_HRIR_SOFA.zip`](https://zenodo.org/records/10886409/files/D1_HRIR_SOFA.zip/content),
+- Source archive: [`D1_HRIR_SOFA.zip`](https://zenodo.org/records/10886409/files/D1_HRIR_SOFA.zip?download=1),
   MD5 `4850c1eb8e63e2d4f605edcdb4d5c883`
 - Official source file: `D1_48K_24bit_256tap_FIR_SOFA.sofa`
   (SHA-256 `e6c72a84dd947b5ef75438ab96a9c2a32ed10f033472b9c4c11a49aff00a8a31`)
 - Build input: `D1_48K_24bit_256tap_FIR_SOFA_v21.sofa`, a v2.1
   NetCDF/HDF5 rewrap of that file (SHA-256
   `9af7cb19531e52fb7ae8ec92621e6ab62b1d5fe584b3742be36699a0ddb0ccd4`)
+  — the 2026-09-07 rebuild downloaded the same bytes from the archive above,
+  where this v2.1 file is named `D1_48K_24bit_256tap_FIR_SOFA.sofa`.
 - Associated paper: C. Armstrong, L. Thresh, D. Murphy, and G. Kearney,
   “A Perceptual Evaluation of Individual and Non-Individual HRTFs: A Case
   Study of the SADIE II Database,” DOI
@@ -41,16 +43,19 @@ uv run --with h5py python scripts/build_binaural_filters.py \
 
 The generator selects the exact nominal BS.2051 positions from the SOFA (with
 small spherical inverse-distance interpolation only as a fallback), excludes
-LFE, and computes a full-column-rank left inverse of each layout's order-3
-encoder.  The resulting 16 ACN × 2-ear bank therefore reconstructs each
-layout speaker's measured HRIR exactly.  `flat` contains only the 256-tap
-measured HRIR; `studio` and `listening` append a short, low-level
+LFE, and conditions the direct HRIRs as minimum-phase magnitude responses plus
+measured interaural delay. The delay fit accounts for the minimum-phase pair's
+own phase and uses 200–1500 Hz. See the
+[rendering contract](spatial_audio_engine.md#4-decode-filter-set-contract).
+A full-column-rank left inverse of each layout's order-3 encoder folds those
+conditioned HRIRs into the bank without further approximation. `flat` contains
+only the 256-tap conditioned direct HRIR; `studio` and `listening` append a short, low-level
 deterministic early-ambience tail (20 ms decay and 1 ms pre-delay). The flat
 direct bank remains the transaural input.
 
-Normalization preserves SADIE's diffuse-field-compensated calibration without
-an additional arbitrary peak or RMS gain.  This identity policy is necessary
-to retain the exact measured-HRIR reconstruction; generated values remain
+Normalization preserves SADIE's diffuse-field-compensated magnitude calibration
+without an additional arbitrary peak or RMS gain. Phase conditioning changes
+the impulse waveform, not its target magnitude response. Generated values remain
 floating-point WAV samples and are not peak-normalized to an arbitrary
 coefficient.
 
@@ -68,7 +73,8 @@ compatibility banks for callers that do not provide a layout.
 
 The same measured SOFA is the speaker-to-ear plant for the five transaural
 profiles.  `scripts/build_crosstalk_filters.py` reuses the loader and direction
-selector above, keeps the existing regularized inverse, band blend, delay, and
+selector above, without headphone phase conditioning of the physical plant,
+keeps the existing regularized inverse, band blend, delay, and
 1024-tap window, and writes one four-channel bank per profile to
 `packages/core/src/crosstalk/xtc/`, then copies each file byte-for-byte to
 `apps/web/public/xtc/`.
@@ -88,10 +94,11 @@ coloration ≤1.7 dB.
 
 ## Measured L/R tolerance
 
-The KU100 measurements are intentionally not mirror-symmetrized.  Using the
+The KU100 measurements are intentionally not mirror-symmetrized. Before the
+2026-09-07 phase conditioning, using the
 same one-second seeded noise on every channel of each bed (`numpy` seed 0 at
-48 kHz), the largest raw binaural center-bed imbalance is 1.896 dB (flat,
+48 kHz), the largest raw binaural center-bed imbalance was 1.896 dB (flat,
 7.1.2); the largest symmetric transaural-profile imbalance after crosstalk
-processing is 0.605 dB.  The focused regression checks therefore bound center
-and mirror behavior to 2 dB.  This is a measured acceptance bound, not a
-request to alter or normalize the shipped HRIR assets.
+processing was 0.605 dB. The focused regression checks retain the 2 dB center
+and mirror bound and pass with the conditioned banks. No per-ear gain
+normalization or mirror averaging is applied.

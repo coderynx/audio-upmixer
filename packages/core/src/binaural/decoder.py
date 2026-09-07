@@ -66,6 +66,8 @@ def load_decode_filter_set(name: str, sample_rate: int) -> DecodeFilterSet:
         g = np.gcd(sample_rate, file_sr)
         up, down = sample_rate // g, file_sr // g
         raw = resample_poly(raw, up, down, axis=0)
+        # FIR gain is the tap sum; audio resampling preserves sample amplitude.
+        raw *= file_sr / sample_rate
     n_taps = raw.shape[0]
     taps = np.zeros((N_ACN_CHANNELS, 2, n_taps), dtype=np.float64)
     for acn in range(N_ACN_CHANNELS):

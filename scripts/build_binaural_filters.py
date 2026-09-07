@@ -39,9 +39,7 @@ PROFILES = ("flat", "studio", "listening")
 CORE_OUT_DIR = ROOT / "packages" / "core" / "src" / "binaural" / "hrir"
 WEB_OUT_DIR = ROOT / "apps" / "web" / "public" / "hrir"
 
-# SADIE's source files are diffuse-field compensated.  Keeping their gain is
-# the calibration reference: an extra peak/RMS normalization would break the
-# exact left-inverse reconstruction of the measured HRIRs.
+# Keep SADIE's diffuse-field magnitude calibration through phase conditioning.
 NORMALIZATION_POLICY = "preserve SADIE II DFC calibration; no post-gain"
 
 
@@ -223,6 +221,33 @@ def layout_hrirs(dataset: SofaHrirDataset, layout: str) -> tuple[list[tuple[floa
     return directions, hrirs
 
 
+def condition_direct_hrirs(hrirs: np.ndarray) -> np.ndarray:
+    """Use measured magnitudes and ITD with a consistent minimum-phase onset.
+
+    Removing direction-dependent excess phase prevents coherent speaker feeds
+    from cancelling presence. Retain the measured low-frequency interaural
+    delay after accounting for the minimum-phase filters' own phase difference.
+    """
+    n_fft = 8192
+    spectrum = np.fft.rfft(hrirs, n=n_fft, axis=-1)
+    cepstrum = np.fft.irfft(np.log(np.maximum(np.abs(spectrum), 1e-12)), n=n_fft, axis=-1)
+    cepstrum[..., 1:n_fft // 2] *= 2.0
+    cepstrum[..., n_fft // 2 + 1:] = 0.0
+    minimum = np.exp(np.fft.rfft(cepstrum, axis=-1))
+
+    frequencies = np.fft.rfftfreq(n_fft, 1 / SAMPLE_RATE)
+    omega = 2 * np.pi * frequencies / SAMPLE_RATE
+    band = (frequencies >= 200.0) & (frequencies <= 1500.0)
+    excess = np.unwrap(np.angle(
+        spectrum[:, 1] * minimum[:, 0] * np.conj(spectrum[:, 0] * minimum[:, 1])
+    ), axis=-1)
+    itd = -np.polyfit(omega[band], excess[:, band].T, 1)[0]
+    # 16 samples keep the fractional-delay pre-ringing inside the causal bank.
+    delays = 16.0 + np.stack((np.maximum(-itd, 0.0), np.maximum(itd, 0.0)), axis=1)
+    delayed = minimum * np.exp(-1j * omega * delays[..., None])
+    return np.fft.irfft(delayed, n=n_fft, axis=-1)[..., :DIRECT_TAPS].copy()
+
+
 def exact_left_inverse(encode: np.ndarray) -> np.ndarray:
     """Return ``D`` with ``D @ encode == I`` for a full-column-rank encoder."""
     if encode.ndim != 2 or encode.shape[1] > encode.shape[0]:
@@ -319,6 +344,7 @@ def build_filter_set(
 ) -> np.ndarray:
     """Return one measured ``(taps, 32)`` decode bank."""
     directions, hrirs = layout_hrirs(dataset, layout)
+    direct = condition_direct_hrirs(hrirs)
     if room_rt60_s is not None:
         hrirs = _add_room_tails(
             hrirs,
@@ -327,6 +353,7 @@ def build_filter_set(
             pre_delay_s=room_pre_delay_s,
             lp_hz=room_tail_lp_hz,
         )
+    hrirs[..., :DIRECT_TAPS] = direct
 
     encode = encoding_matrix([(math.radians(az), math.radians(el)) for az, el in directions])
     decode = np.linalg.pinv(encode) if layout == LEGACY_LAYOUT else exact_left_inverse(encode)

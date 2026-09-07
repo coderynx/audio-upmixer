@@ -172,11 +172,18 @@ ACN15_R]`. All four files share one sample rate; the WAV sample rate is the
 filter's native rate (48 kHz) — both engines resample the taps to the
 session's sample rate if it differs.
 
+FIR resampling must preserve transfer gain, not waveform amplitude: after
+resampling, multiply the taps by `native_rate / session_rate`. Otherwise a
+96 kHz render gains 6.02 dB relative to the unfiltered LFE addition, while a
+44.1 kHz render loses 0.74 dB. Core applies this correction in the decode
+loader; the browser and native previews currently run at the banks' 48 kHz
+rate and need no conversion.
+
 ### Per-profile assignment
 
 | Profile | Filter set name | Room | Notes |
 |---|---|---|---|
-| `flat` | `flat_o3_decode_{layout_slug}` | none (anechoic) | 256-tap measured direct HRIR only |
+| `flat` | `flat_o3_decode_{layout_slug}` | none (anechoic) | 256-tap phase-conditioned measured direct HRIR only |
 | `studio` | `studio_o3_decode_{layout_slug}` | short early ambience | measured direct HRIR plus low-level neutral ambience, 1 ms pre-delay, bright tail (3500 Hz) |
 | `listening` | `listening_o3_decode_{layout_slug}` | short early ambience | measured direct HRIR plus low-level warm ambience, 1 ms pre-delay, darker tail (2500 Hz); light polish (§5) layered on top |
 
@@ -188,10 +195,22 @@ Apache-2.0 source, attribution, citation, and reproducible generation command
 are recorded in `docs/standards/measured_hrir_provenance.md`.
 
 For each supported layout, the generator selects the exact nominal measured
-directions (with spherical interpolation only as a fallback), excludes LFE,
-and computes a full-column-rank left inverse of that layout's order-3 encoder.
-The folded 16×{L,R} bank consequently reconstructs each fixed speaker feed's
-measured HRIR exactly. `studio`/`listening` append a short, low-level
+directions (with spherical interpolation only as a fallback) and excludes LFE.
+Before fitting the bank, it conditions each measured pair into minimum-phase
+filters plus the measured excess interaural delay. That delay is fit over
+200–1500 Hz after subtracting the minimum-phase pair's own interaural phase;
+it must not be added twice. Both ears share a 16-sample causal guard, with
+the residual delay on the later ear. Magnitudes retain the measured head
+shadow and pinna cues; direction-dependent excess phase and common
+measurement latency no longer cause destructive interference when coherent
+content occupies multiple virtual speakers. This is direct-filter preparation,
+not profile EQ or room processing, and applies to all profiles including flat.
+See [the diagnosis](../reports/binaural_renderer_diagnosis.md) for measurements
+and the distinction from Apple's reference renderer.
+
+A full-column-rank left inverse of the layout's order-3 encoder folds these
+conditioned HRIRs into 16×{L,R} filters. Each fixed speaker feed reconstructs
+its conditioned HRIR exactly before float32 storage. `studio`/`listening` append a short, low-level
 deterministic early-ambience tail (20 ms decay, 1 ms pre-delay); `flat` remains
 anechoic. The SADIE diffuse-field calibration is
 preserved without an arbitrary post-generation peak or RMS gain.
