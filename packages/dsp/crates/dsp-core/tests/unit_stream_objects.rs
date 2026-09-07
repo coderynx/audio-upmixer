@@ -182,3 +182,31 @@ fn limiter_caps_the_rendered_object_programme() {
         .fold(0.0_f64, |max, sample| max.max(sample.abs()));
     assert!(peak <= ceiling + 1e-6, "object limiter leaked to {peak}");
 }
+
+#[test]
+fn lfe_sends_only_apply_to_beds() {
+    use upmixer_dsp_core::stream::params::{ObjectMode, SendShape};
+
+    for mode in [Some(ObjectMode::Mono), Some(ObjectMode::LinkedStereo), None] {
+        for downmix_lock in [false, true] {
+            let mut engine = engine(true, "native", false);
+            let mut params = engine.params().clone();
+            let mut lfe = params.speakers[0].clone();
+            lfe.name = "LFE".into();
+            params.speakers.push(lfe);
+            params.shapes.push(SendShape::Mono);
+            params.lfe_index = Some(4);
+            params.spatial_downmix_lock = downmix_lock;
+            params.stems[0].object_mode = mode;
+            params.stems[0].routing = vec![("FL".into(), 1.0), ("LFE".into(), 1.0)];
+            engine.update_params(params);
+            let mut out = vec![0.0; 5 * N];
+            assert_eq!(engine.render(&mut out, N), N);
+            assert!(out[..N].iter().any(|sample| sample.abs() > 0.1));
+            assert_eq!(
+                out[4 * N..].iter().any(|sample| sample.abs() > 0.0),
+                mode.is_none()
+            );
+        }
+    }
+}

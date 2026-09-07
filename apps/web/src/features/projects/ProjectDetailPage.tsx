@@ -273,7 +273,7 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
   const updatePlacement = realization.setPlacement;
   const objectPannerForStem = (stem: string, ariaLabel = "Object panner") => {
     if (!trackManifest || isBedStem(stem)) return null;
-    return <ObjectPannerWindow key={`panner-${stem}`} stemName={stem} placement={placementFor(stem)} maxElevationDeg={maxElevationDeg} objectMode={trackManifest.mixing.stem_object_mode[stem] ?? "linked-stereo"} route={routing[stem] || {}} channels={channels} ambientRear={trackManifest.mixing.stem_ambient_rear[stem] ?? 0} ambientHeight={trackManifest.mixing.stem_ambient_height[stem] ?? 0} ambientHeightCrossoverHz={trackManifest.mixing.stem_ambient_height_crossover_hz[stem] ?? 2000} ariaLabel={ariaLabel} onPlacement={(next) => updatePlacement(stem, next)} onObjectMode={(mode) => setStemObjectMode(stem, mode)} onRoute={(patch) => updateRoute(stem, patch)} onAmbient={(patch) => updateAmbient(stem, patch)} />;
+    return <ObjectPannerWindow key={`panner-${stem}`} stemName={stem} placement={placementFor(stem)} maxElevationDeg={maxElevationDeg} objectMode={trackManifest.mixing.stem_object_mode[stem] ?? "linked-stereo"} channels={channels} ambientRear={trackManifest.mixing.stem_ambient_rear[stem] ?? 0} ambientHeight={trackManifest.mixing.stem_ambient_height[stem] ?? 0} ambientHeightCrossoverHz={trackManifest.mixing.stem_ambient_height_crossover_hz[stem] ?? 2000} ariaLabel={ariaLabel} onPlacement={(next) => updatePlacement(stem, next)} onObjectMode={(mode) => setStemObjectMode(stem, mode)} onAmbient={(patch) => updateAmbient(stem, patch)} />;
   };
   const bedPannerForStem = (stem: string, ariaLabel = "Bed panner") => {
     if (!trackManifest || !isBedStem(stem)) return null;

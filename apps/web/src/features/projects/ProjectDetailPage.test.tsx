@@ -364,7 +364,7 @@ describe("ProjectDetailPage tabs", () => {
     expect(savedOverrides.mastering.loudness.normalize).toBe(false);
   });
 
-  it("shows an LFE send slider for a layout with an LFE channel and writes it to stem_routing", async () => {
+  it("keeps LFE and center controls out of the object panner even on LFE layouts", async () => {
     const config = {
       choices: {
         layout_channels: {
@@ -379,13 +379,8 @@ describe("ProjectDetailPage tabs", () => {
     await user.click(screen.getByRole("button", { name: "Mixer" }));
     await user.click(screen.getByRole("button", { name: "Vocals" }));
     await user.click(screen.getAllByRole("button", { name: /^Object panner$/ }).at(-1)!);
-    const lfeSlider = screen.getByRole("slider", { name: "LFE send" });
-    fireEvent.keyDown(lfeSlider, { key: "ArrowUp" });
-
-    await waitFor(() => expect(api.saveProjectTrackLayout).toHaveBeenCalled());
-    const [, , , payload] = vi.mocked(api.saveProjectTrackLayout).mock.calls.at(-1)!;
-    const saved = payload.manifest_overrides as unknown as { mixing: { stem_routing: Record<string, Record<string, number>> } };
-    expect(saved.mixing.stem_routing.Vocals.LFE).toBeCloseTo(0.01);
+    expect(screen.queryByRole("slider", { name: "LFE send" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("slider", { name: "Center level" })).not.toBeInTheDocument();
   });
 
   it("writes an ambience send to the mixing block the export reads", async () => {

@@ -40,7 +40,9 @@ export function resolveStemMixes(options: {
     // Routing is always the core's: `routing_for_scene` pans a scene position
     // through the same panner the export uses, so the preview never derives
     // one of its own.
-    const routing = mix?.stem_routing?.[stem.stem_key] || mix?.stem_routing?.[base] || {};
+    const storedRouting = mix?.stem_routing?.[stem.stem_key] || mix?.stem_routing?.[base] || {};
+    const routing = isBedStem(stem.stem_key) ? storedRouting
+      : Object.fromEntries(Object.entries(storedRouting).filter(([channel]) => channel !== "LFE"));
 
     let total = 0;
     let frontWeight = 0;

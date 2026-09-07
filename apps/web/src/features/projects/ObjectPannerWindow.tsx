@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { CloudFog, MoveVertical, UserRound, Waves, X } from "lucide-react";
+import { CloudFog, MoveVertical, UserRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { getStemColor, getStemIcon } from "@/lib/stems";
@@ -80,7 +80,6 @@ export function ObjectPannerWindow({
   placement,
   maxElevationDeg,
   objectMode = "linked-stereo",
-  route = {},
   channels = [],
   ambientRear = 0,
   ambientHeight = 0,
@@ -88,14 +87,12 @@ export function ObjectPannerWindow({
   ariaLabel = "Object panner",
   onPlacement,
   onObjectMode = () => {},
-  onRoute = () => {},
   onAmbient = () => {},
 }: {
   stemName: string;
   placement: StemPlacement;
   maxElevationDeg: number;
   objectMode?: "linked-stereo" | "mono";
-  route?: Record<string, number>;
   channels?: string[];
   ambientRear?: number;
   ambientHeight?: number;
@@ -103,7 +100,6 @@ export function ObjectPannerWindow({
   ariaLabel?: string;
   onPlacement: (next: StemPlacement) => void;
   onObjectMode?: (mode: "linked-stereo" | "mono") => void;
-  onRoute?: (patch: Record<string, number>) => void;
   onAmbient?: (patch: { rear?: number; height?: number; heightCrossoverHz?: number }) => void;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -119,7 +115,6 @@ export function ObjectPannerWindow({
   const stereo = objectMode === "linked-stereo";
   const hasSurround = channels.includes("SL") || channels.includes("SR") || channels.includes("BL") || channels.includes("BR");
   const hasHeight = channels.includes("TFL") || channels.includes("TFR") || channels.includes("TBL") || channels.includes("TBR");
-  const hasLfe = channels.includes("LFE");
   const heightCrossover = Math.min(4000, Math.max(500, ambientHeightCrossoverHz));
   const heightCrossoverPosition = Math.log(heightCrossover / 500) / Math.log(8);
   const StemIcon = getStemIcon(stemName);
@@ -343,7 +338,7 @@ export function ObjectPannerWindow({
                   value={[placement.object_size]} onValueChange={([object_size]) => onPlacement({ ...placement, object_size })} />
               </label>
             </div>
-            {(hasSurround || hasHeight || hasLfe) && <div className="grid gap-3 sm:grid-cols-2">
+            {(hasSurround || hasHeight) && <div className="grid gap-3 sm:grid-cols-2">
               {hasSurround && <label className="block text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1"><CloudFog className="h-3 w-3" />Ambience to rear</span>
                 <Slider aria-label="Ambience to rear" className="mt-1.5" min={0} max={1} step={0.01}
@@ -358,11 +353,6 @@ export function ObjectPannerWindow({
                 <span className="flex items-center gap-1"><MoveVertical className="h-3 w-3" />Height crossover <span className="ml-auto">{Math.round(heightCrossover)} Hz</span></span>
                 <Slider aria-label="Height crossover" className="mt-1.5" min={0} max={1} step={0.01}
                   value={[heightCrossoverPosition]} onValueChange={([value]) => onAmbient({ heightCrossoverHz: 500 * 8 ** value })} />
-              </label>}
-              {hasLfe && <label className="block text-[11px] text-muted-foreground">
-                <span className="flex items-center gap-1"><Waves className="h-3 w-3" />LFE send</span>
-                <Slider aria-label="LFE send" className="mt-1.5" min={0} max={1} step={0.01}
-                  value={[route.LFE ?? 0]} onValueChange={([lfe]) => onRoute({ LFE: lfe })} />
               </label>}
             </div>}
           </div>

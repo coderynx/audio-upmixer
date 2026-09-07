@@ -107,7 +107,9 @@ pub(crate) fn build_stem_mix_routes(
                     continue;
                 }
                 if name == "LFE" {
-                    lfe_weight += weight;
+                    if objects.is_none() {
+                        lfe_weight += weight;
+                    }
                 } else if objects.is_none() {
                     if let Some(channel) = params.speaker_index(name) {
                         needs_surround |= matches!(

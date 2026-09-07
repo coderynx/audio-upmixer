@@ -15,7 +15,7 @@ describe("resolveStemMixes", () => {
       mix: {
         bed_trim_db: 3,
         stem_rebalance: { Vocals: 1, Bass: 2 },
-        stem_routing: { Vocals: { C: 1 }, Bass: { C: 1 } },
+        stem_routing: { Vocals: { C: 1, LFE: 1 }, Bass: { C: 1, LFE: 1 } },
         stem_object_mode: { Vocals: "linked-stereo" },
         stem_placement: {
           Vocals: { azimuth_deg: 0, elevation_deg: 0, width_deg: 0, object_size: 0 },
@@ -25,6 +25,8 @@ describe("resolveStemMixes", () => {
       constants: TEST_ENGINE_CONSTANTS,
     });
 
+    expect(stems[0].routing).toEqual({ C: 1 });
+    expect(stems[1].routing).toEqual({ C: 1, LFE: 1 });
     expect(stems[0].routeScale).toBe(1);
     expect(stems[0].rebalanceDb).toBe(1);
     expect(stems[1].routeScale).toBeCloseTo(

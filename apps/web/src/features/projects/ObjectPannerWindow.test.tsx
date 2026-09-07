@@ -153,23 +153,22 @@ describe("ObjectPannerWindow", () => {
   it("keeps direct-image and object send controls in the panner window", async () => {
     const user = userEvent.setup();
     const onObjectMode = vi.fn();
-    const onRoute = vi.fn();
     const onAmbient = vi.fn();
     render(<ObjectPannerWindow stemName="Vocals" placement={PLACEMENT} maxElevationDeg={35}
-      channels={["FL", "FR", "LFE", "SL", "SR", "TFL", "TFR"]} route={{ LFE: 0.5 }}
+      channels={["FL", "FR", "LFE", "SL", "SR", "TFL", "TFR"]}
       ambientRear={0.5} ambientHeight={0.5} onPlacement={vi.fn()}
-      onObjectMode={onObjectMode} onRoute={onRoute} onAmbient={onAmbient} />);
+      onObjectMode={onObjectMode} onAmbient={onAmbient} />);
     await user.click(screen.getByRole("button", { name: "Object panner" }));
 
     fireEvent.change(screen.getByLabelText("Direct image"), { target: { value: "mono" } });
     fireEvent.keyDown(screen.getByLabelText("Ambience to rear"), { key: "ArrowRight" });
     fireEvent.keyDown(screen.getByLabelText("Ambience to height"), { key: "ArrowRight" });
-    fireEvent.keyDown(screen.getByLabelText("LFE send"), { key: "ArrowRight" });
+    expect(screen.queryByLabelText("LFE send")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Center level")).not.toBeInTheDocument();
 
     expect(onObjectMode).toHaveBeenCalledWith("mono");
     expect(onAmbient).toHaveBeenCalledWith({ rear: 0.51 });
     expect(onAmbient).toHaveBeenCalledWith({ height: 0.51 });
-    expect(onRoute).toHaveBeenCalledWith({ LFE: 0.51 });
   });
 
   it("places the L and R markers at the ends of the stereo image width", () => {

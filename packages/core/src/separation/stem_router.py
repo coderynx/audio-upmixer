@@ -673,7 +673,7 @@ class StemRouter:
 
             direct_items: list[tuple[ChannelLabel, float, np.ndarray]] = []
             for label in self._fmt.channels:
-                if label.value not in skip and label == ChannelLabel.LFE:
+                if object_routes is None and label.value not in skip and label == ChannelLabel.LFE:
                     lfe_bus[:n] += stem_routing.get("LFE", 0.0) * stem_mono
 
             if object_routes is None:

@@ -101,7 +101,7 @@ that Track and layout's override, with the layout pinned. Avoid calling it a
 | `mixing.bed_trim_db` / `mixing.stem_*` | Reversible shared bed trim, stem controls, and Advanced JSON | Direct manifest mapping | None | Manifest behavior |
 | `mixing.spatial` / `routing.content_mix_strength` | Derived explicit-routing profile | Forced deterministic project values | Medium | Project behavior |
 | `mixing.channel_layout` | Per track, several per track: the layout set is chosen in the Prepare tab and per-asset staging, and selected in the tracks panel tree; drives the routing graph, spatial views, meters and the preview engine | `FORMAT_MAP` name; `stereo` (System A) is a delivery target like any bed, but restricts `format.type` to `multichannel` | None | Unified |
-| `mixing.stem_routing` | Position sliders, per-stem LFE send slider, presets, Advanced matrix; a single Left→Right pan slider replaces all three on a `stereo` layout | Exact speaker matrix, per layout, stored already folded to FL/FR for a `stereo` layout | None | Project behavior for UX |
+| `mixing.stem_routing` | Position sliders, bed LFE level slider, presets, Advanced matrix; a single Left→Right pan slider replaces all three on a `stereo` layout | Exact speaker matrix, per layout, stored already folded to FL/FR for a `stereo` layout | None | Project behavior for UX |
 | `routing.*` | Advanced JSON | Direct manifest mapping | High before change | Manifest behavior |
 | `mastering.*` | Mastering tab and reference upload | Exported job receives trusted reference | High before change | Unified |
 | `format.*` | Delivery controls and Advanced JSON | Direct mapping | None | Manifest behavior |
@@ -149,13 +149,20 @@ channels *are* folded in, at `format.downmix.height_coeff` (default `0.7071`,
 `0.0` to drop them) — a project convention, see
 `docs/standards/spatial_layouts_bs775_bs2051.md`.
 
-Each stem's LFE send amount is the `"LFE"` weight inside its
-`mixing.stem_routing` entry — a dedicated slider next to the position
-controls, independent of the front/back and floor/height sliders. It is
-excluded from position-slider-driven repositioning's constant-power
-normalization (LFE is not a positional speaker) but carried forward
-unchanged when a stem is dragged. `--stem-lfe` on the CLI sets the same
-field.
+A bed's LFE send amount is the `"LFE"` weight inside its
+`mixing.stem_routing` entry. The bed panner keeps LFE level and center level
+controls; repositioning preserves the independent LFE send. `--stem-lfe`
+sets the same field for beds. Object panners expose neither control, and
+preview and export ignore legacy object LFE weights, including ADM bed
+construction. Object audio stays full-range when rasterized to speakers.
+
+This follows [Logic Pro's object/bed workflow](https://support.apple.com/en-gb/guide/logicpro/lgcp8a3c3dd3/mac)
+and [Surround Panner controls](https://support.apple.com/en-hk/guide/logicpro/lgcp7a500829/mac).
+LFE authoring is separate from playback bass management: the
+[Dolby Atmos Renderer guide, section 22.1.3](https://professional.dolby.com/siteassets/content-creation/dolby-atmos/dolby_atmos_renderer_guide.pdf)
+provides speaker/object bass extraction with the crossover off by default.
+Upmixer leaves playback bass management to the monitoring renderer/system;
+it does not bake an automatic object bass copy into the delivered LFE.
 
 ### Two-channel (`stereo`) layouts
 
