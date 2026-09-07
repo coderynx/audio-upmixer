@@ -900,10 +900,8 @@ pub fn build_stem_routing(
     };
 
     let mut routing = Vec::new();
-    for stem in stems {
-        let Some(placement) = resolve_placement(preset, stem, &panning_channels) else {
-            continue;
-        };
+    for (stem, treatment) in super::presets::preset_treatments_for_layout(preset, stems, channels) {
+        let placement = project(&treatment.placement, &panning_channels);
         let route = placement_route(&placement, &panning_channels);
         if to_stereo {
             let (left, right) = fold_route_to_stereo(&route, &panning_channels);

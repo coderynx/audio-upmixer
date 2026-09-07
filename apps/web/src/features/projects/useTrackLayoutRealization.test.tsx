@@ -6,7 +6,7 @@ import { resolveTrackLayoutManifest, useTrackLayoutRealization } from "./useTrac
 
 const panner = {
   maxElevationDeg: () => 45,
-  presetTreatments: () => ({}),
+  presetTreatments: vi.fn(() => ({})),
   placementRoute: () => ({ FL: .5, FR: .5 }),
 };
 
@@ -61,6 +61,20 @@ describe("Track Layout Realization", () => {
     act(() => result.current.setPlacement("Vocals", { azimuth_deg: 20, elevation_deg: 0, width_deg: 0, object_size: 0 }));
     expect(result.current.manifest?.mixing.stem_placement.Vocals).toMatchObject({ azimuth_deg: 20 });
     expect(result.current.manifest?.mixing.stem_routing.Vocals).toEqual({ FL: .5, FR: .5 });
+  });
+
+  it("applies a preset to the selected track stem layout", async () => {
+    panner.presetTreatments.mockReturnValueOnce({
+      Vocals: { placement: { azimuth_deg: 0, elevation_deg: 0, width_deg: 32, object_size: .12 }, sends: { lfe: 0, rear: 0, height: 0, heightCrossoverHz: 4000 } },
+      Other: { placement: { azimuth_deg: 55, elevation_deg: 0, width_deg: 56, object_size: .2 }, sends: { lfe: .15, rear: .06, height: 0, heightCrossoverHz: 2000 } },
+    });
+    const { result } = renderRealization();
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => result.current.applyPreset("balanced", ["Vocals", "Other"]));
+
+    expect(panner.presetTreatments).toHaveBeenLastCalledWith("balanced", ["Vocals", "Other"], ["FL", "FR"]);
+    expect(result.current.manifest?.mixing.stem_placement).toMatchObject({ Vocals: { width_deg: 32 }, Other: { azimuth_deg: 55 } });
   });
 
   it("commits undo through the realization", async () => {

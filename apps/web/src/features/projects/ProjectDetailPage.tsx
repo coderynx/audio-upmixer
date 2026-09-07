@@ -203,6 +203,7 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
   const { peaks, loading: peaksLoading } = useTrackPeaks(selected);
   const ready = Boolean(project?.prepared_stems.length);
   const stemNames = project?.prepared_stems || [];
+  const presetStemNames = selected?.stems.map((stem) => stem.stem_key) || [];
   const orderedStems = React.useMemo(() => {
     const known = new Set(stemNames);
     const kept = viewState.stemOrder.filter((stem) => known.has(stem));
@@ -335,7 +336,7 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
       : objectPannerForStem(stem, ariaLabel);
     return <div className="flex w-full flex-col items-center gap-1.5">{stemProcessingFor(stem)}{pannerControl}</div>;
   };
-  const applyPreset = () => realization.applyPreset(preset, stemNames);
+  const applyPreset = () => realization.applyPreset(preset, presetStemNames);
   const toggleEnabled = React.useCallback((stem: string) => {
     if (!trackManifest) return;
     const current = trackManifest.mixing.stem_enabled[stem] !== false;

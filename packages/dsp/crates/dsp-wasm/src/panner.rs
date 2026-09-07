@@ -68,19 +68,19 @@ pub extern "C" fn dsp_preset_stem_count(preset: usize) -> usize {
         .map_or(0, |name| presets::preset_stems(name).len())
 }
 
-fn preset_stem(preset: usize, stem: usize) -> Option<&'static (&'static str, StemPlacement)> {
+fn preset_stem(preset: usize, stem: usize) -> Option<&'static str> {
     let name = presets::PRESET_NAMES.get(preset)?;
-    presets::preset_stems(name).get(stem)
+    presets::preset_stems(name).get(stem).copied()
 }
 
 #[no_mangle]
 pub extern "C" fn dsp_preset_stem_name_len(preset: usize, stem: usize) -> usize {
-    preset_stem(preset, stem).map_or(0, |(name, _)| name.len())
+    preset_stem(preset, stem).map_or(0, str::len)
 }
 
 #[no_mangle]
 pub extern "C" fn dsp_preset_stem_name_ptr(preset: usize, stem: usize) -> *const u8 {
-    preset_stem(preset, stem).map_or(std::ptr::null(), |(name, _)| name.as_ptr())
+    preset_stem(preset, stem).map_or(std::ptr::null(), str::as_ptr)
 }
 
 /// Write one complete preset treatment as `[azimuth, elevation, width,
@@ -94,7 +94,7 @@ pub unsafe extern "C" fn dsp_preset_treatment(preset: usize, stem: usize, out: *
     let Some(name) = presets::PRESET_NAMES.get(preset) else {
         return -1;
     };
-    let Some((stem_name, _)) = preset_stem(preset, stem) else {
+    let Some(stem_name) = preset_stem(preset, stem) else {
         return -1;
     };
     let Some(treatment) = presets::preset_treatment(name, stem_name) else {
@@ -103,6 +103,62 @@ pub unsafe extern "C" fn dsp_preset_treatment(preset: usize, stem: usize, out: *
     if out.is_null() {
         return -1;
     }
+    let placement = treatment.placement;
+    std::slice::from_raw_parts_mut(out, 10).copy_from_slice(&[
+        placement.azimuth_deg,
+        placement.elevation_deg,
+        placement.width_deg,
+        placement.object_size,
+        placement.lfe,
+        placement.diversity,
+        placement.center_level_db,
+        treatment.ambient_rear,
+        treatment.ambient_height,
+        treatment.ambient_height_crossover_hz,
+    ]);
+    0
+}
+
+/// Write a treatment adapted to the supplied stem and speaker layouts.
+///
+/// # Safety
+/// `stems` and `channels` must address readable channel indices; `out` must
+/// address 10 writable f64 values.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_preset_layout_treatment(
+    preset: usize,
+    stem: usize,
+    stems: *const u32,
+    n_stems: usize,
+    channels: *const u32,
+    n_channels: usize,
+    out: *mut f64,
+) -> i32 {
+    let Some(name) = presets::PRESET_NAMES.get(preset) else {
+        return -1;
+    };
+    let Some(stem_name) = preset_stem(preset, stem) else {
+        return -1;
+    };
+    let Some(channels) = channel_names(channels, n_channels) else {
+        return -1;
+    };
+    if stems.is_null() || out.is_null() {
+        return -1;
+    }
+    let Some(stems) = std::slice::from_raw_parts(stems, n_stems)
+        .iter()
+        .map(|index| presets::PRESET_STEMS.get(*index as usize).copied())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return -1;
+    };
+    let Some((_, treatment)) = presets::preset_treatments_for_layout(name, &stems, &channels)
+        .into_iter()
+        .find(|(candidate, _)| *candidate == stem_name)
+    else {
+        return -1;
+    };
     let placement = treatment.placement;
     std::slice::from_raw_parts_mut(out, 10).copy_from_slice(&[
         placement.azimuth_deg,

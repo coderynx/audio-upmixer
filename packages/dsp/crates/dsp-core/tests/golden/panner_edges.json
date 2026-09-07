@@ -863,7 +863,7 @@
       "azimuth_deg",
       "elevation_deg",
       "width_deg",
-      "spread_deg",
+      "object_size",
       "lfe"
     ]
   },

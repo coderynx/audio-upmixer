@@ -137,7 +137,7 @@ export function useTrackLayoutRealization({
 
   const applyPreset = React.useCallback((preset: string, stems: string[]) => {
     if (!manifest || !panner || !stems.length) return;
-    const treatments = panner.presetTreatments(preset);
+    const treatments = panner.presetTreatments(preset, stems.map((stem) => stem.split("@", 1)[0]), channels);
     const placements: Record<string, StemPlacement> = {};
     const routing: StemRouting = {};
     const rear = { ...manifest.mixing.stem_ambient_rear };

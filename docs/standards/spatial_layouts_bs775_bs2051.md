@@ -617,13 +617,15 @@ surface is `--stem-pan STEM=VALUE`.
 
 ## Stem placement and the routing presets
 
-Routing presets are not per-layout gain tables. Each preset in
-`packages/core/src/separation/stem_placement.py` holds one canonical
-`StemPlacement` per stem — image centre `azimuth_deg`/`elevation_deg` in the
-geometry convention above (0° = front, positive azimuth = left, positive
-elevation = up), an image `width_deg`, a normalized ADM `object_size`, an LFE
-send, and optional bed `diversity`/`center_level_db` controls. `preset_routing`
-realizes that table on one `FORMAT_MAP` layout.
+Routing presets are layout-adaptive rather than per-layout gain tables. The
+shared DSP ranks the stems present in a track: anchors remain front, while
+secondary stems spread into side, rear, and (where available) height zones as
+the layout becomes richer. Each resulting `StemPlacement` uses image centre
+`azimuth_deg`/`elevation_deg` in the geometry convention above (0° = front,
+positive azimuth = left, positive elevation = up), image `width_deg`,
+normalized ADM `object_size`, LFE send, and optional bed
+`diversity`/`center_level_db` controls. The same selection is realized on the
+selected speaker layout for preview and export.
 
 ### Realization rules
 

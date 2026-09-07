@@ -218,9 +218,19 @@ ZONE_ROUTING: dict[str, dict[str, dict[str, float]]] = {
 }
 
 
-DEFAULT_ROUTING: dict[str, dict[str, float]] = preset_routing(
-    DEFAULT_ROUTING_PRESET, FORMAT_MAP[DEFAULT_ROUTING_LAYOUT]
-)
+DEFAULT_ROUTING: dict[str, dict[str, float]] = {
+    routed_stem: {
+        channel: gain
+        for channel, gain in zip(
+            [label.value for label in FORMAT_MAP[DEFAULT_ROUTING_LAYOUT].channels], gains
+        )
+        if gain > 0.0
+    }
+    for stem in STEM_ROUTING_PRESET_TREATMENTS[DEFAULT_ROUTING_PRESET]
+    for routed_stem, gains in upmixer_dsp.build_stem_routing(
+        [stem], [label.value for label in FORMAT_MAP[DEFAULT_ROUTING_LAYOUT].channels], DEFAULT_ROUTING_PRESET
+    )
+}
 """Fallback route per stem when nothing else supplies one — the default preset
 realized on the widest layout, so the built-in fallback and the preset a user
 applies are the same placement."""
@@ -321,6 +331,7 @@ class StemRouter:
         self._fmt = output_fmt
         self._manifest_routing = config.stem_routing or {}
         self._custom_routing = routing or {}
+        self._layout_routing: dict[str, dict[str, float]] = {}
         self._stem_enabled = config.stem_enabled or {}
         self._ambient_rear = config.stem_ambient_rear or {}
         self._ambient_height = config.stem_ambient_height or {}
@@ -444,11 +455,11 @@ class StemRouter:
             base = (
                 zone_routing[stem_name]
                 if stem_name in zone_routing
-                else DEFAULT_ROUTING.get(stem_name)
+                else self._layout_routing.get(stem_name, DEFAULT_ROUTING.get(stem_name))
             )
         else:
             stem_name = stem_key
-            base = DEFAULT_ROUTING.get(stem_name)
+            base = self._layout_routing.get(stem_name, DEFAULT_ROUTING.get(stem_name))
 
         # Folded before the overrides merge, never after: folding the merged
         # map would re-add the base's SL/BL weight on top of a user's pan.
@@ -637,6 +648,7 @@ class StemRouter:
         Returns the rendered bed and any authored ADM objects.
         """
         skip = passthrough_channels or set()
+        self._layout_routing = build_stem_routing(list(stems), self._fmt)
         channels: dict[str, np.ndarray] = {
             label.value: np.zeros(n_samples, dtype=np.float64)
             for label in self._fmt.channels

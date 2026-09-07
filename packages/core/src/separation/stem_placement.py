@@ -99,7 +99,9 @@ def _channel_names(output_format: OutputFormat) -> list[str]:
     return [label.value for label in output_format.channels]
 
 
-def resolve_placements(preset: str, layout: str) -> dict[str, StemPlacement]:
+def resolve_placements(
+    preset: str, layout: str, stems: list[str] | None = None,
+) -> dict[str, StemPlacement]:
     """Return *preset*'s per-stem placements as realized on *layout*."""
     if preset not in STEM_ROUTING_PRESET_TREATMENTS:
         raise ValueError(
@@ -109,6 +111,11 @@ def resolve_placements(preset: str, layout: str) -> dict[str, StemPlacement]:
         raise ValueError(f"Unknown channel layout '{layout}'")
     output_format = FORMAT_MAP[layout if layout != "stereo" else STEREO_PLACEMENT_LAYOUT]
     channels = _channel_names(output_format)
+    if stems is not None:
+        values = upmixer_dsp.preset_treatments_for_layout(
+            preset, [stem.split("@", 1)[0] for stem in stems], channels
+        )
+        return {stem: _treatment(value).placement for stem, value in values}
     return {
         stem: StemPlacement(
             *upmixer_dsp.project_placement(
@@ -124,6 +131,17 @@ def resolve_placements(preset: str, layout: str) -> dict[str, StemPlacement]:
         )
         for stem, treatment in STEM_ROUTING_PRESET_TREATMENTS[preset].items()
         for placement in (treatment.placement,)
+    }
+
+
+def preset_treatments(preset: str, layout: str, stems: list[str]) -> dict[str, PresetTreatment]:
+    """Return the shared preset treatments for one track and speaker layout."""
+    output_format = FORMAT_MAP[layout if layout != "stereo" else STEREO_PLACEMENT_LAYOUT]
+    return {
+        stem: _treatment(values)
+        for stem, values in upmixer_dsp.preset_treatments_for_layout(
+            preset, [stem.split("@", 1)[0] for stem in stems], _channel_names(output_format)
+        )
     }
 
 

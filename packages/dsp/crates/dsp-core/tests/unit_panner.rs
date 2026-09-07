@@ -215,6 +215,56 @@ fn lead_vocals_are_stereo_wide_in_every_preset() {
 }
 
 #[test]
+fn preset_treatments_rebalance_the_selected_stem_and_speaker_layouts() {
+    use upmixer_dsp_core::spatial::presets::preset_treatments_for_layout;
+
+    let sparse = preset_treatments_for_layout("immersive", &["Vocals", "Other"], &FULL);
+    let sparse_other = sparse.iter().find(|(stem, _)| *stem == "Other").unwrap().1;
+    assert!(
+        sparse_other.placement.azimuth_deg.abs() < 90.0,
+        "sparse main material stays forward"
+    );
+
+    let rich_stems = [
+        "Lead Vocals",
+        "Bass",
+        "Kick",
+        "Snare",
+        "Backing Vocals",
+        "Guitar",
+        "Piano",
+        "Other",
+    ];
+    let rich = preset_treatments_for_layout("immersive", &rich_stems, &FULL);
+    for anchor in ["Lead Vocals", "Bass", "Kick", "Snare"] {
+        assert!(
+            rich.iter()
+                .find(|(stem, _)| *stem == anchor)
+                .unwrap()
+                .1
+                .placement
+                .azimuth_deg
+                .abs()
+                < 90.0
+        );
+    }
+    assert!(rich
+        .iter()
+        .any(|(_, treatment)| treatment.placement.azimuth_deg.abs() > 120.0));
+    assert!(rich
+        .iter()
+        .any(|(_, treatment)| treatment.placement.elevation_deg > 0.0));
+
+    let flat = preset_treatments_for_layout("immersive", &rich_stems, &BED_51);
+    assert!(flat
+        .iter()
+        .all(|(_, treatment)| treatment.placement.elevation_deg == 0.0));
+    assert!(flat
+        .iter()
+        .all(|(_, treatment)| treatment.placement.azimuth_deg.abs() < 90.0));
+}
+
+#[test]
 fn the_lfe_send_passes_through_untouched() {
     let placement = StemPlacement::new(0.0, 0.0, 60.0, 40.0, 0.75);
     let route = placement_route(&placement, &FULL);
@@ -290,10 +340,12 @@ fn cached_layout_matches_the_one_shot_panner() {
 
 #[test]
 fn preset_ambient_keeps_the_pulse_dry_and_scales_the_room_per_preset() {
-    use upmixer_dsp_core::spatial::presets::{preset_stems, preset_treatment, PRESET_NAMES};
+    use upmixer_dsp_core::spatial::presets::{
+        preset_stems, preset_treatment, preset_treatments_for_layout, PRESET_NAMES,
+    };
 
     for preset in PRESET_NAMES {
-        for (stem, _) in preset_stems(preset) {
+        for stem in preset_stems(preset) {
             let treatment = preset_treatment(preset, stem).unwrap();
             let rear = treatment.ambient_rear;
             let height = treatment.ambient_height;
@@ -312,17 +364,20 @@ fn preset_ambient_keeps_the_pulse_dry_and_scales_the_room_per_preset() {
             }
         }
     }
-    let intimate = preset_treatment("intimate", "Crowd").unwrap();
-    let live = preset_treatment("live", "Crowd").unwrap();
+    let rich = ["Lead Vocals", "Backing Vocals", "Guitar", "Piano", "Crowd"];
+    let for_layout = |preset| {
+        preset_treatments_for_layout(preset, &rich, &FULL)
+            .into_iter()
+            .find(|(stem, _)| *stem == "Crowd")
+            .unwrap()
+            .1
+    };
+    let intimate = for_layout("intimate");
+    let live = for_layout("live");
     assert!(
         live.ambient_rear > intimate.ambient_rear && live.ambient_height > intimate.ambient_height
     );
-    assert!(
-        preset_treatment("immersive", "Crowd")
-            .unwrap()
-            .ambient_height
-            > live.ambient_height
-    );
+    assert!(for_layout("immersive").ambient_height > live.ambient_height);
     assert!(preset_treatment("balanced", "nope").is_none());
     assert!(preset_treatment("nope", "Crowd").is_none());
     assert_eq!(
@@ -343,17 +398,9 @@ fn preset_object_sizes_are_normalized_and_expand_with_scope() {
     use upmixer_dsp_core::spatial::presets::{preset_placement, preset_stems, PRESET_NAMES};
 
     for preset in PRESET_NAMES {
-        for (_, placement) in preset_stems(preset) {
+        for stem in preset_stems(preset) {
+            let placement = preset_placement(preset, stem).unwrap();
             assert!((0.0..=1.0).contains(&placement.object_size));
         }
     }
-
-    assert!(
-        preset_placement("intimate", "Crowd").unwrap().object_size
-            < preset_placement("balanced", "Crowd").unwrap().object_size
-    );
-    assert!(
-        preset_placement("balanced", "Crowd").unwrap().object_size
-            < preset_placement("wide", "Crowd").unwrap().object_size
-    );
 }

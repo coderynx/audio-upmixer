@@ -146,7 +146,7 @@ fn preset_names() -> Vec<&'static str> {
 fn preset_treatments(preset: &str) -> Vec<(String, PresetTreatmentTuple)> {
     presets::preset_stems(preset)
         .iter()
-        .filter_map(|(stem, _)| {
+        .filter_map(|stem| {
             let treatment = presets::preset_treatment(preset, stem)?;
             let placement = unpack_preset(&treatment.placement);
             Some((
@@ -168,6 +168,35 @@ fn preset_treatments(preset: &str) -> Vec<(String, PresetTreatmentTuple)> {
         .collect()
 }
 
+#[pyfunction]
+fn preset_treatments_for_layout(
+    preset: &str,
+    stems: Vec<String>,
+    channels: Vec<String>,
+) -> Vec<(String, PresetTreatmentTuple)> {
+    presets::preset_treatments_for_layout(preset, &as_refs(&stems), &as_refs(&channels))
+        .into_iter()
+        .map(|(stem, treatment)| {
+            let placement = unpack_preset(&treatment.placement);
+            (
+                stem.to_string(),
+                (
+                    placement.0,
+                    placement.1,
+                    placement.2,
+                    placement.3,
+                    placement.4,
+                    placement.5,
+                    placement.6,
+                    treatment.ambient_rear,
+                    treatment.ambient_height,
+                    treatment.ambient_height_crossover_hz,
+                ),
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(direction, m)?)?;
     m.add_function(wrap_pyfunction!(panning_gains, m)?)?;
@@ -179,6 +208,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fold_route_to_stereo, m)?)?;
     m.add_function(wrap_pyfunction!(preset_names, m)?)?;
     m.add_function(wrap_pyfunction!(preset_treatments, m)?)?;
+    m.add_function(wrap_pyfunction!(preset_treatments_for_layout, m)?)?;
     m.add("VIRTUAL_SOURCE_STEP_DEG", panner::VIRTUAL_SOURCE_STEP_DEG)?;
     m.add("MINIMUM_SEND", panner::MINIMUM_SEND)?;
     m.add(

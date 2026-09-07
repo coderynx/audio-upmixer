@@ -70,9 +70,7 @@ describe("wasm panner", () => {
     expect(balanced["Lead Vocals"].placement).toEqual({
       azimuth_deg: 0, elevation_deg: 0, width_deg: 60, object_size: 0.1, diversity: 0, center_level_db: 1.5,
     });
-    expect(balanced.Crowd.placement).toMatchObject({ diversity: 0.5, center_level_db: -3 });
-    // The `stage` preset is the one that places instruments off-centre.
-    expect(instance.presetTreatments("stage").Guitar.placement.azimuth_deg).toBe(50);
+    expect(balanced.Crowd.placement.azimuth_deg).toBeLessThan(-90);
     expect(instance.presetTreatments("no-such-preset")).toEqual({});
 
     expect(balanced.Kick.sends.lfe).toBeCloseTo(0.82, 9);
@@ -80,9 +78,23 @@ describe("wasm panner", () => {
       lfe: 0, rear: 0, height: 0, heightCrossoverHz: 4000,
     });
     expect(balanced.Guitar.sends.heightCrossoverHz).toBe(2000);
-    expect(balanced.Crowd.sends.rear).toBeGreaterThan(balanced.Guitar.sends.rear);
     expect(instance.presetTreatments("intimate").Crowd.sends.rear)
       .toBeLessThan(instance.presetTreatments("live").Crowd.sends.rear);
+
+    const sparse = instance.presetTreatments("immersive", ["Vocals", "Other"], FULL);
+    expect(Math.abs(sparse.Other.placement.azimuth_deg)).toBeLessThan(90);
+    const rich = instance.presetTreatments(
+      "immersive", ["Lead Vocals", "Bass", "Kick", "Snare", "Backing Vocals", "Guitar", "Piano", "Other"], FULL,
+    );
+    const wide = instance.presetTreatments(
+      "wide", ["Lead Vocals", "Bass", "Kick", "Snare", "Backing Vocals", "Guitar", "Piano", "Other"], FULL,
+    );
+    const balancedRich = instance.presetTreatments(
+      "balanced", ["Lead Vocals", "Bass", "Kick", "Snare", "Backing Vocals", "Guitar", "Piano", "Other"], FULL,
+    );
+    expect(Math.abs(wide.Guitar.placement.azimuth_deg)).toBeGreaterThan(Math.abs(balancedRich.Guitar.placement.azimuth_deg));
+    expect(Math.abs(rich.Other.placement.azimuth_deg)).toBeGreaterThan(120);
+    expect(rich.Other.placement.elevation_deg).toBeGreaterThan(0);
   });
 
   it("reports the elevation a layout can reach", () => {

@@ -46,6 +46,10 @@ type PannerExports = {
   dsp_preset_stem_name_len(preset: number, stem: number): number;
   dsp_preset_stem_name_ptr(preset: number, stem: number): number;
   dsp_preset_treatment(preset: number, stem: number, out: number): number;
+  dsp_preset_layout_treatment(
+    preset: number, stem: number, stems: number, nStems: number,
+    channels: number, nChannels: number, out: number,
+  ): number;
   dsp_placement_route(
     azimuth: number, elevation: number, width: number, spread: number,
     diversity: number, centerLevelDb: number, lfe: number,
@@ -75,6 +79,7 @@ let pannerPromise: Promise<Panner> | null = null;
 
 export class Panner {
   private readonly channelIndex = new Map<string, number>();
+  private readonly stemIndex = new Map<string, number>();
   private readonly presetNames: string[] = [];
 
   constructor(private readonly exports: PannerExports) {
@@ -88,6 +93,9 @@ export class Panner {
       this.presetNames.push(
         this.readString(exports.dsp_preset_name_ptr(preset), exports.dsp_preset_name_len(preset)),
       );
+    }
+    for (let stem = 0; stem < exports.dsp_preset_stem_count(0); stem += 1) {
+      this.stemIndex.set(this.readString(exports.dsp_preset_stem_name_ptr(0, stem), exports.dsp_preset_stem_name_len(0, stem)), stem);
     }
   }
 
@@ -129,19 +137,31 @@ export class Panner {
   }
 
   /** Every complete treatment a preset names. */
-  presetTreatments(preset: string): Record<string, PresetTreatment> {
+  presetTreatments(preset: string, stems?: string[], channels?: string[]): Record<string, PresetTreatment> {
     const index = this.presetNames.indexOf(preset);
     if (index < 0) return {};
     const out: Record<string, PresetTreatment> = {};
     const bytes = 10 * 8;
+    const stemIndices = stems?.map((stem) => this.stemIndex.get(stem) ?? -1);
+    const channelIndices = channels?.map((channel) => this.channelIndex.get(channel) ?? -1);
+    if (stemIndices?.some((index) => index < 0) || channelIndices?.some((index) => index < 0)) return {};
     const ptr = this.exports.dsp_alloc(bytes);
+    const stemBytes = (stemIndices?.length ?? 0) * 4;
+    const channelBytes = (channelIndices?.length ?? 0) * 4;
+    const stemPtr = stemIndices ? this.exports.dsp_alloc(stemBytes) : 0;
+    const channelPtr = channelIndices ? this.exports.dsp_alloc(channelBytes) : 0;
     try {
+      if (stemIndices) new Uint32Array(this.exports.memory.buffer, stemPtr, stemIndices.length).set(stemIndices);
+      if (channelIndices) new Uint32Array(this.exports.memory.buffer, channelPtr, channelIndices.length).set(channelIndices);
       for (let stem = 0; stem < this.exports.dsp_preset_stem_count(index); stem += 1) {
         const name = this.readString(
           this.exports.dsp_preset_stem_name_ptr(index, stem),
           this.exports.dsp_preset_stem_name_len(index, stem),
         );
-        if (this.exports.dsp_preset_treatment(index, stem, ptr) !== 0) continue;
+        const status = stemIndices && channelIndices
+          ? this.exports.dsp_preset_layout_treatment(index, stem, stemPtr, stemIndices.length, channelPtr, channelIndices.length, ptr)
+          : this.exports.dsp_preset_treatment(index, stem, ptr);
+        if (status !== 0) continue;
         const [
           azimuth_deg, elevation_deg, width_deg, object_size, lfe, diversity,
           center_level_db, rear, height, heightCrossoverHz,
@@ -152,6 +172,8 @@ export class Panner {
         };
       }
     } finally {
+      if (stemIndices) this.exports.dsp_free(stemPtr, stemBytes);
+      if (channelIndices) this.exports.dsp_free(channelPtr, channelBytes);
       this.exports.dsp_free(ptr, bytes);
     }
     return out;

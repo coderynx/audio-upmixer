@@ -46,7 +46,7 @@ def test_core_stems_stay_on_the_front_wall(preset: str) -> None:
 
 @pytest.mark.parametrize("preset", STEM_ROUTING_PRESET_NAMES)
 def test_each_preset_places_stems_differently_per_layout(preset: str) -> None:
-    assert resolve_placements(preset, "5.1") != resolve_placements(preset, "7.1.4")
+    assert preset_routing(preset, FORMAT_MAP["5.1"]) != preset_routing(preset, FORMAT_MAP["7.1.4"])
 
 
 def test_layout_without_height_flattens_elevation_outward() -> None:
@@ -103,8 +103,8 @@ def test_presets_define_stem_appropriate_bed_controls() -> None:
         assert treatments["Lead Vocals"].placement.center_level_db > treatments["Crowd"].placement.center_level_db
 
     assert (
-        STEM_ROUTING_PRESET_TREATMENTS["intimate"]["Other"].placement.diversity
-        < STEM_ROUTING_PRESET_TREATMENTS["wide"]["Other"].placement.diversity
+        STEM_ROUTING_PRESET_TREATMENTS["intimate"]["Other"].placement.width_deg
+        < STEM_ROUTING_PRESET_TREATMENTS["wide"]["Other"].placement.width_deg
     )
 
 
