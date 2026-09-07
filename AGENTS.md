@@ -23,6 +23,21 @@ Read a standards document only when its subject is changed:
 Use concise Conventional Commit subjects. Pull requests state behavioural or
 audio impact and validation run.
 
+## Documentation hygiene
+
+- Treat code, tests, package manifests, schemas, and CLI help as the source of
+  current behaviour. Keep prose for constraints they cannot carry.
+- Keep `docs/` limited to external standards, asset provenance, and compact
+  cross-package behavioural contracts. A contract states the invariant and its
+  check, never an implementation tour.
+- Put research, experimental evidence, plans, and historical decisions in
+  `~/Projects/upmixer-knowledge/`; extend its relevant evidence ledger instead
+  of adding a phase report or duplicate reference here.
+- Keep agent guides as precise context pointers. Prefer the closest package
+  guide or relevant `CONTEXT.md` over a new map, overview, or repeated rule.
+- Keep `CONTEXT.md` files glossary-only. Record an ADR only for a hard-to-reverse,
+  surprising trade-off.
+
 ## Agent skills
 
 ### Issue tracker
