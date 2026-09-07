@@ -128,8 +128,19 @@ fn secondary_index(stem: &str, stems: &[&str]) -> Option<usize> {
         .position(|candidate| *candidate == stem)
 }
 
-fn secondary_placement(stem: &str, profile: Profile) -> StemPlacement {
-    placement(0.0, 0.0, profile.width, 0.20, lfe(stem)).with_bed_controls(0.08, -0.2)
+fn secondary_placement(stem: &str, rear: bool, elevated: bool, profile: Profile) -> StemPlacement {
+    // Keep the direct image centered left/right; preserve its front/rear and height position.
+    placement(
+        if rear { 180.0 } else { 0.0 },
+        if elevated { profile.height } else { 0.0 },
+        profile.width,
+        0.20,
+        lfe(stem),
+    )
+    .with_bed_controls(
+        if rear { 0.18 } else { 0.08 },
+        if rear { -1.0 } else { -0.2 },
+    )
 }
 
 fn treatment(profile: Profile, stem: &str, stems: &[&str], channels: &[&str]) -> PresetTreatment {
@@ -150,7 +161,7 @@ fn treatment(profile: Profile, stem: &str, stems: &[&str], channels: &[&str]) ->
             .any(|channel| matches!(*channel, "BL" | "BR"));
     let elevated = count >= 3 && index % 4 >= 2 && profile.height > 0.0 && has_height(channels);
     PresetTreatment {
-        placement: secondary_placement(stem, profile),
+        placement: secondary_placement(stem, rear, elevated, profile),
         ambient_rear: if rear {
             profile.rear_send
         } else {

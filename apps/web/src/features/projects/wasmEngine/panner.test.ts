@@ -70,7 +70,7 @@ describe("wasm panner", () => {
     expect(balanced["Lead Vocals"].placement).toEqual({
       azimuth_deg: 0, elevation_deg: 0, width_deg: 60, object_size: 0.1, diversity: 0, center_level_db: 1.5,
     });
-    expect(balanced.Crowd.placement.azimuth_deg).toBe(0);
+    expect(balanced.Crowd.placement.azimuth_deg).toBe(180);
     expect(instance.presetTreatments("no-such-preset")).toEqual({});
 
     expect(balanced.Kick.sends.lfe).toBeCloseTo(0.82, 9);
@@ -93,10 +93,11 @@ describe("wasm panner", () => {
       "balanced", ["Lead Vocals", "Bass", "Kick", "Snare", "Backing Vocals", "Guitar", "Piano", "Other"], FULL,
     );
     for (const stem of ["Backing Vocals", "Toms", "Hi-Hat", "Guitar", "Piano", "Other"]) {
-      expect(rich[stem].placement.azimuth_deg).toBe(0);
-      expect(rich[stem].placement.elevation_deg).toBe(0);
+      expect([0, 180]).toContain(rich[stem].placement.azimuth_deg);
     }
     expect(wide.Guitar.placement.width_deg).toBeLessThan(balancedRich.Guitar.placement.width_deg);
+    expect(rich["Hi-Hat"].placement.azimuth_deg).toBe(180);
+    expect(rich["Hi-Hat"].placement.elevation_deg).toBeGreaterThan(0);
     expect(rich["Hi-Hat"].sends.rear).toBeGreaterThan(0);
     expect(rich["Hi-Hat"].sends.height).toBeGreaterThan(0);
   });

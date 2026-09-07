@@ -260,11 +260,11 @@ fn preset_treatments_rebalance_the_selected_stem_and_speaker_layouts() {
         .all(|(_, treatment)| treatment.placement.elevation_deg == 0.0));
     assert!(flat
         .iter()
-        .all(|(_, treatment)| treatment.placement.azimuth_deg.abs() < 90.0));
+        .all(|(_, treatment)| treatment.placement.azimuth_deg == 0.0));
 }
 
 #[test]
-fn preset_stems_stay_centered() {
+fn preset_stems_keep_centered_left_right_images() {
     use upmixer_dsp_core::spatial::presets::{
         preset_treatments_for_layout, PRESET_NAMES, PRESET_STEMS,
     };
@@ -272,27 +272,18 @@ fn preset_stems_stay_centered() {
     for preset in PRESET_NAMES {
         let treatments = preset_treatments_for_layout(preset, &PRESET_STEMS, &FULL);
         for stem in PRESET_STEMS {
-            assert_eq!(
-                treatments
-                    .iter()
-                    .find(|(name, _)| *name == stem)
-                    .unwrap()
-                    .1
-                    .placement
-                    .azimuth_deg,
-                0.0,
-                "{preset}/{stem} has a fixed side bias",
-            );
-            assert_eq!(
-                treatments
-                    .iter()
-                    .find(|(name, _)| *name == stem)
-                    .unwrap()
-                    .1
-                    .placement
-                    .elevation_deg,
-                0.0,
-                "{preset}/{stem} has a fixed height bias",
+            assert!(
+                matches!(
+                    treatments
+                        .iter()
+                        .find(|(name, _)| *name == stem)
+                        .unwrap()
+                        .1
+                        .placement
+                        .azimuth_deg,
+                    0.0 | 180.0
+                ),
+                "{preset}/{stem} has a fixed side bias"
             );
         }
     }
