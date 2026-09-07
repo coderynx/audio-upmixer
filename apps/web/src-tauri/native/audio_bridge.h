@@ -15,6 +15,8 @@ void upmixer_audio_pause(UpmixerAudioHost host);
 void upmixer_audio_resume(UpmixerAudioHost host);
 bool upmixer_audio_schedule(UpmixerAudioHost host, const float *const *channels,
                             uint32_t channel_count, uint32_t frames, char **error);
+int upmixer_audio_ready(UpmixerAudioHost host, char **error);
+int upmixer_audio_finish(UpmixerAudioHost host, char **error);
 int64_t upmixer_audio_playback_frame(UpmixerAudioHost host);
 void upmixer_audio_destroy(UpmixerAudioHost host);
 void upmixer_audio_free_error(char *error);

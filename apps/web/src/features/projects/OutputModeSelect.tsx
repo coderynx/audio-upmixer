@@ -64,8 +64,6 @@ export function OutputModeSelect({
   onSpatialProfileChange,
   transauralProfile,
   onTransauralProfileChange,
-  appleHeadTracking = true,
-  onAppleHeadTrackingChange,
   appleSpatialAvailable = false,
   systemOutput = false,
 }: {
@@ -151,7 +149,6 @@ export function OutputModeSelect({
   const CurrentIcon = current.icon;
   const currentProfile = PROFILE_OPTIONS.find((option) => option.value === spatialProfile) ?? PROFILE_OPTIONS[0];
   const currentTransauralProfile = TRANSAURAL_PROFILE_OPTIONS.find((option) => option.value === transauralProfile) ?? TRANSAURAL_PROFILE_OPTIONS[0];
-  const currentHeadTrackingLabel = appleHeadTracking ? "Enabled" : "Disabled";
   // Binaural/transaural show their active profile inline; native/stereo fall
   // back to the mode's own label so the trigger never reads as broken.
   const currentModeProfile = value === "transaural" ? currentTransauralProfile : value === "binaural" ? currentProfile : null;
@@ -204,7 +201,7 @@ export function OutputModeSelect({
             const rowCurrentLabel = option.value === "transaural"
               ? currentTransauralProfile
               : option.value === "apple_spatial"
-                ? `HT · ${currentHeadTrackingLabel}`
+                ? "macOS"
                 : currentProfile.label;
             return (
               <React.Fragment key={option.value}>
@@ -269,21 +266,9 @@ export function OutputModeSelect({
                   >
                   <div className="w-64 rounded-md border bg-popover p-1 shadow-md">
                     {option.value === "apple_spatial" ? (
-                      <label className="flex items-center justify-between gap-3 px-2 py-1.5 text-sm font-medium">
-                        Head tracking
-                        <input
-                          aria-label="Head tracking enabled"
-                          type="checkbox"
-                          checked={appleHeadTracking}
-                          onChange={(event) => {
-                            onAppleHeadTrackingChange(event.target.checked);
-                            onChange(option.value);
-                            setOpen(false);
-                            setActiveSubmenu(null);
-                          }}
-                          className="h-4 w-4 accent-primary"
-                        />
-                      </label>
+                      <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                        Choose Fixed or Head Tracked in macOS Control Center → Sound while playing through compatible AirPods.
+                      </p>
                     ) : rowProfileOptions.map((profileOption) => {
                       const ProfileIcon = profileOption.icon;
                       const selected = option.value === "transaural"

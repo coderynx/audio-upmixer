@@ -63,7 +63,7 @@ export function collapseModeLabel(mode: OutputMode, channelCount: number): strin
   if (mode === "stereo") return "Stereo fold";
   if (mode === "binaural") return "Binaural";
   if (mode === "transaural") return "Transaural";
-  if (mode === "apple_spatial") return channelCount > 6 ? "Apple Spatial · pre-PHASE 5.1" : "Apple Spatial · pre-PHASE bed";
+  if (mode === "apple_spatial") return channelCount > 6 ? "Apple Spatial · pre-renderer 5.1" : "Apple Spatial · pre-renderer bed";
   return channelCount > 6 ? "5.1 re-render" : "Native bed";
 }
 

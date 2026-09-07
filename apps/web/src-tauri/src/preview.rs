@@ -23,10 +23,6 @@ const SAMPLE_RATE: usize = 48_000;
 const QUANTUM: usize = 512;
 const REPORT_BLOCKS: usize = 3;
 const STEM_LOAD_CONCURRENCY: usize = 3;
-// Transparent PHASE-only headroom for its renderer-level lift over binaural.
-// Keep this outside core meters, calibration, manifests, and export paths.
-const PHASE_MONITOR_GAIN: f32 = 0.707_945_76; // -3 dB
-
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeSource {
@@ -149,7 +145,6 @@ struct Session {
     measurement: Option<MeasurementState>,
     route_scale: Option<ScaleState>,
     background_turn: bool,
-    phase_monitor_gain: f32,
     current_gain: f32,
     flat: Vec<f32>,
     channels: Vec<Vec<f32>>,
@@ -242,7 +237,6 @@ impl Session {
             &mut engine,
         )?;
         let layout = output_layout(engine.params(), request.renderer)?;
-        let phase_gain = phase_monitor_gain(request.renderer, layout);
         let audio = AudioHost::new(
             layout,
             request.renderer == NativeRenderer::AppleSpatial,
@@ -281,8 +275,7 @@ impl Session {
             measurement: None,
             route_scale,
             background_turn: true,
-            phase_monitor_gain: phase_gain,
-            current_gain: phase_gain,
+            current_gain: 1.0,
             flat: Vec::new(),
             channels: Vec::new(),
         })
@@ -328,7 +321,6 @@ impl Session {
                     self.assets = assets;
                 }
                 let new_layout = output_layout(self.engine.params(), renderer)?;
-                let new_phase_gain = phase_monitor_gain(renderer, new_layout);
                 if renderer != self.renderer || old_layout != new_layout {
                     self.audio = AudioHost::new(
                         new_layout,
@@ -344,7 +336,6 @@ impl Session {
                         self.audio.pause();
                     }
                 }
-                self.phase_monitor_gain = new_phase_gain;
                 self.audio.set_head_tracking(apple_head_tracking);
                 self.renderer = renderer;
                 self.apple_head_tracking = apple_head_tracking;
@@ -429,6 +420,11 @@ impl Session {
     }
 
     fn render_block(&mut self) -> Result<(), String> {
+        self.report_presented_frames();
+        if !self.audio.ready()? {
+            thread::sleep(Duration::from_millis(1));
+            return Ok(());
+        }
         let channel_count = self.engine.output_channels();
         self.flat.resize(channel_count * QUANTUM, 0.0);
         self.flat.fill(0.0);
@@ -438,16 +434,17 @@ impl Session {
                 self.engine.rewind();
                 return Ok(());
             }
+            if !self.audio.finish()? {
+                thread::sleep(Duration::from_millis(1));
+                return Ok(());
+            }
+            self.report_presented_frames();
             self.playing = false;
             self.audio.pause();
             let _ = self.events.send(NativeEvent::Ended);
             return Ok(());
         }
-        let target_gain = if self.muted {
-            0.0
-        } else {
-            self.volume * self.phase_monitor_gain
-        };
+        let target_gain = if self.muted { 0.0 } else { self.volume };
         let gain_step = (target_gain - self.current_gain) / written as f32;
         self.channels.resize_with(channel_count, Vec::new);
         for channel in 0..channel_count {
@@ -490,6 +487,11 @@ impl Session {
                 });
             }
         }
+        self.report_presented_frames();
+        Ok(())
+    }
+
+    fn report_presented_frames(&mut self) {
         if let Some(presented_at) = self.audio.playback_frame() {
             if let Some(frame) = take_presented_frame(&mut self.pending_frames, presented_at) {
                 let position = if self.looping && self.engine.total_frames() > 0 {
@@ -505,7 +507,6 @@ impl Session {
                 });
             }
         }
-        Ok(())
     }
 
     fn advance_background(&mut self) {
@@ -603,14 +604,6 @@ fn output_layout(params: &EngineParams, renderer: NativeRenderer) -> Result<&'st
     output_layout_for_names(&names)
 }
 
-fn phase_monitor_gain(renderer: NativeRenderer, layout: &str) -> f32 {
-    if renderer == NativeRenderer::AppleSpatial && layout != "stereo" {
-        PHASE_MONITOR_GAIN
-    } else {
-        1.0
-    }
-}
-
 fn output_layout_for_names(names: &[&str]) -> Result<&'static str, String> {
     match names {
         ["FL", "FR"] => Ok("stereo"),
@@ -683,19 +676,5 @@ mod tests {
         ] {
             assert_eq!(output_layout_for_names(names).unwrap(), layout);
         }
-    }
-
-    #[test]
-    fn phase_monitor_trim_is_only_applied_to_immersive_apple_output() {
-        assert_eq!(phase_monitor_gain(NativeRenderer::Direct, "5.1"), 1.0);
-        assert_eq!(
-            phase_monitor_gain(NativeRenderer::AppleSpatial, "stereo"),
-            1.0
-        );
-        assert_eq!(
-            phase_monitor_gain(NativeRenderer::AppleSpatial, "7.1.4"),
-            PHASE_MONITOR_GAIN
-        );
-        assert!(PHASE_MONITOR_GAIN < 1.0);
     }
 }

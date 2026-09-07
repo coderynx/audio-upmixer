@@ -54,17 +54,27 @@ routing, mastering, and the selected monitor renderer. In a browser,
 `apps/web/public/dsp.worklet.js` runs the core as WebAssembly and Web Audio
 owns decoding and output. In Tauri, `src-tauri` runs the core as native Rust,
 decodes and resamples stems to 48 kHz, and streams the finished bed to the
-native output bridge. Multichannel Apple Spatial Audio uses a
-`PHASEPushStreamNode` with `PHASEAmbientMixerDefinition`, while direct output
-and stereo use `AVAudioEngine`. The ambient mixer receives the standard
-`AVAudioChannelLayout`, so PHASE renders each channel from the corresponding
-speaker direction without application-owned speaker coordinates. Its four
-recycled 512-frame buffers bound queued PCM to 42.7 ms. Because PHASE ignores
-LFE in an ambient layout, the adapter restores its +10 dB replay gain and folds
-it equally into FL/FR before scheduling. Apple Spatial Audio is desktop-only;
-its output submenu persists a head-tracking preference and applies it directly
-to the PHASE listener on compatible AirPods. Release signing must preserve the
-Head Pose entitlement for that option to take effect.
+native output bridge. Multichannel Apple Spatial Audio uses
+`AVSampleBufferAudioRenderer` and `AVSampleBufferRenderSynchronizer`; direct
+output and stereo use `AVAudioEngine`. The adapter preserves the 48 kHz
+speaker bed, including LFE, and supplies the standard channel layout with the
+required 7.1.4 side/rear channel reorder. It applies no PHASE calibration or
+LFE fold. Transport volume remains downstream of core meters and calibration.
+
+A serial renderer callback consumes immutable interleaved PCM buffers. The
+producer primes 8192 frames (170.7 ms) before starting at rate 1 and limits
+submitted audio to 16384 frames (341.3 ms) ahead of the presentation clock.
+Short clips start when EOF is declared, and EOF drains before pausing.
+Nonblocking capacity checks keep transport commands responsive. Sample-based
+timestamps preserve duration and pitch; stalls, late producer buffers and
+automatic output flushes become explicit preview errors rather than silent
+playback or timestamp stretching. Restart preview after an output reset.
+
+macOS Control Center owns Fixed/Head Tracked selection on compatible AirPods;
+the saved app head-tracking field is retained for request compatibility but
+cannot override that system setting. The submenu explains this ownership.
+This uses Apple's media spatialization API; exact Apple Music/Logic Atmos
+parity still requires comparison of the same programme on the target device.
 The other monitor modes remain available in both hosts.
 Native startup failures are visible and fall back to the WASM engine
 without changing the saved project mix.
@@ -130,7 +140,7 @@ the gain once it lands in the background (see
 `docs/contracts/preview_export_parity.md` P3). The measurement runs against
 an uncorrected render, so a previous correction cannot fold into the next one.
 Apple Spatial is the one monitor-only limitation: the pass measures the
-native PCM before PHASE, since the app has no post-PHASE capture path, so its
+native PCM before AVFoundation spatialization, since the app has no post-renderer measurement path, so its
 readout and correction do not claim the final spatialized acoustic loudness.
 
 **Filter assets.** The decode banks, XTC matrices, and EQ FIRs ship as WAVs

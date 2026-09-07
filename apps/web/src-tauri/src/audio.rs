@@ -23,6 +23,8 @@ extern "C" {
         frames: u32,
         error: *mut *mut c_char,
     ) -> bool;
+    fn upmixer_audio_ready(host: *mut c_void, error: *mut *mut c_char) -> i32;
+    fn upmixer_audio_finish(host: *mut c_void, error: *mut *mut c_char) -> i32;
     fn upmixer_audio_playback_frame(host: *mut c_void) -> i64;
     fn upmixer_audio_destroy(host: *mut c_void);
     fn upmixer_audio_free_error(error: *mut c_char);
@@ -97,6 +99,25 @@ impl AudioHost {
         }
     }
 
+    pub fn ready(&self) -> Result<bool, String> {
+        let mut error = ptr::null_mut();
+        match unsafe { upmixer_audio_ready(self.0, &mut error) } {
+            -1 => Err(take_error(error, "Native audio output failed")),
+            result => Ok(result != 0),
+        }
+    }
+
+    pub fn finish(&self) -> Result<bool, String> {
+        let mut error = ptr::null_mut();
+        match unsafe { upmixer_audio_finish(self.0, &mut error) } {
+            -1 => Err(take_error(
+                error,
+                "Native audio output failed while draining",
+            )),
+            result => Ok(result != 0),
+        }
+    }
+
     pub fn playback_frame(&self) -> Option<usize> {
         usize::try_from(unsafe { upmixer_audio_playback_frame(self.0) }).ok()
     }
@@ -124,11 +145,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn apple_spatial_uses_phase_for_every_layout_except_stereo() {
+    fn apple_spatial_uses_media_for_every_layout_except_stereo() {
         for layout in ["stereo", "5.1", "7.1", "5.1.2", "5.1.4", "7.1.2", "7.1.4"] {
             let name = CString::new(layout).unwrap();
-            let phase = unsafe { upmixer_audio_uses_media_pipeline(name.as_ptr(), true) };
-            assert_eq!(phase, layout != "stereo");
+            let media = unsafe { upmixer_audio_uses_media_pipeline(name.as_ptr(), true) };
+            assert_eq!(media, layout != "stereo");
             assert!(!unsafe { upmixer_audio_uses_media_pipeline(name.as_ptr(), false) });
         }
     }

@@ -64,17 +64,12 @@ describe("OutputModeSelect", () => {
     expect(screen.getByRole("button", { name: /^Apple Spatial Audio/ })).toBeInTheDocument();
   });
 
-  it("selects Apple Spatial head tracking from its submenu", () => {
-    const onChange = vi.fn();
-    const onAppleHeadTrackingChange = vi.fn();
-    renderSelect({ appleSpatialAvailable: true, onChange, onAppleHeadTrackingChange });
-
+  it("explains that macOS controls Apple Spatial head tracking", () => {
+    renderSelect({ appleSpatialAvailable: true });
     fireEvent.click(screen.getByRole("button", { name: /Preview output mode/ }));
     fireEvent.mouseEnter(screen.getByRole("button", { name: /^Apple Spatial Audio/ }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Head tracking enabled" }));
-
-    expect(onAppleHeadTrackingChange).toHaveBeenCalledWith(false);
-    expect(onChange).toHaveBeenCalledWith("apple_spatial");
+    expect(screen.getByText(/Choose Fixed or Head Tracked in macOS Control Center/)).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   });
 
   it("uses the macOS system output instead of a desktop device picker", () => {

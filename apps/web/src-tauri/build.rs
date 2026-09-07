@@ -11,6 +11,7 @@ fn main() {
             .compile("upmixer_audio_bridge");
         println!("cargo:rustc-link-lib=framework=AVFAudio");
         println!("cargo:rustc-link-lib=framework=Foundation");
-        println!("cargo:rustc-link-lib=framework=PHASE");
+        println!("cargo:rustc-link-lib=framework=AVFoundation");
+        println!("cargo:rustc-link-lib=framework=CoreMedia");
     }
 }

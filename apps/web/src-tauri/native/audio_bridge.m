@@ -1,31 +1,38 @@
 #import "audio_bridge.h"
 
+#import <AVFoundation/AVFoundation.h>
 #import <AVFAudio/AVFAudio.h>
+#import <CoreMedia/CoreMedia.h>
 #import <Foundation/Foundation.h>
-#import <PHASE/PHASE.h>
 #import <time.h>
-#import <unistd.h>
 
 static const AVAudioFrameCount BUFFER_FRAMES = 512;
 static const NSUInteger BUFFER_COUNT = 4;
-static const uint32_t LFE_CHANNEL = 3;
-static const float LFE_FRONT_FOLD_GAIN = 1.58113883f;
+static const int64_t MEDIA_PREFILL_FRAMES = 8192;
+static const int64_t MEDIA_QUEUE_FRAMES = 16384;
 
 @interface UpmixerAudio : NSObject
 @property(nonatomic, strong) AVAudioEngine *engine;
 @property(nonatomic, strong) AVAudioPlayerNode *player;
-@property(nonatomic, strong) PHASEEngine *phaseEngine;
-@property(nonatomic, strong) PHASESoundEvent *phaseEvent;
-@property(nonatomic, strong) PHASEPushStreamNode *phaseStream;
-@property(nonatomic, strong) PHASEListener *listener;
+@property(nonatomic, strong) AVSampleBufferAudioRenderer *renderer;
+@property(nonatomic, strong) AVSampleBufferRenderSynchronizer *synchronizer;
 @property(nonatomic, strong) AVAudioFormat *format;
+@property(nonatomic, strong) NSMutableArray *pending;
 @property(nonatomic, strong) NSMutableArray<AVAudioPCMBuffer *> *available;
 @property(nonatomic) dispatch_semaphore_t semaphore;
-@property(nonatomic) BOOL phasePipeline;
-@property(nonatomic) int64_t nextFrame;
-@property(nonatomic) int64_t presentedFrame;
-@property(nonatomic) NSTimeInterval presentationLatency;
+@property(nonatomic) dispatch_queue_t queue;
+@property(nonatomic, strong) id flushObserver;
+@property(nonatomic, copy) NSString *failure;
+@property(nonatomic) BOOL requesting;
+@property(nonatomic) BOOL playing;
+@property(nonatomic) BOOL started;
+@property(nonatomic) BOOL finished;
 @property(nonatomic) BOOL upmixer714;
+@property(nonatomic) int64_t startFrame;
+@property(nonatomic) int64_t nextFrame;
+@property(nonatomic) int64_t lastFrame;
+@property(nonatomic) double lastProgress;
+@property(nonatomic) double lastEnqueue;
 @end
 
 @implementation UpmixerAudio
@@ -33,8 +40,7 @@ static const float LFE_FRONT_FOLD_GAIN = 1.58113883f;
 
 static void set_error(char **out, NSError *error, NSString *fallback) {
     if (!out) return;
-    NSString *message = error.localizedDescription ?: fallback;
-    *out = strdup(message.UTF8String);
+    *out = strdup((error.localizedDescription ?: fallback).UTF8String);
 }
 
 static double monotonic_seconds(void) {
@@ -61,117 +67,140 @@ bool upmixer_audio_uses_media_pipeline(const char *layout_name, bool spatial) {
     }
 }
 
+static int64_t media_frame(UpmixerAudio *host) {
+    CMTime time = host.synchronizer.currentTime;
+    if (!host.started || !CMTIME_IS_NUMERIC(time)) return host.startFrame;
+    return MAX(host.startFrame, CMTimeConvertScale(time, 48000,
+                         kCMTimeRoundingMethod_RoundTowardZero).value);
+}
+
+static BOOL media_ok(UpmixerAudio *host, char **error) {
+    if (host.renderer.status == AVQueuedSampleBufferRenderingStatusFailed) {
+        set_error(error, host.renderer.error, @"Apple media renderer failed");
+        return NO;
+    }
+    int64_t frame = media_frame(host);
+    double now = monotonic_seconds();
+    if (!host.playing || frame != host.lastFrame) {
+        host.lastFrame = frame;
+        host.lastProgress = now;
+    }
+    if (host.playing && host.nextFrame > frame && now - host.lastProgress > 3.0) {
+        host.failure = @"Apple media playback clock stalled; restart preview or check the output device";
+    }
+    if (host.playing && host.pending.count && now - host.lastEnqueue > 3.0) {
+        host.failure = @"Apple media renderer stopped accepting audio; restart preview";
+    }
+    if (host.failure) {
+        set_error(error, nil, host.failure);
+        return NO;
+    }
+    return YES;
+}
+
+static void start_media_if_ready(UpmixerAudio *host) {
+    if (!host.playing || host.started || host.nextFrame == host.startFrame) return;
+    if (!host.finished && host.nextFrame - host.startFrame < MEDIA_PREFILL_FRAMES) return;
+    host.started = YES;
+    host.lastProgress = host.lastEnqueue = monotonic_seconds();
+    [host.synchronizer setRate:1.0f time:CMTimeMake(host.startFrame, 48000)];
+}
+
+static void request_media(UpmixerAudio *host) {
+    if (host.requesting || host.pending.count == 0) return;
+    host.requesting = YES;
+    __weak UpmixerAudio *weakHost = host;
+    [host.renderer requestMediaDataWhenReadyOnQueue:host.queue usingBlock:^{
+        UpmixerAudio *strongHost = weakHost;
+        if (!strongHost) return;
+        while (strongHost.pending.count && strongHost.renderer.readyForMoreMediaData) {
+            CMSampleBufferRef sample = (__bridge CMSampleBufferRef)strongHost.pending.firstObject;
+            [strongHost.renderer enqueueSampleBuffer:sample];
+            strongHost.lastEnqueue = monotonic_seconds();
+            [strongHost.pending removeObjectAtIndex:0];
+        }
+        if (strongHost.pending.count == 0) {
+            [strongHost.renderer stopRequestingMediaData];
+            strongHost.requesting = NO;
+        }
+    }];
+}
+
 UpmixerAudioHost upmixer_audio_create(const char *layout_name, bool spatial, bool head_tracking,
-                                      int64_t start_frame,
-                                      char **error) {
+                                      int64_t start_frame, char **error) {
     @autoreleasepool {
-        NSString *layoutName = [NSString stringWithUTF8String:layout_name ?: "stereo"];
-        AVAudioChannelLayout *layout = [[AVAudioChannelLayout alloc] initWithLayoutTag:layout_tag(layoutName)];
-        if (!layout) {
-            set_error(error, nil, @"Unsupported output channel layout");
+        (void)head_tracking; // macOS owns media head tracking in Control Center.
+        NSString *name = [NSString stringWithUTF8String:layout_name ?: "stereo"];
+        NSArray *supported = @[@"stereo", @"5.1", @"7.1", @"5.1.2", @"5.1.4", @"7.1.2", @"7.1.4"];
+        if (![supported containsObject:name] || start_frame < 0 || start_frame > INT64_MAX - MEDIA_QUEUE_FRAMES) {
+            set_error(error, nil, @"Invalid native audio layout or start frame");
             return NULL;
         }
-
+        AVAudioChannelLayout *layout = [[AVAudioChannelLayout alloc] initWithLayoutTag:layout_tag(name)];
         UpmixerAudio *host = [UpmixerAudio new];
-        host.upmixer714 = [layoutName isEqualToString:@"7.1.4"];
-        host.phasePipeline = upmixer_audio_uses_media_pipeline(layout_name, spatial);
-        host.nextFrame = start_frame;
-        host.presentedFrame = start_frame;
-        if (host.phasePipeline) {
-            host.format = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
-                                                          sampleRate:48000
-                                                         interleaved:NO
-                                                       channelLayout:layout];
-            if (!host.format) {
-                set_error(error, nil, @"Could not create the PHASE audio format");
+        host.upmixer714 = [name isEqualToString:@"7.1.4"];
+        host.startFrame = host.nextFrame = host.lastFrame = start_frame;
+        host.lastProgress = host.lastEnqueue = monotonic_seconds();
+        BOOL media = upmixer_audio_uses_media_pipeline(layout_name, spatial);
+        host.format = [[AVAudioFormat alloc] initWithCommonFormat:AVAudioPCMFormatFloat32
+                                                    sampleRate:48000 interleaved:media channelLayout:layout];
+        if (!host.format) {
+            set_error(error, nil, @"Could not create the native audio format");
+            return NULL;
+        }
+        if (media) {
+            host.queue = dispatch_queue_create("com.coderynx.upmixer.media",
+                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
+            host.pending = [NSMutableArray new];
+            host.renderer = [AVSampleBufferAudioRenderer new];
+            if (!host.renderer) {
+                set_error(error, nil, @"Apple media audio service is unavailable");
                 return NULL;
             }
-            host.phaseEngine = [[PHASEEngine alloc] initWithUpdateMode:PHASEUpdateModeAutomatic];
-            host.phaseEngine.outputSpatializationMode = PHASESpatializationModeAutomatic;
-            AVAudioEngine *latencyEngine = [AVAudioEngine new];
-            AVAudioOutputNode *output = latencyEngine.outputNode;
-            // ponytail: PHASE exposes no spatializer latency; include it if Apple adds a presentation clock.
-            host.presentationLatency = output.presentationLatency + output.latency;
-            PHASEListener *listener = [[PHASEListener alloc] initWithEngine:host.phaseEngine];
-            listener.automaticHeadTrackingFlags = head_tracking ? PHASEAutomaticHeadTrackingFlagOrientation : 0;
-            NSError *phaseError = nil;
-            if (![host.phaseEngine.rootObject addChild:listener error:&phaseError]) {
-                set_error(error, phaseError, @"Could not attach the PHASE listener");
-                return NULL;
-            }
-            host.listener = listener;
-            PHASEAmbientMixerDefinition *mixer =
-                [[PHASEAmbientMixerDefinition alloc] initWithChannelLayout:layout
-                                                                 orientation:simd_quaternion(0.0f, (simd_float3){0.0f, 0.0f, 1.0f})
-                                                                  identifier:@"upmixer_ambient_mixer"];
-            PHASEPushStreamNodeDefinition *streamDefinition =
-                [[PHASEPushStreamNodeDefinition alloc] initWithMixerDefinition:mixer
-                                                                         format:host.format
-                                                                    identifier:@"upmixer_push_stream"];
-            streamDefinition.normalize = NO;
-            PHASESoundEventNodeAsset *asset =
-                [host.phaseEngine.assetRegistry registerSoundEventAssetWithRootNode:streamDefinition
-                                                                          identifier:@"upmixer_sound_event"
-                                                                               error:&phaseError];
-            if (!asset) {
-                set_error(error, phaseError, @"Could not register the PHASE sound event");
-                return NULL;
-            }
-            PHASEMixerParameters *parameters = [PHASEMixerParameters new];
-            [parameters addAmbientMixerParametersWithIdentifier:mixer.identifier listener:listener];
-            host.phaseEvent = [[PHASESoundEvent alloc] initWithEngine:host.phaseEngine
-                                                        assetIdentifier:asset.identifier
-                                                        mixerParameters:parameters
-                                                                  error:&phaseError];
-            if (!host.phaseEvent) {
-                set_error(error, phaseError, @"Could not create the PHASE sound event");
-                return NULL;
-            }
+            host.renderer.allowedAudioSpatializationFormats = AVAudioSpatializationFormatMultichannel;
+            host.renderer.audioTimePitchAlgorithm = AVAudioTimePitchAlgorithmVarispeed;
+            host.synchronizer = [AVSampleBufferRenderSynchronizer new];
+            // Startup is gated by our bounded prefill, including short clips at EOF.
+            host.synchronizer.delaysRateChangeUntilHasSufficientMediaData = NO;
+            [host.synchronizer addRenderer:host.renderer];
+            [host.synchronizer setRate:0.0f time:CMTimeMake(start_frame, 48000)];
+            __weak UpmixerAudio *weakHost = host;
+            host.flushObserver = [[NSNotificationCenter defaultCenter]
+                addObserverForName:AVSampleBufferAudioRendererWasFlushedAutomaticallyNotification
+                object:host.renderer queue:nil usingBlock:^(NSNotification *note) {
+                    (void)note;
+                    UpmixerAudio *strongHost = weakHost;
+                    if (!strongHost) return;
+                    dispatch_async(strongHost.queue, ^{
+                        strongHost.failure = @"Apple media output was reset; restart preview";
+                    });
+                }];
         } else {
-            host.format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:48000 channelLayout:layout];
             host.engine = [AVAudioEngine new];
             host.player = [AVAudioPlayerNode new];
             [host.engine attachNode:host.player];
             [host.engine connect:host.player to:host.engine.outputNode format:host.format];
-        }
-        host.available = [NSMutableArray arrayWithCapacity:BUFFER_COUNT];
-        host.semaphore = dispatch_semaphore_create(BUFFER_COUNT);
-        for (NSUInteger i = 0; i < BUFFER_COUNT; i++) {
-            AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:host.format frameCapacity:BUFFER_FRAMES];
-            [host.available addObject:buffer];
+            host.available = [NSMutableArray arrayWithCapacity:BUFFER_COUNT];
+            host.semaphore = dispatch_semaphore_create(BUFFER_COUNT);
+            for (NSUInteger i = 0; i < BUFFER_COUNT; i++) {
+                [host.available addObject:[[AVAudioPCMBuffer alloc] initWithPCMFormat:host.format
+                                                                       frameCapacity:BUFFER_FRAMES]];
+            }
         }
         return (__bridge_retained void *)host;
     }
 }
 
 void upmixer_audio_set_head_tracking(UpmixerAudioHost opaque, bool enabled) {
-    UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
-    if (host.phasePipeline) {
-        host.listener.automaticHeadTrackingFlags = enabled ? PHASEAutomaticHeadTrackingFlagOrientation : 0;
-    }
+    // Retained ABI for saved preview requests; media head tracking is system controlled.
+    (void)opaque;
+    (void)enabled;
 }
 
 bool upmixer_audio_start(UpmixerAudioHost opaque, char **error) {
     @autoreleasepool {
         UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
-        if (host.phasePipeline) {
-            NSError *engineError = nil;
-            if (![host.phaseEngine startAndReturnError:&engineError]) {
-                set_error(error, engineError, @"Could not start PHASE audio output");
-                return false;
-            }
-            [host.phaseEvent startWithCompletion:nil];
-            double deadline = monotonic_seconds() + 2.0;
-            while (!host.phaseStream) {
-                host.phaseStream = host.phaseEvent.pushStreamNodes[@"upmixer_push_stream"];
-                if (monotonic_seconds() >= deadline) {
-                    set_error(error, nil, @"PHASE did not start the push stream");
-                    return false;
-                }
-                usleep(1000);
-            }
-            return true;
-        }
+        if (host.renderer) return true;
         NSError *engineError = nil;
         if (![host.engine startAndReturnError:&engineError]) {
             set_error(error, engineError, @"Could not start direct audio output");
@@ -183,20 +212,40 @@ bool upmixer_audio_start(UpmixerAudioHost opaque, char **error) {
 
 void upmixer_audio_pause(UpmixerAudioHost opaque) {
     UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
-    if (host.phasePipeline) {
-        [host.phaseEvent pause];
-        return;
+    if (host.renderer) {
+        dispatch_sync(host.queue, ^{
+            host.playing = NO;
+            host.synchronizer.rate = 0.0f;
+        });
+    } else {
+        [host.player pause];
     }
-    [host.player pause];
 }
 
 void upmixer_audio_resume(UpmixerAudioHost opaque) {
     UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
-    if (host.phasePipeline) {
-        [host.phaseEvent resume];
-        return;
+    if (host.renderer) {
+        dispatch_sync(host.queue, ^{
+            host.playing = YES;
+            host.lastProgress = host.lastEnqueue = monotonic_seconds();
+            if (host.started) host.synchronizer.rate = 1.0f;
+            else start_media_if_ready(host);
+        });
+    } else {
+        [host.player play];
     }
-    [host.player play];
+}
+
+int upmixer_audio_ready(UpmixerAudioHost opaque, char **error) {
+    UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
+    if (!host.renderer) return 1;
+    __block int ready;
+    dispatch_sync(host.queue, ^{
+        ready = media_ok(host, error)
+            ? (host.nextFrame - media_frame(host) + BUFFER_FRAMES <= MEDIA_QUEUE_FRAMES
+                && host.pending.count < MEDIA_QUEUE_FRAMES / BUFFER_FRAMES) : -1;
+    });
+    return ready;
 }
 
 static uint32_t source_channel(UpmixerAudio *host, uint32_t channel) {
@@ -206,93 +255,136 @@ static uint32_t source_channel(UpmixerAudio *host, uint32_t channel) {
     return channel;
 }
 
-static void fold_lfe_into_fronts(AVAudioPCMBuffer *buffer, uint32_t frames) {
-    float *left = buffer.floatChannelData[0];
-    float *right = buffer.floatChannelData[1];
-    float *lfe = buffer.floatChannelData[LFE_CHANNEL];
-    for (uint32_t frame = 0; frame < frames; frame++) {
-        float folded = lfe[frame] * LFE_FRONT_FOLD_GAIN;
-        left[frame] += folded;
-        right[frame] += folded;
-        lfe[frame] = 0.0f;
+static CMSampleBufferRef media_sample(UpmixerAudio *host, const float *const *channels,
+                                      uint32_t frames, char **error) {
+    size_t count = host.format.channelCount;
+    size_t sampleSize = count * sizeof(float);
+    size_t byteCount = frames * sampleSize;
+    CMBlockBufferRef block = NULL;
+    OSStatus status = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, NULL, byteCount,
+        kCFAllocatorDefault, NULL, 0, byteCount, kCMBlockBufferAssureMemoryNowFlag, &block);
+    char *bytes = NULL;
+    if (status == noErr) status = CMBlockBufferGetDataPointer(block, 0, NULL, NULL, &bytes);
+    CMSampleBufferRef sample = NULL;
+    if (status == noErr) {
+        float *interleaved = (float *)bytes;
+        for (uint32_t frame = 0; frame < frames; frame++) {
+            for (uint32_t channel = 0; channel < count; channel++) {
+                interleaved[frame * count + channel] = channels[source_channel(host, channel)][frame];
+            }
+        }
+        CMSampleTimingInfo timing = {CMTimeMake(1, 48000), CMTimeMake(host.nextFrame, 48000), kCMTimeInvalid};
+        status = CMSampleBufferCreateReady(kCFAllocatorDefault, block, host.format.formatDescription,
+                                           frames, 1, &timing, 1, &sampleSize, &sample);
     }
+    if (block) CFRelease(block);
+    if (status != noErr) {
+        set_error(error, nil, [NSString stringWithFormat:@"Could not create Apple audio sample (OSStatus %d)", (int)status]);
+    }
+    return sample;
 }
 
 bool upmixer_audio_schedule(UpmixerAudioHost opaque, const float *const *channels,
                             uint32_t channel_count, uint32_t frames, char **error) {
-    UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
-    if (!host || channel_count != host.format.channelCount || frames > BUFFER_FRAMES) {
-        set_error(error, nil, @"Native audio buffer format mismatch");
-        return false;
-    }
-    dispatch_semaphore_wait(host.semaphore, DISPATCH_TIME_FOREVER);
-    __block AVAudioPCMBuffer *buffer;
-    @synchronized(host.available) {
-        buffer = host.available.lastObject;
-        [host.available removeLastObject];
-    }
-    buffer.frameLength = frames;
-    for (uint32_t channel = 0; channel < channel_count; channel++) {
-        uint32_t source = source_channel(host, channel);
-        memcpy(buffer.floatChannelData[channel], channels[source], frames * sizeof(float));
-    }
-    if (host.phasePipeline) {
-        fold_lfe_into_fronts(buffer, frames);
-        int64_t endFrame = host.nextFrame + frames;
-        host.nextFrame = endFrame;
-        [host.phaseStream scheduleBuffer:buffer
-                   completionCallbackType:PHASEPushStreamCompletionDataRendered
-                        completionHandler:^(PHASEPushStreamCompletionCallbackCondition condition) {
-            (void)condition;
-            @synchronized(host.available) {
-                [host.available addObject:buffer];
+    @autoreleasepool {
+        UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
+        if (!host || !channels || channel_count != host.format.channelCount || !frames || frames > BUFFER_FRAMES) {
+            set_error(error, nil, @"Native audio buffer format mismatch");
+            return false;
+        }
+        for (uint32_t channel = 0; channel < channel_count; channel++) {
+            if (!channels[channel]) {
+                set_error(error, nil, @"Missing native audio channel");
+                return false;
             }
-            dispatch_semaphore_signal(host.semaphore);
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-                                         (int64_t)(host.presentationLatency * NSEC_PER_SEC)),
-                           dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
-                @synchronized(host) {
-                    host.presentedFrame = MAX(host.presentedFrame, endFrame);
+        }
+        if (host.renderer) {
+            __block BOOL ok = NO;
+            dispatch_sync(host.queue, ^{
+                if (!media_ok(host, error)) return;
+                if (host.nextFrame > INT64_MAX - frames
+                    || host.pending.count >= MEDIA_QUEUE_FRAMES / BUFFER_FRAMES
+                    || host.nextFrame - media_frame(host) + frames > MEDIA_QUEUE_FRAMES) {
+                    set_error(error, nil, @"Apple audio queue is full");
+                    return;
                 }
+                if (host.started && host.playing && media_frame(host) > host.nextFrame + BUFFER_FRAMES) {
+                    set_error(error, nil, @"Apple audio underrun: realtime rendering could not keep up");
+                    return;
+                }
+                CMSampleBufferRef sample = media_sample(host, channels, frames, error);
+                if (!sample) return;
+                [host.pending addObject:CFBridgingRelease(sample)];
+                host.finished = NO;
+                host.nextFrame += frames;
+                request_media(host);
+                start_media_if_ready(host);
+                ok = YES;
             });
-        }];
-    } else {
-        [host.player scheduleBuffer:buffer
-             completionCallbackType:AVAudioPlayerNodeCompletionDataRendered
-                  completionHandler:^(AVAudioPlayerNodeCompletionCallbackType condition) {
-            (void)condition;
-            @synchronized(host.available) {
-                [host.available addObject:buffer];
-            }
-            dispatch_semaphore_signal(host.semaphore);
-        }];
+            return ok;
+        }
+        if (dispatch_semaphore_wait(host.semaphore, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC))) {
+            set_error(error, nil, @"Direct audio output stopped accepting buffers");
+            return false;
+        }
+        AVAudioPCMBuffer *buffer;
+        @synchronized(host.available) {
+            buffer = host.available.lastObject;
+            [host.available removeLastObject];
+        }
+        buffer.frameLength = frames;
+        for (uint32_t channel = 0; channel < channel_count; channel++) {
+            memcpy(buffer.floatChannelData[channel], channels[source_channel(host, channel)], frames * sizeof(float));
+        }
+        [host.player scheduleBuffer:buffer completionCallbackType:AVAudioPlayerNodeCompletionDataRendered
+            completionHandler:^(AVAudioPlayerNodeCompletionCallbackType condition) {
+                (void)condition;
+                @synchronized(host.available) { [host.available addObject:buffer]; }
+                dispatch_semaphore_signal(host.semaphore);
+            }];
+        return true;
     }
-    return true;
 }
 
 int64_t upmixer_audio_playback_frame(UpmixerAudioHost opaque) {
     UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
-    if (!host.phasePipeline) return -1;
-    @synchronized(host) {
-        return host.presentedFrame;
-    }
+    if (!host.renderer) return -1;
+    __block int64_t frame;
+    dispatch_sync(host.queue, ^{ frame = MIN(host.nextFrame, media_frame(host)); });
+    return frame;
+}
+
+int upmixer_audio_finish(UpmixerAudioHost opaque, char **error) {
+    UpmixerAudio *host = (__bridge UpmixerAudio *)opaque;
+    if (!host.renderer) return 1;
+    __block int drained;
+    dispatch_sync(host.queue, ^{
+        host.finished = YES;
+        start_media_if_ready(host);
+        drained = media_ok(host, error) ? (host.pending.count == 0 && media_frame(host) >= host.nextFrame) : -1;
+    });
+    return drained;
 }
 
 void upmixer_audio_destroy(UpmixerAudioHost opaque) {
     if (!opaque) return;
     UpmixerAudio *host = (__bridge_transfer UpmixerAudio *)opaque;
-    if (host.phasePipeline) {
-        [host.phaseEvent stopAndInvalidate];
-        [host.phaseEngine stop];
-        return;
+    if (host.renderer) {
+        [[NSNotificationCenter defaultCenter] removeObserver:host.flushObserver];
+        dispatch_sync(host.queue, ^{
+            host.playing = NO;
+            [host.renderer stopRequestingMediaData];
+            host.synchronizer.rate = 0.0f;
+            [host.renderer flush];
+            [host.pending removeAllObjects];
+        });
+    } else {
+        [host.player stop];
+        [host.engine stop];
     }
-    [host.player stop];
-    [host.engine stop];
 }
 
-void upmixer_audio_free_error(char *error) {
-    free(error);
-}
+void upmixer_audio_free_error(char *error) { free(error); }
 
 uint32_t upmixer_audio_max_output_channels(void) {
     @autoreleasepool {

@@ -23,7 +23,7 @@ npm run tauri:dev
 
 The desktop app defaults to `http://127.0.0.1:8000`; change and test the processing-node URL under Settings.
 Desktop preview runs the shared Rust DSP natively and sends multichannel Apple Spatial Audio through a
-layout-driven PHASE ambient mixer; all other output modes use direct AVAudioEngine output. If native startup fails,
+layout-tagged AVFoundation media renderer; all other output modes use direct AVAudioEngine output. Head tracking is selected in macOS Control Center. If native startup fails,
 the editor reports the failure and falls back to the browser WASM preview. Build an app bundle with
 `npm run tauri:build` (macOS 15 and the Xcode Command Line Tools are required).
 
@@ -51,3 +51,9 @@ See `AGENTS.md`, [UI design](../../docs/web_ui_design.md),
 [UI controls](../../docs/web_ui_controls.md), and
 [web architecture](../../docs/web_architecture.md) before adding a page,
 control, or visual state.
+
+Native audio checks (macOS): `scripts/test-native-audio.sh` validates PCM layout
+and timing. Add `--playback` for BlackHole clock/pause/short-clip checks, or
+`--capture` for actual loopback duration, pitch and gap checks. Capture launches
+Upmixer Audio Test with a macOS audio-input permission request; BlackHole 2ch
+must be installed. No system output device is changed.
