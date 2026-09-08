@@ -223,6 +223,11 @@ fn elevation_response<'py>(
 /// Takes the stem as the router sees it — past the stem EQ — which is the
 /// same signal the preview's split reads: the engine runs that EQ ahead of
 /// the block for exactly this reason.
+///
+/// This binding uses the revision-2 semantics shared with `ambient_route`: the
+/// allocation crossover stays fixed at `AMBIENT_HEIGHT_CROSSOVER_HZ`, while
+/// the legacy `height_crossover_hz` argument name is retained and its value is
+/// used as the revision-2 height cutoff.
 #[pyfunction]
 #[pyo3(signature = (left, right, sample_rate, height_crossover_hz = ambient::AMBIENT_HEIGHT_CROSSOVER_HZ))]
 fn ambient_split<'py>(

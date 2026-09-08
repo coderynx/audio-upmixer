@@ -48,7 +48,7 @@ def test_the_mask_pair_reconstructs_the_ambient_half():
         assert np.mean(summed**2) > 0
 
 
-def test_the_crossover_moves_ambient_energy_between_rear_and_height():
+def test_the_height_cutoff_moves_ambient_energy_between_rear_and_height():
     left = _deterministic(N, SR, 0.0)
     right = _deterministic(N, SR, 1.0)
     low = upmixer_dsp.ambient_split(left, right, SR, 500.0)
