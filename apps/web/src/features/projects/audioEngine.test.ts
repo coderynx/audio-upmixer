@@ -104,8 +104,8 @@ describe("withReferenceMatchParams", () => {
   });
 });
 
-describe("panner updates during movement compilation", () => {
-  it("installs the new resting placement while a replacement schedule is pending", () => {
+describe("programme updates during movement compilation", () => {
+  it("installs new parameters without the old movement schedule", () => {
     const updates: { params: Record<string, unknown>; schedule: MovementSchedule | null; ready: boolean }[] = [];
     const host = new PreviewHost({
       onReady: () => {}, onLoadProgress: () => {}, onError: () => {}, onPlaying: () => {},
@@ -116,17 +116,21 @@ describe("panner updates during movement compilation", () => {
     host.setConstants(TEST_ENGINE_CONSTANTS);
     host.setProgramme(createPreviewProgramme({
       stems: [{ id: "guitar", stem_key: "Guitar", audio_url: "/guitar.wav", channels: 2 } as ProjectStem],
-      mix: { stem_placement: { Guitar: { azimuth_deg: 75, elevation_deg: 0, width_deg: 0, object_size: 0 } } },
+      mix: { stem_placement: { Guitar: { azimuth_deg: 0, elevation_deg: 0, width_deg: 0, object_size: 0 } } },
       layoutChannels: ["FL", "FR", "C", "LFE", "SL", "SR"],
       movementFeaturesUrl: "/movement-features",
     }));
     Object.assign(host as object, {
-      movementReady: false,
       movementSchedule: { revision: 1 },
       client: { updateParams: (params: Record<string, unknown>, schedule: MovementSchedule | null, ready: boolean) => updates.push({ params, schedule, ready }) },
     });
 
-    host.apply();
+    host.setProgramme(createPreviewProgramme({
+      stems: [{ id: "guitar", stem_key: "Guitar", audio_url: "/guitar.wav", channels: 2 } as ProjectStem],
+      mix: { stem_placement: { Guitar: { azimuth_deg: 75, elevation_deg: 0, width_deg: 0, object_size: 0 } } },
+      layoutChannels: ["FL", "FR", "C", "LFE", "SL", "SR"],
+      movementFeaturesUrl: "/movement-features",
+    }));
 
     expect(updates).toHaveLength(1);
     expect(updates[0].schedule).toBeNull();

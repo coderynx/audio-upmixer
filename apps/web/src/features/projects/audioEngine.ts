@@ -159,10 +159,16 @@ export class PreviewHost {
   constructor(private readonly callbacks: EngineCallbacks) {}
 
   setProgramme(programme: PreviewProgramme | null) {
-    if (programme?.key !== this.programme?.key) {
-      this.movementReady = !programme?.movementFeaturesUrl || programme.layoutChannels.length === 2;
-    }
+    const changed = programme?.key !== this.programme?.key;
     this.programme = programme;
+    if (!changed) return;
+    // A UI edit must take effect before async filter or movement work. Keep
+    // the old schedule available for an unchanged request, but disable it
+    // until that request has been checked.
+    this.movementReady = false;
+    this.movementRevision += 1;
+    this.callbacks.onMovementSchedule?.(null);
+    this.apply();
   }
 
   setMonitor(monitor: PreviewMonitor) {
@@ -549,6 +555,7 @@ export class PreviewHost {
       (this.movementSchedule || this.pendingMovement)
     ) {
       this.movementReady = true;
+      this.callbacks.onMovementSchedule?.(this.movementSchedule);
       return true;
     }
     this.movementRequestKey = requestKey;
