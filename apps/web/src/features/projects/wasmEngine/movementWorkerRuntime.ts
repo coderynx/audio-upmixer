@@ -66,10 +66,16 @@ function validateSidecar(sidecar: MovementFeatureSidecar, expectedKeys: string[]
   if (!Number.isInteger(sidecar.frame_count) || sidecar.frame_count < 0) {
     throw new Error("movement feature sidecar has an invalid duration");
   }
-  const expected = [...expectedKeys].sort();
-  const actual = sidecar.stems.map((stem) => stem.stem_key).sort();
-  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-    throw new Error("movement feature sidecar stem identities do not match the prepared stems");
+  const identities = sidecar.stems.map((stem) => stem?.stem_key);
+  if (identities.some((key) => typeof key !== "string" || key.trim().length === 0)) {
+    throw new Error("movement feature sidecar stem identities must be non-empty");
+  }
+  if (new Set(identities).size !== identities.length) {
+    throw new Error("movement feature sidecar contains duplicate stem identities");
+  }
+  // Prepared stores can retain parent stems and instruments omitted from playback.
+  if (expectedKeys.some((key) => !identities.includes(key))) {
+    throw new Error("movement feature sidecar is missing a requested stem identity");
   }
   for (const entry of sidecar.stems) {
     if (

@@ -50,21 +50,24 @@ describe("MovementCompilerClient", () => {
     client.dispose();
   });
 
-  it("reuses canonical features when only the lossy proxy URL changes", async () => {
+  it("validates a prepared superset and reuses it across proxy URL changes", async () => {
+    const features = {
+      version: 1,
+      sample_rate: 44_100,
+      frame_count: 88_200,
+      window_frames: 441,
+      energies: Array.from({ length: 200 }, () => 0.04),
+    };
     const sidecar = {
       version: 1,
       sample_rate: 44_100,
       frame_count: 88_200,
-      stems: [{
-        stem_key: "Piano",
-        features: {
-          version: 1,
-          sample_rate: 44_100,
-          frame_count: 88_200,
-          window_frames: 441,
-          energies: Array.from({ length: 200 }, () => 0.04),
-        },
-      }],
+      // The prepared sidecar may retain unselected instrument and parent stems.
+      stems: [
+        "Crowd", "Other", "Guitar", "Bass", "Kick", "Snare", "Toms",
+        "Hi-Hat", "Ride", "Crash", "Lead Vocals", "Backing Vocals",
+        "Piano", "Vocals", "Drums",
+      ].map((stem_key) => ({ stem_key, features })),
     };
     const tuning = {
       activity_floor_db: -65, activity_enter_db: 6, activity_leave_db: 3,
@@ -82,8 +85,8 @@ describe("MovementCompilerClient", () => {
       revision: 3,
       channels: ["FL", "FR", "C", "LFE", "SL", "SR"],
       stems: [{
-        stem_key: "Piano",
-        stem_name: "Piano",
+        stem_key: "Guitar",
+        stem_name: "Guitar",
         gain_db: 0,
         enabled: true,
         included: true,
@@ -138,6 +141,34 @@ describe("MovementCompilerClient", () => {
     expect(first.duration_frames).toBe(88_200);
     expect(first.stems[0]?.events.length).toBeGreaterThan(1);
     expect(second).toEqual(first);
+
+    const expectSidecarError = async (
+      featuresUrl: string,
+      stems: typeof sidecar.stems,
+      message: string,
+    ) => {
+      vi.stubGlobal("fetch", vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ ...sidecar, stems }),
+      })));
+      await expect(compileMovement({ featuresUrl, request, wasmModule: module }))
+        .rejects.toThrow(message);
+    };
+    await expectSidecarError(
+      "/missing.json",
+      sidecar.stems.filter(({ stem_key }) => stem_key !== "Guitar"),
+      "missing a requested stem identity",
+    );
+    await expectSidecarError(
+      "/duplicate.json",
+      [...sidecar.stems, { stem_key: "Guitar", features }],
+      "duplicate stem identities",
+    );
+    await expectSidecarError(
+      "/empty.json",
+      [...sidecar.stems, { stem_key: "", features }],
+      "identities must be non-empty",
+    );
     vi.unstubAllGlobals();
   });
 });
