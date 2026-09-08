@@ -134,9 +134,10 @@ export class PreviewHost {
   private movementCompiler: MovementCompilerClient | null = null;
   private movementSchedule: MovementSchedule | null = null;
   /** Compiled replacement waiting for the matching engine update to land. */
-  private pendingMovement: { schedule: MovementSchedule | null; revision: number | null } | null = null;
+  private pendingMovement: { schedule: MovementSchedule | null; revision: number | null; placementKey: string } | null = null;
   private movementRevision = 0;
   private movementRequestKey = "";
+  private movementSchedulePlacementKey = "";
   private movementReady = true;
   private movementWasmModule: Promise<WebAssembly.Module> | null = null;
 
@@ -162,13 +163,15 @@ export class PreviewHost {
     const changed = programme?.key !== this.programme?.key;
     this.programme = programme;
     if (!changed) return;
-    // Solo, gain, and mastering changes do not alter motion. Only disable a
-    // schedule when its compile inputs changed; every parameter still lands
-    // in the engine immediately below.
-    if (this.movementRequestForCurrentProgramme()?.key !== this.movementRequestKey) {
-      this.movementReady = false;
+    // Solo, gain, and movement-setting changes keep the current motion.
+    // Only a new resting placement disables its schedule immediately.
+    const prepared = this.movementRequestForCurrentProgramme();
+    if (prepared?.key !== this.movementRequestKey) {
       this.movementRevision += 1;
-      this.callbacks.onMovementSchedule?.(null);
+      if (prepared?.placementKey !== this.movementSchedulePlacementKey) {
+        this.movementReady = false;
+        this.callbacks.onMovementSchedule?.(null);
+      }
     }
     this.apply();
   }
@@ -530,7 +533,7 @@ export class PreviewHost {
     };
   }
 
-  private movementRequestForCurrentProgramme(): { request: MovementCompileRequest; key: string } | null {
+  private movementRequestForCurrentProgramme(): { request: MovementCompileRequest; key: string; placementKey: string } | null {
     if (!this.constants || this.layoutChannels.length === 2 || !this.movementFeaturesUrl) return null;
     const resolved = resolveStemMixes({
       stems: this.previewableStems(),
@@ -548,6 +551,13 @@ export class PreviewHost {
         ...request,
         revision: undefined,
       }),
+      placementKey: JSON.stringify(request.stems.map(({
+        stem_key,
+        placement,
+        home_gains,
+        home_right_gains,
+        object_mode,
+      }) => ({ stem_key, placement, home_gains, home_right_gains, object_mode }))),
     };
   }
 
@@ -555,13 +565,13 @@ export class PreviewHost {
     if (this.layoutChannels.length === 2 || !this.movementFeaturesUrl) {
       this.movementReady = true;
       if (this.movementSchedule || this.pendingMovement) {
-        this.pendingMovement = { schedule: null, revision: null };
+        this.pendingMovement = { schedule: null, revision: null, placementKey: "" };
       }
       return true;
     }
     const prepared = this.movementRequestForCurrentProgramme();
     if (!prepared) return false;
-    const { request, key: requestKey } = prepared;
+    const { request, key: requestKey, placementKey } = prepared;
     if (
       this.movementRequestKey === requestKey &&
       (this.movementSchedule || this.pendingMovement)
@@ -571,16 +581,16 @@ export class PreviewHost {
       return true;
     }
     this.movementRequestKey = requestKey;
-    this.movementReady = false;
-    // A panner edit changes the supporting placement. Do not leave the old
-    // schedule audible while its replacement compiles: it would keep both
-    // audio and the spatial views at the old resting position.
-    if (this.movementSchedule || this.pendingMovement) {
+    if (placementKey !== this.movementSchedulePlacementKey) {
+      this.movementReady = false;
+      // A panner edit changes the supporting placement. Do not leave the old
+      // schedule audible while its replacement compiles: it would keep both
+      // audio and the spatial views at the old resting position.
       this.movementSchedule = null;
       this.pendingMovement = null;
       this.callbacks.onMovementSchedule?.(null);
+      this.apply();
     }
-    this.apply();
     const revision = ++this.movementRevision;
     try {
       const wasmModule = this.client?.wasmModule
@@ -590,7 +600,7 @@ export class PreviewHost {
       if (revision !== this.movementRevision || requestKey !== this.movementRequestKey) return false;
       // Keep the old audible schedule visible while the matching parameter
       // block is still pending. `apply` commits this pair together.
-      this.pendingMovement = { schedule, revision: schedule.revision };
+      this.pendingMovement = { schedule, revision: schedule.revision, placementKey };
       this.movementReady = true;
       return true;
     } catch (error) {
@@ -632,6 +642,7 @@ export class PreviewHost {
     const pending = this.pendingMovement;
     if (!pending || pending.revision !== revision) return;
     this.movementSchedule = pending.schedule;
+    this.movementSchedulePlacementKey = pending.placementKey;
     this.pendingMovement = null;
     this.callbacks.onMovementSchedule?.(this.movementSchedule);
   }
@@ -1149,6 +1160,7 @@ export class PreviewHost {
     this.movementSchedule = null;
     this.pendingMovement = null;
     this.movementRequestKey = "";
+    this.movementSchedulePlacementKey = "";
     this.movementReady = true;
     this.callbacks.onMovementSchedule?.(null);
     this.client?.dispose();
