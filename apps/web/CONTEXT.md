@@ -61,6 +61,18 @@ _Avoid_: stem repair
 **Movement pattern**: A preset-controlled spatial motion assigned to a stem, with per-stem enablement, depth, rate, and start/stop controls. It is not freehand or keyframed automation.
 _Avoid_: timeline automation
 
+**Supporting placement**: The stem's existing user- or preset-assigned spatial placement, also used when the stem is quiet or its musical prominence is uncertain.
+_Avoid_: separate resting position
+
+**Featured placement**: The spatial destination used to bring an eligible stem toward the front-center listening image while retaining stereo width.
+_Avoid_: center-speaker assignment
+
+**Movement role**: Auto lets stem-specific musical activity choose movement; Supporting permits supporting motion but prevents front-center promotion; Featured requests front-center promotion while the stem is active. Disabling movement holds the Supporting placement.
+_Avoid_: mute, solo
+
+**Supporting lift**: Slow, phrase-driven movement of backing vocals or crowd above their Supporting placement, returning as activity subsides. It preserves horizontal placement and width and requires height speakers.
+_Avoid_: Featured placement
+
 **Motion parity**: The invariant that previewed movement renders equivalently into multichannel WAV and time-varying ADM-BWF object metadata.
 _Avoid_: preview-only effect
 
