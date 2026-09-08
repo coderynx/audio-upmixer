@@ -162,12 +162,14 @@ export class PreviewHost {
     const changed = programme?.key !== this.programme?.key;
     this.programme = programme;
     if (!changed) return;
-    // A UI edit must take effect before async filter or movement work. Keep
-    // the old schedule available for an unchanged request, but disable it
-    // until that request has been checked.
-    this.movementReady = false;
-    this.movementRevision += 1;
-    this.callbacks.onMovementSchedule?.(null);
+    // Solo, gain, and mastering changes do not alter motion. Only disable a
+    // schedule when its compile inputs changed; every parameter still lands
+    // in the engine immediately below.
+    if (this.movementRequestForCurrentProgramme()?.key !== this.movementRequestKey) {
+      this.movementReady = false;
+      this.movementRevision += 1;
+      this.callbacks.onMovementSchedule?.(null);
+    }
     this.apply();
   }
 
@@ -528,15 +530,9 @@ export class PreviewHost {
     };
   }
 
-  private async ensureMovementSchedule(resolvedStems?: StemMix[]): Promise<boolean> {
-    if (this.layoutChannels.length === 2 || !this.movementFeaturesUrl) {
-      this.movementReady = true;
-      if (this.movementSchedule || this.pendingMovement) {
-        this.pendingMovement = { schedule: null, revision: null };
-      }
-      return true;
-    }
-    const resolved = resolvedStems ?? resolveStemMixes({
+  private movementRequestForCurrentProgramme(): { request: MovementCompileRequest; key: string } | null {
+    if (!this.constants || this.layoutChannels.length === 2 || !this.movementFeaturesUrl) return null;
+    const resolved = resolveStemMixes({
       stems: this.previewableStems(),
       scene: this.scene,
       mix: this.mix,
@@ -544,12 +540,28 @@ export class PreviewHost {
       constants: this.constants,
     });
     const request = this.movementRequest(resolved);
-    if (!request || !this.movementFeaturesUrl) return false;
-    const requestKey = JSON.stringify({
-      features: this.movementFeaturesUrl,
-      ...request,
-      revision: undefined,
-    });
+    if (!request || !this.movementFeaturesUrl) return null;
+    return {
+      request,
+      key: JSON.stringify({
+        features: this.movementFeaturesUrl,
+        ...request,
+        revision: undefined,
+      }),
+    };
+  }
+
+  private async ensureMovementSchedule(): Promise<boolean> {
+    if (this.layoutChannels.length === 2 || !this.movementFeaturesUrl) {
+      this.movementReady = true;
+      if (this.movementSchedule || this.pendingMovement) {
+        this.pendingMovement = { schedule: null, revision: null };
+      }
+      return true;
+    }
+    const prepared = this.movementRequestForCurrentProgramme();
+    if (!prepared) return false;
+    const { request, key: requestKey } = prepared;
     if (
       this.movementRequestKey === requestKey &&
       (this.movementSchedule || this.pendingMovement)

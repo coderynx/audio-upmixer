@@ -137,6 +137,37 @@ describe("programme updates during movement compilation", () => {
     expect(updates[0].ready).toBe(false);
     expect((updates[0].params.stems as { object_placement: { azimuth_deg: number } }[])[0].object_placement.azimuth_deg).toBe(75);
   });
+
+  it("keeps the schedule when solo only changes audibility", () => {
+    const updates: { schedule: MovementSchedule | null; ready: boolean }[] = [];
+    const host = new PreviewHost({
+      onReady: () => {}, onLoadProgress: () => {}, onError: () => {}, onPlaying: () => {},
+      onCurrentTime: () => {}, onDuration: () => {}, onMeasuring: () => {},
+      onMeasureProgress: () => {}, onLoudness: () => {}, onMaxChannels: () => {},
+      onVolume: () => {}, onMuted: () => {}, onLoop: () => {}, onEngineStatus: () => {},
+    });
+    host.setConstants(TEST_ENGINE_CONSTANTS);
+    const programme = (mix: Record<string, unknown> = {}) => createPreviewProgramme({
+      stems: [{ id: "guitar", stem_key: "Guitar", audio_url: "/guitar.wav", channels: 2 } as ProjectStem],
+      mix,
+      layoutChannels: ["FL", "FR", "C", "LFE", "SL", "SR"],
+      movementFeaturesUrl: "/movement-features",
+    });
+    host.setProgramme(programme());
+    Object.assign(host as object, { duration: 1 });
+    const key = (host as unknown as { movementRequestForCurrentProgramme: () => { key: string } }).movementRequestForCurrentProgramme().key;
+    const schedule = { revision: 1 } as MovementSchedule;
+    Object.assign(host as object, {
+      movementRequestKey: key,
+      movementSchedule: schedule,
+      movementReady: true,
+      client: { updateParams: (_params: Record<string, unknown>, next: MovementSchedule | null, ready: boolean) => updates.push({ schedule: next, ready }) },
+    });
+
+    host.setProgramme(programme({ stem_solo: ["Guitar"] }));
+
+    expect(updates).toEqual([{ schedule, ready: true }]);
+  });
 });
 
 describe("monitorMastering", () => {
