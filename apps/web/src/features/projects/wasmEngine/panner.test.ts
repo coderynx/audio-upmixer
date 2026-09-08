@@ -74,17 +74,21 @@ describe("wasm panner", () => {
     expect(instance.presetTreatments("no-such-preset")).toEqual({});
 
     expect(balanced.Kick.sends.lfe).toBeCloseTo(0.82, 9);
-    expect(balanced["Lead Vocals"].sends).toEqual({
-      lfe: 0, rear: 0, height: 0, ambienceTrimDb: 0,
-      heightTexture: 0.0165, heightCutoffHz: 3000, heightCrossoverHz: 4000,
+    expect(balanced["Lead Vocals"].sends).toMatchObject({
+      lfe: 0, heightCutoffHz: 1800, heightCrossoverHz: 4000,
     });
+    expect(balanced["Lead Vocals"].sends.rear).toBeCloseTo(0.51);
+    expect(balanced["Lead Vocals"].sends.height).toBeCloseTo(0.3825);
+    expect(balanced["Lead Vocals"].sends.ambienceTrimDb).toBeCloseTo(1.65);
+    expect(balanced["Lead Vocals"].sends.heightTexture).toBeCloseTo(0.011);
     expect(balanced.Guitar.sends.heightCrossoverHz).toBe(2000);
     expect(instance.presetTreatments("intimate").Crowd.sends.rear)
       .toBeLessThan(instance.presetTreatments("live").Crowd.sends.rear);
 
     const sparse = instance.presetTreatments("immersive", ["Vocals", "Other"], FULL);
     expect(Math.abs(sparse.Other.placement.azimuth_deg)).toBeLessThan(90);
-    expect(sparse.Other.sends).toMatchObject({ rear: 0, height: 0, heightTexture: 0 });
+    expect(sparse.Other.sends.rear).toBeGreaterThan(0.6);
+    expect(sparse.Other.sends.height).toBeGreaterThan(0.5);
     const rich = instance.presetTreatments(
       "immersive", ["Lead Vocals", "Bass", "Kick", "Snare", "Backing Vocals", "Toms", "Hi-Hat", "Guitar", "Piano", "Other"], FULL,
     );
@@ -100,8 +104,8 @@ describe("wasm panner", () => {
     expect(wide.Guitar.placement.width_deg).toBeLessThan(balancedRich.Guitar.placement.width_deg);
     expect(rich["Hi-Hat"].placement.azimuth_deg).toBe(180);
     expect(rich["Hi-Hat"].placement.elevation_deg).toBeGreaterThan(0);
-    expect(rich["Hi-Hat"].sends).toMatchObject({ ambienceTrimDb: 0.6, heightTexture: 0.14, heightCutoffHz: 1500 });
-    expect(rich["Lead Vocals"].sends).toMatchObject({ rear: 0, height: 0, heightTexture: 0.03 });
+    expect(rich["Hi-Hat"].sends).toMatchObject({ ambienceTrimDb: 4, heightTexture: 0.22, heightCutoffHz: 900 });
+    expect(rich["Lead Vocals"].sends).toMatchObject({ heightTexture: 0.02 });
     expect(rich["Hi-Hat"].sends.rear).toBeGreaterThan(0);
     expect(rich["Hi-Hat"].sends.height).toBeGreaterThan(0);
   });

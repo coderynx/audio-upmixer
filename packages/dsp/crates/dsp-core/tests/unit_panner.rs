@@ -224,9 +224,9 @@ fn preset_treatments_rebalance_the_selected_stem_and_speaker_layouts() {
         sparse_other.placement.azimuth_deg.abs() < 90.0,
         "sparse main material stays forward"
     );
-    assert_eq!(sparse_other.ambient_rear, 0.0);
-    assert_eq!(sparse_other.ambient_height, 0.0);
-    assert_eq!(sparse_other.height_texture, 0.0);
+    assert!(sparse_other.ambient_rear > 0.6);
+    assert!(sparse_other.ambient_height > 0.5);
+    assert!(sparse_other.height_texture > 0.0);
 
     let rich_stems = [
         "Lead Vocals",
@@ -256,17 +256,17 @@ fn preset_treatments_rebalance_the_selected_stem_and_speaker_layouts() {
     let hi_hat = rich.iter().find(|(stem, _)| *stem == "Hi-Hat").unwrap().1;
     assert!(hi_hat.ambient_rear > 0.12);
     assert!(hi_hat.ambient_height > 0.0);
-    assert_eq!(hi_hat.ambient_trim_db, 0.6);
-    assert_eq!(hi_hat.height_texture, 0.14);
-    assert_eq!(hi_hat.ambient_height_cutoff_hz, 1500.0);
+    assert_eq!(hi_hat.ambient_trim_db, 4.0);
+    assert_eq!(hi_hat.height_texture, 0.22);
+    assert_eq!(hi_hat.ambient_height_cutoff_hz, 900.0);
     let lead = rich
         .iter()
         .find(|(stem, _)| *stem == "Lead Vocals")
         .unwrap()
         .1;
-    assert_eq!(lead.ambient_rear, 0.0);
-    assert_eq!(lead.ambient_height, 0.0);
-    assert_eq!(lead.height_texture, 0.03);
+    assert!(lead.ambient_rear > 0.6);
+    assert!(lead.ambient_height > 0.5);
+    assert_eq!(lead.height_texture, 0.02);
 
     let flat = preset_treatments_for_layout("immersive", &rich_stems, &BED_51);
     assert!(flat
@@ -418,7 +418,7 @@ fn cached_layout_matches_the_one_shot_panner() {
 }
 
 #[test]
-fn preset_ambient_keeps_the_pulse_dry_and_scales_the_room_per_preset() {
+fn preset_ambient_localizes_the_pulse_and_scales_the_room_per_preset() {
     use upmixer_dsp_core::spatial::presets::{
         preset_stems, preset_treatment, preset_treatments_for_layout, PRESET_NAMES,
     };
@@ -439,7 +439,8 @@ fn preset_ambient_keeps_the_pulse_dry_and_scales_the_room_per_preset() {
                 "{preset}/{stem}"
             );
             if matches!(*stem, "Lead Vocals" | "Kick" | "Snare" | "Bass") {
-                assert_eq!((rear, height), (0.0, 0.0), "{preset}/{stem}");
+                assert!(rear > 0.0 && height > 0.0, "{preset}/{stem}");
+                assert!(treatment.height_texture <= if *stem == "Snare" { 0.06 } else { 0.02 });
             }
         }
     }
@@ -481,5 +482,43 @@ fn preset_object_sizes_are_normalized_and_expand_with_scope() {
             let placement = preset_placement(preset, stem).unwrap();
             assert!((0.0..=1.0).contains(&placement.object_size));
         }
+    }
+}
+
+#[test]
+fn preset_ambience_adapts_to_destinations_and_stem_inventory() {
+    use upmixer_dsp_core::spatial::presets::{
+        preset_treatments_for_layout, PRESET_NAMES, PRESET_STEMS,
+    };
+    let layouts: &[&[&str]] = &[
+        &["FL", "FR"],
+        &BED_51,
+        &["FL", "FR", "C", "LFE", "SL", "SR", "TFL", "TFR"],
+        &FULL,
+    ];
+    for preset in PRESET_NAMES {
+        for channels in layouts {
+            let rich = preset_treatments_for_layout(preset, &PRESET_STEMS, channels);
+            let sparse = preset_treatments_for_layout(preset, &["Vocals", "Other"], channels);
+            for (stem, t) in &rich {
+                assert_eq!(t.ambient_rear > 0.0, channels.contains(&"SL"));
+                assert_eq!(t.ambient_height > 0.0, channels.contains(&"TFL"));
+                assert!((0.0..=0.9).contains(&t.ambient_rear));
+                assert!((0.0..=0.9).contains(&t.ambient_height));
+                assert!((0.0..=6.0).contains(&t.ambient_trim_db));
+                assert!((0.0..=0.25).contains(&t.height_texture));
+                if let Some((_, sparse)) = sparse.iter().find(|(name, _)| name == stem) {
+                    assert!(sparse.ambient_rear <= t.ambient_rear);
+                    assert!(sparse.ambient_height <= t.ambient_height);
+                    assert!(sparse.ambient_height_cutoff_hz > t.ambient_height_cutoff_hz);
+                }
+            }
+        }
+        let two = preset_treatments_for_layout(preset, &PRESET_STEMS, layouts[2]);
+        let four = preset_treatments_for_layout(preset, &PRESET_STEMS, &FULL);
+        assert!(two
+            .iter()
+            .zip(four)
+            .all(|((_, two), (_, four))| two.ambient_height < four.ambient_height));
     }
 }
