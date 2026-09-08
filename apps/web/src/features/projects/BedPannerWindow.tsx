@@ -142,7 +142,7 @@ export function BedPannerWindow({
       </span>
     </Button>}
   >
-    <div className="space-y-4">
+    {() => <div className="space-y-4">
       <div className="grid grid-cols-4 gap-2 text-center text-[11px] text-muted-foreground">
         <span>Angle <strong className="block font-medium tabular-nums text-foreground">{placement.azimuth_deg.toFixed(1)}°</strong></span>
         <span>Diversity <strong className="block font-medium tabular-nums text-foreground">{diversity.toFixed(2)}</strong></span>
@@ -241,6 +241,6 @@ export function BedPannerWindow({
         </label>}
       </div>}
       <StemMovementControls stemName={stemName} value={movement} channels={channels} defaults={movementDefaults} onChange={onMovement} />
-    </div>
+    </div>}
   </FloatingWindow>;
 }

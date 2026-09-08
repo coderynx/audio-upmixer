@@ -58,6 +58,7 @@ pub enum Command {
     Update {
         params: Value,
         movement_schedule: Option<Value>,
+        movement_unchanged: bool,
         movement_ready: bool,
         assets: NativeAssets,
         renderer: NativeRenderer,
@@ -323,23 +324,20 @@ impl Session {
             Command::Update {
                 params,
                 movement_schedule,
+                movement_unchanged,
                 movement_ready,
                 assets,
                 renderer,
                 apple_head_tracking,
             } => {
                 let params = parse_params(params)?;
-                let movement_schedule = parse_movement_schedule(
-                    movement_schedule,
-                    params.speakers.len(),
-                )?;
-                let movement_revision = movement_schedule.as_ref().map(|schedule| schedule.revision);
                 let old_layout = output_layout(self.engine.params(), self.renderer)?.to_string();
                 if !movement_ready {
                     self.route_scale = None;
                     self.measurement = None;
                 }
-                self.engine.update_params_with_movement(params, movement_schedule)?;
+                update_engine_params(&mut self.engine, params, movement_schedule, movement_unchanged)?;
+                let movement_revision = self.engine.params().movement_schedule.as_ref().map(|schedule| schedule.revision);
                 if assets != self.assets {
                     load_assets(
                         &self.client,
@@ -673,6 +671,23 @@ fn install_movement_schedule(
     engine.update_params_with_movement(engine.params().clone(), schedule)
 }
 
+fn update_engine_params(
+    engine: &mut PreviewEngine,
+    mut params: EngineParams,
+    movement_schedule: Option<Value>,
+    movement_unchanged: bool,
+) -> Result<(), String> {
+    if movement_unchanged {
+        params.movement_schedule = engine.params().movement_schedule.clone();
+        params.validate_movement()?;
+        engine.update_params(params);
+        Ok(())
+    } else {
+        let schedule = parse_movement_schedule(movement_schedule, params.speakers.len())?;
+        engine.update_params_with_movement(params, schedule)
+    }
+}
+
 fn output_layout(params: &EngineParams, renderer: NativeRenderer) -> Result<&'static str, String> {
     if renderer == NativeRenderer::Direct && params.output_mode != OutputMode::Native {
         return Ok("stereo");
@@ -820,6 +835,33 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(serde_json::to_value(&schedule).unwrap(), value);
+
+        let mut params = parse_params(params_with_movement(serde_json::json!({
+            "enabled": true, "depth": 0.25, "response": 1.0,
+            "sensitivity": 0.5, "start_s": 0.0
+        }))).unwrap();
+        params.stems[0].routing = vec![("FL".into(), 1.0), ("FR".into(), 1.0)];
+        params.master = serde_json::from_value(serde_json::json!({})).unwrap();
+        let pcm: Vec<f32> = (0..48000).map(|frame| (frame as f32 * 0.1).sin() * 0.05).collect();
+        let source = std::sync::Arc::new(StemSource { left: pcm.clone(), right: pcm });
+        let mut engine = PreviewEngine::new(48000, params.clone(), vec![source.clone()]);
+        let mut reference = PreviewEngine::new(48000, params.clone(), vec![source]);
+        update_engine_params(&mut engine, params.clone(), Some(value.clone()), false).unwrap();
+        update_engine_params(&mut reference, params.clone(), Some(value.clone()), false).unwrap();
+        let installed = engine.params().movement_schedule.clone().unwrap();
+        let mut adjusted = params.clone();
+        adjusted.stems[0].rebalance_db = -3.0;
+        update_engine_params(&mut engine, adjusted.clone(), None, true).unwrap();
+        update_engine_params(&mut reference, adjusted, Some(value.clone()), false).unwrap();
+        assert!(std::sync::Arc::ptr_eq(&installed, engine.params().movement_schedule.as_ref().unwrap()));
+        assert_eq!(engine.params().stems[0].rebalance_db, -3.0);
+        let mut actual_pcm = vec![0.0; 48000 * 2];
+        let mut expected_pcm = vec![0.0; 48000 * 2];
+        assert_eq!(engine.render_f32(&mut actual_pcm, 48000), reference.render_f32(&mut expected_pcm, 48000));
+        assert!(actual_pcm.iter().any(|sample| sample.abs() > 1e-6));
+        assert_eq!(actual_pcm, expected_pcm);
+        update_engine_params(&mut engine, params, None, false).unwrap();
+        assert!(engine.params().movement_schedule.is_none());
 
         let mut invalid = value;
         invalid["interpolation_us"] = serde_json::json!(10_000);

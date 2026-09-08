@@ -132,11 +132,12 @@ export function useTrackLayoutRealization({
     record(manifest, next, apply, merge);
   }, [commit, key, layout, manifest, record, track, updateDraft]);
 
+  const placements = manifest?.mixing.stem_placement;
   const placementFor = React.useCallback((stem: string, preset: string): StemPlacement =>
-    (manifest?.mixing.stem_placement[stem] as StemPlacement | undefined)
+    (placements?.[stem] as StemPlacement | undefined)
     ?? panner?.presetTreatments(preset)[stem.split("@", 1)[0]]?.placement
     ?? NEUTRAL_PLACEMENT,
-  [manifest, panner]);
+  [placements, panner]);
 
   const setPlacement = React.useCallback((stem: string, placement: StemPlacement) => {
     if (!manifest || !panner) return;

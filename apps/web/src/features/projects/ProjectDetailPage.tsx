@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { SwitchRow } from "@/components/forms/fields";
 import { MasteringSection } from "@/features/composer/sections/MasteringSection";
 import { isStereoLayout, outputModeForLayoutSwitch } from "@/lib/layouts";
-import { type Manifest, type StemDynamicEqSettings, type StemDynamicsSettings, type StemEqSettings, type StemMovementSettings } from "@/lib/manifest";
+import { type StemDynamicEqSettings, type StemDynamicsSettings, type StemEqSettings, type StemMovementSettings } from "@/lib/manifest";
 import { isBedStem } from "@/lib/stems";
 import { useRuntime } from "@/runtime";
 import { cn } from "@/lib/utils";
@@ -101,6 +101,8 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
   });
   const trackManifest = realization.manifest;
   const updateTrackManifest = realization.update;
+  const realizationRef = React.useRef(realization);
+  realizationRef.current = realization;
   const history = realization.history;
   const previewStems = selected?.stems.filter((stem) => project?.prepared_stems.includes(stem.stem_key.split("@", 1)[0])) || [];
   const stemChannelCounts = React.useMemo(() => {
@@ -245,13 +247,16 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
   const maxElevationDeg = realization.maxElevationDeg;
   const placementFor = React.useCallback((stem: string): StemPlacement => realization.placementFor(stem, preset), [preset, realization]);
   const updateRoute = (stem: string, patch: Record<string, number>) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
+    const routing = trackManifest.mixing.stem_routing;
     updateTrackManifest({ ...trackManifest, mixing: { ...trackManifest.mixing, stem_routing: { ...routing, [stem]: { ...routing[stem], ...patch } } } }, true);
   };
   /** The stem's reverb and room, split out of it and sent around and above
    * the listener. Both amounts leave the front, so this is a move, not a
    * copy — see `routing::ambient`. */
   const updateAmbient = (stem: string, patch: { rear?: number; height?: number; ambientTrimDb?: number; heightTexture?: number; heightCrossoverHz?: number; heightCutoffHz?: number }) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     const mixing = { ...trackManifest.mixing };
     if (patch.rear !== undefined) {
@@ -285,6 +290,7 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
     updateTrackManifest({ ...trackManifest, mixing: { ...trackManifest.mixing, spatial_downmix_lock } }, true);
   };
   const setStemObjectMode = (stem: string, mode: "linked-stereo" | "mono") => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     updateTrackManifest({ ...trackManifest, mixing: {
       ...trackManifest.mixing,
@@ -296,13 +302,16 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
     return trackManifest?.mixing.stem_movement[stem] ?? trackManifest?.mixing.stem_movement[base];
   };
   const updateMovement = (stem: string, movement: StemMovementSettings) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     updateTrackManifest({ ...trackManifest, mixing: {
       ...trackManifest.mixing,
       stem_movement: { ...trackManifest.mixing.stem_movement, [stem]: movement },
     } }, true);
   };
-  const updatePlacement = realization.setPlacement;
+  const updatePlacement = React.useCallback((stem: string, placement: StemPlacement) => {
+    realizationRef.current.setPlacement(stem, placement);
+  }, []);
   const objectPannerForStem = (stem: string, ariaLabel = "Object panner") => {
     if (!trackManifest || isBedStem(stem)) return null;
     return <ObjectPannerWindow key={`panner-${stem}`} stemName={stem} placement={placementFor(stem)} maxElevationDeg={maxElevationDeg} objectMode={trackManifest.mixing.stem_object_mode[stem] ?? "linked-stereo"} channels={channels} ambientRear={trackManifest.mixing.stem_ambient_rear[stem] ?? 0} ambientHeight={trackManifest.mixing.stem_ambient_height[stem] ?? 0} ambientTrimDb={trackManifest.mixing.stem_ambient_trim_db[stem] ?? 0} heightTexture={trackManifest.mixing.stem_height_texture[stem] ?? 0} ambientHeightCutoffHz={trackManifest.mixing.stem_ambient_height_cutoff_hz[stem] ?? 2000} ambientHeightCrossoverHz={trackManifest.mixing.stem_ambient_height_crossover_hz[stem] ?? 2000} movement={movementFor(stem)} movementDefaults={engineConstants?.movementDefaults} ariaLabel={ariaLabel} onPlacement={(next) => updatePlacement(stem, next)} onObjectMode={(mode) => setStemObjectMode(stem, mode)} onAmbient={(patch) => updateAmbient(stem, patch)} onMovement={(next) => updateMovement(stem, next)} />;
@@ -312,6 +321,7 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
     return <BedPannerWindow key={`bed-panner-${stem}`} stemName={stem} placement={placementFor(stem)} route={routing[stem] || {}} channels={channels} inputChannels={stemChannelCounts[stem] ?? 1} maxElevationDeg={maxElevationDeg} ambientRear={trackManifest.mixing.stem_ambient_rear[stem] ?? 0} ambientHeight={trackManifest.mixing.stem_ambient_height[stem] ?? 0} ambientTrimDb={trackManifest.mixing.stem_ambient_trim_db[stem] ?? 0} heightTexture={trackManifest.mixing.stem_height_texture[stem] ?? 0} ambientHeightCutoffHz={trackManifest.mixing.stem_ambient_height_cutoff_hz[stem] ?? 2000} ambientHeightCrossoverHz={trackManifest.mixing.stem_ambient_height_crossover_hz[stem] ?? 2000} movement={movementFor(stem)} movementDefaults={engineConstants?.movementDefaults} ariaLabel={ariaLabel} onPlacement={(next) => updatePlacement(stem, next)} onRoute={(patch) => updateRoute(stem, patch)} onAmbient={(patch) => updateAmbient(stem, patch)} onMovement={(next) => updateMovement(stem, next)} />;
   };
   const updateStemEq = (stem: string, eq: string | StemEqSettings | null) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     const next = { ...trackManifest.mixing.stem_eq };
     if (eq) next[stem] = eq;
@@ -319,6 +329,7 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
     updateTrackManifest({ ...trackManifest, mixing: { ...trackManifest.mixing, stem_eq: next } });
   };
   const updateStemDynamicEq = (stem: string, dynamicEq: StemDynamicEqSettings | null) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     const next = { ...trackManifest.mixing.stem_dynamic_eq };
     if (dynamicEq) next[stem] = dynamicEq;
@@ -326,6 +337,7 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
     updateTrackManifest({ ...trackManifest, mixing: { ...trackManifest.mixing, stem_dynamic_eq: next } });
   };
   const updateStemDynamics = (stem: string, dynamics: StemDynamicsSettings | null) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     const next = { ...trackManifest.mixing.stem_dynamics };
     if (dynamics) next[stem] = dynamics;
@@ -355,31 +367,45 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
       : objectPannerForStem(stem, ariaLabel);
     return <div className="flex w-full flex-col items-center gap-1.5">{stemProcessingFor(stem)}{pannerControl}</div>;
   };
+  const mixerTopControls = React.useMemo(() => new Map(orderedStems.map((stem) => [
+    stem, stemTopControls(stem, `${isBedStem(stem) ? "Bed" : "Object"} panner ${stem}`),
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on control data; edit callbacks read realizationRef
+  ])), [
+    // Edit callbacks read realizationRef so cached controls preserve newer mastering edits.
+    trackManifest?.mixing, orderedStems, channels, maxElevationDeg, preset, configuration,
+    engineConstants, stemChannelCounts, preview.stemDynamicEq, preview.stemDynamics, realization.placementFor,
+  ]);
+  const topControlForStem = React.useCallback((stem: string) => mixerTopControls.get(stem), [mixerTopControls]);
   const applyPreset = () => realization.applyPreset(preset, presetStemNames);
   const toggleEnabled = React.useCallback((stem: string) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     const current = trackManifest.mixing.stem_enabled[stem] !== false;
     updateTrackManifest({ ...trackManifest, mixing: { ...trackManifest.mixing, stem_enabled: { ...trackManifest.mixing.stem_enabled, [stem]: !current }, stem_solo: trackManifest.mixing.stem_solo.filter((solo) => solo !== stem) } });
-  }, [trackManifest, updateTrackManifest]);
+  }, []);
   const toggleSolo = React.useCallback((stem: string) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     const solo = trackManifest.mixing.stem_solo;
     updateTrackManifest({ ...trackManifest, mixing: { ...trackManifest.mixing, stem_solo: solo.includes(stem) ? solo.filter((item) => item !== stem) : [...solo, stem] } });
-  }, [trackManifest, updateTrackManifest]);
+  }, []);
   const previewCommitScrub = preview.commitScrub;
   const commitScrub = React.useCallback((value: number) => { void previewCommitScrub(value); }, [previewCommitScrub]);
   const setStemGain = React.useCallback((stem: string, gain: number) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     updateTrackManifest({ ...trackManifest, mixing: { ...trackManifest.mixing, stem_rebalance: { ...trackManifest.mixing.stem_rebalance, [stem]: gain } } }, true);
-  }, [trackManifest, updateTrackManifest]);
+  }, []);
   const setBedTrim = React.useCallback((bed_trim_db: number) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     updateTrackManifest({ ...trackManifest, mixing: { ...trackManifest.mixing, bed_trim_db } }, true);
-  }, [trackManifest, updateTrackManifest]);
+  }, []);
   const setAnchorStrength = React.useCallback((stem_source_anchor_strength: number) => {
+    const { manifest: trackManifest, update: updateTrackManifest } = realizationRef.current;
     if (!trackManifest) return;
     updateTrackManifest({ ...trackManifest, mixing: { ...trackManifest.mixing, stem_source_anchor_strength } }, true);
-  }, [trackManifest, updateTrackManifest]);
+  }, []);
   const silentStems = React.useMemo(() => {
     const solo = trackManifest?.mixing.stem_solo || [];
     return orderedStems.filter((stem) => (
@@ -583,7 +609,7 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
         bedTrim={trackManifest?.mixing.bed_trim_db ?? 0}
         onBedTrim={setBedTrim}
         onCommitScrub={commitScrub}
-        topControlForStem={(stem) => stemTopControls(stem, `${isBedStem(stem) ? "Bed" : "Object"} panner ${stem}`)}
+        topControlForStem={topControlForStem}
       />;
       if (activeTab === "mixing") return <div className="grid min-h-0 flex-1 xl:grid-cols-[auto_minmax(0,1fr)_320px]">
         {trackRail}

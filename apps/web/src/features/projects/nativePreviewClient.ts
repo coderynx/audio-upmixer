@@ -51,6 +51,7 @@ export class NativePreviewClient {
   private pendingUpdate: { params: DspEngineParams; movementSchedule: MovementSchedule | null; movementReady: boolean; assets: NativePreviewAssets; renderer: NativeRenderer; appleHeadTracking: boolean } | null = null;
   private updateScheduled = false;
   private queue = Promise.resolve<unknown>(undefined);
+  private movementRevision: number | null = null;
   private pendingMeasure: ((value: { lkfs: number; dbtp: number; monitorLkfs?: number; monitorDbtp?: number } | null) => void) | null = null;
 
   private constructor(
@@ -112,6 +113,7 @@ export class NativePreviewClient {
       },
       onEvent: channel,
     });
+    client.movementRevision = options.movementSchedule?.revision ?? null;
     return client;
   }
 
@@ -189,11 +191,19 @@ export class NativePreviewClient {
     const update = this.pendingUpdate;
     this.pendingUpdate = null;
     if (!update || this.disposed) return;
-    this.enqueue("native_preview_update", { request: { sessionId: this.sessionId, ...update } });
+    const revision = update.movementSchedule?.revision ?? null;
+    this.enqueue("native_preview_update", () => {
+      const movementUnchanged = revision === this.movementRevision;
+      return { request: {
+        sessionId: this.sessionId, ...update,
+        movementSchedule: movementUnchanged ? undefined : update.movementSchedule,
+        movementUnchanged,
+      } };
+    }).then(() => { this.movementRevision = revision; }, () => {});
   }
 
-  private enqueue(command: string, args: Record<string, unknown>): Promise<unknown> {
-    this.queue = this.queue.catch(() => undefined).then(() => this.disposed ? undefined : invoke(command, args));
+  private enqueue(command: string, args: Record<string, unknown> | (() => Record<string, unknown>)): Promise<unknown> {
+    this.queue = this.queue.catch(() => undefined).then(() => this.disposed ? undefined : invoke(command, typeof args === "function" ? args() : args));
     this.queue.catch((error) => this.callbacks.onError?.(error instanceof Error ? error.message : String(error)));
     return this.queue;
   }

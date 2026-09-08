@@ -28,7 +28,7 @@ function KeyCap({ cap }: { cap: { glyph: string; word: string } }) {
  * the content. Purely presentational: it reads the shared binding table but
  * never `useKeyCommands`, so it stays a leaf the page can render regardless
  * of which stage is active. */
-export function KeyCommandsDialog({
+export const KeyCommandsDialog = React.memo(function KeyCommandsDialog({
   open,
   onOpenChange,
   mac = IS_MAC,
@@ -83,4 +83,4 @@ export function KeyCommandsDialog({
       </DialogContent>
     </Dialog>
   );
-}
+});

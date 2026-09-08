@@ -6,7 +6,7 @@ export function FloatingWindow({ title, ariaLabel, trigger, children, icon, bord
   title: string;
   ariaLabel: string;
   trigger: (open: () => void, expanded: boolean) => React.ReactNode;
-  children: React.ReactNode;
+  children: () => React.ReactNode;
   icon?: React.ReactNode;
   borderColor?: string;
 }) {
@@ -29,6 +29,6 @@ export function FloatingWindow({ title, ariaLabel, trigger, children, icon, bord
         onPointerMove={(event) => { const drag = dragRef.current; if (drag?.pointerId === event.pointerId) place(event.clientX - drag.offsetX, event.clientY - drag.offsetY); }}
         onPointerUp={(event) => { if (dragRef.current?.pointerId !== event.pointerId) return; dragRef.current = null; event.currentTarget.releasePointerCapture(event.pointerId); }}>
         {icon}<span className="min-w-0 flex-1 truncate">{title}</span><button type="button" aria-label={`Close ${ariaLabel}`} className="-mr-1 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60" onPointerDown={(event) => event.stopPropagation()} onClick={() => setOpen(false)}><X className="h-3.5 w-3.5" /></button>
-      </div><div className="p-3">{children}</div>
+      </div><div className="p-3">{children()}</div>
     </div></div>, document.body)}</>;
 }

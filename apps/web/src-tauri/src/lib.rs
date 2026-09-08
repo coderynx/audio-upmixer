@@ -40,6 +40,8 @@ struct UpdateRequest {
     params: Value,
     #[serde(default)]
     movement_schedule: Option<Value>,
+    #[serde(default)]
+    movement_unchanged: bool,
     #[serde(default = "movement_ready")]
     movement_ready: bool,
     assets: NativeAssets,
@@ -132,6 +134,7 @@ fn native_preview_update(
         Command::Update {
             params: request.params,
             movement_schedule: request.movement_schedule,
+            movement_unchanged: request.movement_unchanged,
             movement_ready: request.movement_ready,
             assets: request.assets,
             renderer: request.renderer,

@@ -80,6 +80,24 @@ afterEach(() => {
 });
 
 describe("ProjectDetailPage tabs", () => {
+  it("preserves mastering edits when cached mixer controls write the next edit", async () => {
+    renderPage();
+    await screen.findByText("Editable master");
+    fireEvent.click(screen.getByRole("button", { name: "Mixer" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mastering" }));
+    const ceiling = screen.getByRole("slider", { name: "True-peak ceiling" });
+    fireEvent.keyDown(ceiling, { key: "ArrowLeft" });
+    const maxTp = Number(ceiling.getAttribute("aria-valuenow"));
+    fireEvent.click(screen.getByRole("button", { name: "Enable Tame" }));
+    fireEvent.keyDown(screen.getByRole("slider", { name: "Vocals gain" }), { key: "ArrowDown" });
+
+    await waitFor(() => expect(api.saveProjectTrackLayout).toHaveBeenCalled());
+    const payload = vi.mocked(api.saveProjectTrackLayout).mock.calls.at(-1)![3];
+    expect(payload.manifest_overrides).toMatchObject({
+      mastering: { loudness: { max_tp: maxTp } },
+      mixing: { stem_dynamic_eq: { Vocals: { enabled: true } }, stem_rebalance: { Vocals: -0.1 } },
+    });
+  });
   it("defaults to the Mixing tab with preview and routing graph visible", async () => {
     renderPage();
     await waitFor(() => expect(screen.getByText("Editable master")).toBeInTheDocument());
