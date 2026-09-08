@@ -162,12 +162,9 @@ export class PreviewHost {
     const changed = programme?.key !== this.programme?.key;
     this.programme = programme;
     if (!changed) return;
-    // Parameters land immediately; the active schedule remains in place until
-    // a replacement for changed movement inputs is ready.
-    const prepared = this.movementRequestForCurrentProgramme();
-    if (prepared?.key !== this.movementRequestKey) {
-      this.movementRevision += 1;
-    }
+    // Parameters land immediately; movement preparation stays off the slider
+    // path. The revision rejects a stale asynchronous replacement.
+    this.movementRevision += 1;
     this.apply();
   }
 

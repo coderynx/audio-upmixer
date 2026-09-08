@@ -143,6 +143,28 @@ describe("programme updates during movement compilation", () => {
     expect((updates[0].params.stems as { object_placement: { azimuth_deg: number } }[])[0].object_placement.azimuth_deg).toBe(75);
   });
 
+  it("does not prepare movement synchronously for a panner update", () => {
+    const host = new PreviewHost({
+      onReady: () => {}, onLoadProgress: () => {}, onError: () => {}, onPlaying: () => {},
+      onCurrentTime: () => {}, onDuration: () => {}, onMeasuring: () => {},
+      onMeasureProgress: () => {}, onLoudness: () => {}, onMaxChannels: () => {},
+      onVolume: () => {}, onMuted: () => {}, onLoop: () => {}, onEngineStatus: () => {},
+    });
+    host.setConstants(TEST_ENGINE_CONSTANTS);
+    const programme = (azimuth_deg: number) => createPreviewProgramme({
+      stems: [{ id: "guitar", stem_key: "Guitar", audio_url: "/guitar.wav", channels: 2 } as ProjectStem],
+      mix: { stem_placement: { Guitar: { azimuth_deg, elevation_deg: 0, width_deg: 0, object_size: 0 } } },
+      layoutChannels: ["FL", "FR", "C", "LFE", "SL", "SR"],
+      movementFeaturesUrl: "/movement-features",
+    });
+    host.setProgramme(programme(0));
+    Object.assign(host as object, {
+      movementRequestForCurrentProgramme: () => { throw new Error("synchronous movement preparation"); },
+    });
+
+    expect(() => host.setProgramme(programme(75))).not.toThrow();
+  });
+
   it("keeps the schedule when solo or movement settings change", () => {
     const updates: { schedule: MovementSchedule | null; ready: boolean }[] = [];
     const host = new PreviewHost({
