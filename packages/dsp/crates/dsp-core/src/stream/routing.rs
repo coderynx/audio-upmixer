@@ -18,6 +18,10 @@ use crate::stem_dynamics::{StemDynamics, StemDynamicsParams};
 use crate::stem_eq::{StemEq, StemEqParams};
 
 const AMBIENT_GAIN_RAMP_MS: f64 = 8.0;
+// The preview accepts blocks larger than the Web Audio quantum (the focused
+// stream suite uses 4096), so keep the ambient output scratch at that size
+// before the first callback. `process_into` reuses it without growing it.
+const AMBIENT_BUFFER_CAPACITY: usize = 4096;
 
 mod routing_ambient;
 pub use routing_ambient::LfeBus;
@@ -303,7 +307,9 @@ impl StemRouteState {
         };
 
         let ambient_expander = FixedAmbientExpander::new(sample_rate, destinations);
-        let ambient_expanded = vec![Vec::new(); ambient_expander.destinations().len()];
+        let ambient_expanded = (0..ambient_expander.destinations().len())
+            .map(|_| Vec::with_capacity(AMBIENT_BUFFER_CAPACITY))
+            .collect();
         let mut ambient_output_slots = [None; AMBIENT_EXPANDED_COUNT];
         for (output, destination) in ambient_expander.destinations().enumerate() {
             if let Some(slot) = ambient_expanded_slot(destination) {
@@ -539,7 +545,6 @@ impl StemRouteState {
     }
 
     fn expand_ambient(&mut self, count: usize) {
-        self.clear_expanded(count);
         let inputs = [
             &self.shaped[AMBIENT_SURROUND][..count],
             &self.shaped[AMBIENT_SURROUND + 1][..count],

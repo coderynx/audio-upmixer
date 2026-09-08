@@ -33,3 +33,30 @@ def test_expansion_rejects_ragged_inputs():
 
 def test_expansion_with_no_destinations_is_a_no_op():
     assert upmixer_dsp.ambient_expand(*_inputs(8), SR, []) == []
+
+
+@pytest.mark.parametrize("kind", ("silence", "mono", "hard_pan", "impulse"))
+def test_edge_inputs_are_finite_deterministic_and_keep_shape(kind: str):
+    n = 2048
+    signal = np.linspace(-0.5, 0.5, n, dtype=np.float64)
+    zero = np.zeros(n, dtype=np.float64)
+    if kind == "silence":
+        inputs = (zero, zero, zero, zero)
+    elif kind == "mono":
+        inputs = (signal, signal, signal, signal)
+    elif kind == "hard_pan":
+        inputs = (signal, zero, signal * 0.5, zero)
+    else:
+        impulse = np.zeros(n, dtype=np.float64)
+        impulse[0] = 1.0
+        inputs = (impulse, zero, zero, zero)
+
+    first = upmixer_dsp.ambient_expand(*inputs, SR, list(DESTINATIONS))
+    second = upmixer_dsp.ambient_expand(*inputs, SR, list(DESTINATIONS))
+    assert len(first) == len(DESTINATIONS)
+    for actual, repeat in zip(first, second):
+        assert actual.shape == (n,)
+        assert np.isfinite(actual).all()
+        np.testing.assert_array_equal(actual, repeat)
+    if kind == "silence":
+        assert all(np.array_equal(actual, zero) for actual in first)
