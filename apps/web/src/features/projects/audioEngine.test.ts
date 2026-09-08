@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { withReferenceMatchParams } from "./audioEngine";
+import { PreviewHost, type MovementSchedule } from "./audioEngine";
 import { monitorMastering } from "./masterPreview";
 import { bypassMatchDb, correctionGain } from "./audioAnalysis";
 import { resolveDeliveryTarget } from "./masteringProfiles";
 import { TEST_ENGINE_CONSTANTS } from "./engineConstants.fixture";
+import { createPreviewProgramme } from "./previewProgramme";
+import type { ProjectStem } from "@/api";
 
 const TARGETS = TEST_ENGINE_CONSTANTS.deliveryTargets;
 const FALLBACK = TEST_ENGINE_CONSTANTS.deliveryDefault;
@@ -98,6 +101,37 @@ describe("withReferenceMatchParams", () => {
     expect(withReferenceMatchParams("/fir", 1, 6, 0.5, 300, 9000)).toBe(
       "/fir?strength=1&max_db=6&smooth_oct=0.5&low_hz=300&high_hz=9000",
     );
+  });
+});
+
+describe("panner updates during movement compilation", () => {
+  it("installs the new resting placement while a replacement schedule is pending", () => {
+    const updates: { params: Record<string, unknown>; schedule: MovementSchedule | null; ready: boolean }[] = [];
+    const host = new PreviewHost({
+      onReady: () => {}, onLoadProgress: () => {}, onError: () => {}, onPlaying: () => {},
+      onCurrentTime: () => {}, onDuration: () => {}, onMeasuring: () => {},
+      onMeasureProgress: () => {}, onLoudness: () => {}, onMaxChannels: () => {},
+      onVolume: () => {}, onMuted: () => {}, onLoop: () => {}, onEngineStatus: () => {},
+    });
+    host.setConstants(TEST_ENGINE_CONSTANTS);
+    host.setProgramme(createPreviewProgramme({
+      stems: [{ id: "guitar", stem_key: "Guitar", audio_url: "/guitar.wav", channels: 2 } as ProjectStem],
+      mix: { stem_placement: { Guitar: { azimuth_deg: 75, elevation_deg: 0, width_deg: 0, object_size: 0 } } },
+      layoutChannels: ["FL", "FR", "C", "LFE", "SL", "SR"],
+      movementFeaturesUrl: "/movement-features",
+    }));
+    Object.assign(host as object, {
+      movementReady: false,
+      movementSchedule: { revision: 1 },
+      client: { updateParams: (params: Record<string, unknown>, schedule: MovementSchedule | null, ready: boolean) => updates.push({ params, schedule, ready }) },
+    });
+
+    host.apply();
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0].schedule).toBeNull();
+    expect(updates[0].ready).toBe(false);
+    expect((updates[0].params.stems as { object_placement: { azimuth_deg: number } }[])[0].object_placement.azimuth_deg).toBe(75);
   });
 });
 

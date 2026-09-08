@@ -553,6 +553,15 @@ export class PreviewHost {
     }
     this.movementRequestKey = requestKey;
     this.movementReady = false;
+    // A panner edit changes the supporting placement. Do not leave the old
+    // schedule audible while its replacement compiles: it would keep both
+    // audio and the spatial views at the old resting position.
+    if (this.movementSchedule || this.pendingMovement) {
+      this.movementSchedule = null;
+      this.pendingMovement = null;
+      this.callbacks.onMovementSchedule?.(null);
+    }
+    this.apply();
     const revision = ++this.movementRevision;
     try {
       const wasmModule = this.client?.wasmModule
@@ -575,10 +584,6 @@ export class PreviewHost {
 
   apply() {
     if (!this.constants) return;
-    // Keep the currently audible pair intact while a changed movement request
-    // is compiling. The matching params and schedule are installed together
-    // by the completion path below.
-    if (this.movementFeaturesUrl && this.layoutChannels.length !== 2 && !this.movementReady) return;
     const movementSchedule = this.movementReady
       ? this.pendingMovement
         ? this.pendingMovement.schedule
