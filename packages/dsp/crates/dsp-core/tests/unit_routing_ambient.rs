@@ -154,6 +154,60 @@ mod ambient {
     }
 
     #[test]
+    fn sustained_stereo_notes_do_not_warble() {
+        for sample_rate in [44_100, 48_000, 96_000] {
+            let n = sample_rate as usize;
+            for spacing in [4.0, 6.0, 10.0, 20.0, 40.0] {
+                let note = |frequency: f64, i: usize| {
+                    0.5 * (2.0 * std::f64::consts::PI * frequency * i as f64
+                        / sample_rate as f64).sin()
+                };
+                let (left, right): (Vec<_>, Vec<_>) = (0..n + AMBIENT_FFT_SIZE)
+                    .map(|i| {
+                        let (a, b) = (note(440.0, i), note(440.0 + spacing, i));
+                        (a + 0.5 * b, 0.5 * a + b)
+                    }).unzip();
+                let mut split = AmbientSplit::new(sample_rate);
+                let mut output: [Vec<f64>; 6] = Default::default();
+                for start in (0..n).step_by(128) {
+                    let block = split.advance_with_amounts(
+                        0, &left, &right, start, 128.min(n - start), 1.0, 1.0,
+                    );
+                    for (output, signal) in output.iter_mut().zip(
+                        block.direct.into_iter().chain(block.rear).chain(block.height)
+                    ) {
+                        output.extend_from_slice(signal);
+                    }
+                }
+                // Exclude startup and provide look-ahead past the measured end.
+                // Integer cycles make the sine/cosine projections orthogonal.
+                for (channel, signal) in output.iter().enumerate() {
+                    let signal = &signal[n / 2..n];
+                    let mut residual = signal.to_vec();
+                    for frequency in [440.0, 440.0 + spacing] {
+                        for phase in [0.0, std::f64::consts::FRAC_PI_2] {
+                            let basis: Vec<f64> = (0..signal.len()).map(|i| {
+                                (2.0 * std::f64::consts::PI * frequency * i as f64
+                                    / sample_rate as f64 + phase).sin()
+                            }).collect();
+                            let gain = signal.iter().zip(&basis).map(|(x, b)| x * b).sum::<f64>()
+                                / basis.iter().map(|b| b * b).sum::<f64>();
+                            for (sample, basis) in residual.iter_mut().zip(basis) {
+                                *sample -= gain * basis;
+                            }
+                        }
+                    }
+                    // Sidebands below -40 dB relative to either input note.
+                    let distortion = residual.iter().map(|v| v * v).sum::<f64>()
+                        / (signal.len() as f64 * 0.125);
+                    assert!(distortion < 1e-4,
+                        "{sample_rate} Hz, spacing {spacing}, channel {channel}: modulation {distortion:.6}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn the_height_masks_are_complementary_and_steep() {
         for crossover in [500.0, 2000.0, 4000.0] {
             for bin in 0..=AMBIENT_FFT_SIZE / 2 {

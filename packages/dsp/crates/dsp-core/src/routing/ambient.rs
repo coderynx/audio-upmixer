@@ -19,11 +19,13 @@ pub const AMBIENT_FFT_SIZE: usize = 1024;
 /// Four overlaps give constant overlap-add with the square-root Hann pair.
 pub const AMBIENT_OVERLAP: usize = 4;
 
-/// Covariance frames in the primary/ambient estimate.
-pub const AMBIENT_COVARIANCE_FRAMES: usize = 5;
+/// Covariance frames at 48 kHz: 256 ms averages over beating between notes
+/// instead of mistaking it for changes in the ambient field.
+pub const AMBIENT_COVARIANCE_FRAMES: usize = 48;
 
-/// Wiener-matrix frames averaged after covariance estimation.
-pub const AMBIENT_MATRIX_FRAMES: usize = 3;
+/// Wiener-matrix frames at 48 kHz. A second 256 ms average suppresses the
+/// remaining matrix modulation before it reaches both wet and direct paths.
+pub const AMBIENT_MATRIX_FRAMES: usize = 48;
 
 /// Smallest analysis band. Narrower low-frequency bands are too noisy.
 pub const AMBIENT_BAND_MIN_BINS: usize = 3;
@@ -171,6 +173,12 @@ impl AmbientSplit {
         let bins = n / 2 + 1;
         let (bands, interpolation) = erb_bands(bins, sample_rate, n);
         let band_count = bands.len();
+        let covariance_frames = (AMBIENT_COVARIANCE_FRAMES as f64 * sample_rate as f64 / 48_000.0)
+            .round()
+            .max(1.0) as usize;
+        let matrix_frames = (AMBIENT_MATRIX_FRAMES as f64 * sample_rate as f64 / 48_000.0)
+            .round()
+            .max(1.0) as usize;
         let height_crossover_hz = valid_height_crossover(height_crossover_hz);
         Self {
             fft: RealFft::new(n),
@@ -181,14 +189,11 @@ impl AmbientSplit {
             cola,
             bands,
             interpolation,
-            covariance_history: vec![
-                vec![Covariance::default(); band_count];
-                AMBIENT_COVARIANCE_FRAMES
-            ],
+            covariance_history: vec![vec![Covariance::default(); band_count]; covariance_frames],
             covariance_sum: vec![Covariance::default(); band_count],
             covariance_cursor: 0,
             covariance_count: 0,
-            matrix_history: vec![vec![AmbientMatrix::default(); band_count]; AMBIENT_MATRIX_FRAMES],
+            matrix_history: vec![vec![AmbientMatrix::default(); band_count]; matrix_frames],
             matrix_sum: vec![AmbientMatrix::default(); band_count],
             matrix_cursor: 0,
             matrix_count: 0,
@@ -398,8 +403,10 @@ impl AmbientSplit {
             total_power += self.spectrum[0][bin].norm_sqr() + self.spectrum[1][bin].norm_sqr();
         }
         let gate = (total_power / self.spectrum[0].len() as f64 * RELATIVE_ENERGY_FLOOR).max(EPS);
-        let covariance_divisor = (self.covariance_count + 1).min(AMBIENT_COVARIANCE_FRAMES) as f64;
-        let matrix_divisor = (self.matrix_count + 1).min(AMBIENT_MATRIX_FRAMES) as f64;
+        let covariance_frames = self.covariance_history.len();
+        let matrix_frames = self.matrix_history.len();
+        let covariance_divisor = (self.covariance_count + 1).min(covariance_frames) as f64;
+        let matrix_divisor = (self.matrix_count + 1).min(matrix_frames) as f64;
 
         for band_index in 0..self.bands.len() {
             let band = &self.bands[band_index];
@@ -426,10 +433,10 @@ impl AmbientSplit {
             self.matrix_sum[band_index] =
                 self.matrix_sum[band_index].add(target).subtract(old_matrix);
         }
-        self.covariance_cursor = (self.covariance_cursor + 1) % AMBIENT_COVARIANCE_FRAMES;
-        self.covariance_count = (self.covariance_count + 1).min(AMBIENT_COVARIANCE_FRAMES);
-        self.matrix_cursor = (self.matrix_cursor + 1) % AMBIENT_MATRIX_FRAMES;
-        self.matrix_count = (self.matrix_count + 1).min(AMBIENT_MATRIX_FRAMES);
+        self.covariance_cursor = (self.covariance_cursor + 1) % covariance_frames;
+        self.covariance_count = (self.covariance_count + 1).min(covariance_frames);
+        self.matrix_cursor = (self.matrix_cursor + 1) % matrix_frames;
+        self.matrix_count = (self.matrix_count + 1).min(matrix_frames);
 
         for bin in 0..self.spectrum[0].len() {
             let interpolation = self.interpolation[bin];
