@@ -20,6 +20,8 @@ import {
 } from "@/lib/spatial";
 import { cn } from "@/lib/utils";
 import type { StemSpectrum } from "./audioEngine";
+import type { MovementSchedule } from "./wasmEngine/engineTypes";
+import { movementAt, scenePositionFromMovement } from "./wasmEngine/movementSchedule";
 
 // NUGEN Halo Upmix-style "Haze View": a 2D radar where radius encodes
 // spectral centroid (bass at the center, treble at the edge) and angle
@@ -78,6 +80,9 @@ export type HazeViewProps = {
   colors: Record<string, string>;
   channelCounts?: Record<string, number>;
   stemSpectrum: React.MutableRefObject<Map<string, StemSpectrum>>;
+  movementSchedule?: MovementSchedule | null;
+  playhead?: React.MutableRefObject<number>;
+  playheadTime?: number;
   // Per-speaker mute — the preview renders the channel bed (see
   // useStemPreview.ts), so a speaker can be silenced independently of any
   // stem. Clicking a speaker's point on the graph toggles it directly.
@@ -104,6 +109,9 @@ function HazeViewImpl({
   colors,
   channelCounts,
   stemSpectrum,
+  movementSchedule,
+  playhead,
+  playheadTime,
   speakerEnabled,
   speakerSolo,
   onToggleSpeaker,
@@ -127,6 +135,9 @@ function HazeViewImpl({
     selectedStem,
     colors,
     channelCounts,
+    movementSchedule,
+    playhead,
+    playheadTime,
     speakerEnabled,
     speakerSolo,
     intensity,
@@ -137,6 +148,9 @@ function HazeViewImpl({
     selectedStem,
     colors,
     channelCounts,
+    movementSchedule,
+    playhead,
+    playheadTime,
     speakerEnabled,
     speakerSolo,
     intensity,
@@ -179,6 +193,9 @@ function HazeViewImpl({
       const center = { x: width / 2, y: height / 2 };
       const radius = (Math.min(width, height) / 2) * 0.62;
       const heightRingRadius = radius * 1.18;
+      const movementTime = propsRef.current.playhead?.current
+        ?? propsRef.current.playheadTime
+        ?? 0;
 
       // Deep-navy plot field with a systemBlue wash pooled toward the
       // listener position, echoing the shaded region Logic paints under a
@@ -347,9 +364,12 @@ function HazeViewImpl({
         const route = currentRouting[stem] || {};
         const base = stem.split("@", 1)[0];
         const stereo = (currentCounts?.[stem] ?? 2) >= 2;
+        const movement = movementAt(propsRef.current.movementSchedule, stem, movementTime);
+        const movementRight = movementAt(propsRef.current.movementSchedule, stem, movementTime, true);
+        const position = movement ? scenePositionFromMovement(movement.position) : stemPosition(route);
         const heightAngleValue = (() => {
-          if (heightFraction(route) <= 0) return null;
-          return vecAngle(stemPosition(route));
+          if (movement ? position.y <= 0 : heightFraction(route) <= 0) return null;
+          return vecAngle(position);
         })();
         if (stereo) {
           const { left, right } = stemPositionStereo(route);
@@ -359,7 +379,7 @@ function HazeViewImpl({
             key: `${stem}:L`,
             stem,
             base,
-            angle: vecAngle(left),
+            angle: vecAngle(movement ? position : left),
             heightAngle: heightAngleValue,
             sizeScale: 0.8,
           });
@@ -367,7 +387,7 @@ function HazeViewImpl({
             key: `${stem}:R`,
             stem,
             base,
-            angle: vecAngle(right),
+            angle: vecAngle(movementRight ? scenePositionFromMovement(movementRight.position) : right),
             heightAngle: null,
             sizeScale: 0.8,
           });
@@ -376,7 +396,7 @@ function HazeViewImpl({
             key: stem,
             stem,
             base,
-            angle: vecAngle(stemPosition(route)),
+            angle: vecAngle(position),
             heightAngle: heightAngleValue,
             sizeScale: 1,
           });
@@ -589,6 +609,8 @@ function HazeViewImpl({
     speakerEnabled,
     speakerSolo,
     intensity,
+    movementSchedule,
+    playheadTime,
   ]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {

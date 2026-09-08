@@ -18,6 +18,8 @@ import {
 } from "@/lib/spatial";
 import { cn } from "@/lib/utils";
 import type { StemSpectrum } from "./audioEngine";
+import type { MovementSchedule } from "./wasmEngine/engineTypes";
+import { movementAt, scenePositionFromMovement } from "./wasmEngine/movementSchedule";
 
 // Secondary "elevation" view: a front-on cross-section showing the vertical
 // (height) axis that the Haze view's top-down radar collapses away. X = the
@@ -50,6 +52,9 @@ export type ElevationViewProps = {
   colors: Record<string, string>;
   channelCounts?: Record<string, number>;
   stemSpectrum: React.MutableRefObject<Map<string, StemSpectrum>>;
+  movementSchedule?: MovementSchedule | null;
+  playhead?: React.MutableRefObject<number>;
+  playheadTime?: number;
   // Per-speaker mute — same channel-bed model as HazeView (see
   // useStemPreview.ts). Clicking a speaker's point on the graph toggles it.
   speakerEnabled: Record<string, boolean>;
@@ -75,6 +80,9 @@ function ElevationViewImpl({
   colors,
   channelCounts,
   stemSpectrum,
+  movementSchedule,
+  playhead,
+  playheadTime,
   speakerEnabled,
   speakerSolo,
   onToggleSpeaker,
@@ -97,6 +105,9 @@ function ElevationViewImpl({
     selectedStem,
     colors,
     channelCounts,
+    movementSchedule,
+    playhead,
+    playheadTime,
     speakerEnabled,
     speakerSolo,
     intensity,
@@ -107,6 +118,9 @@ function ElevationViewImpl({
     selectedStem,
     colors,
     channelCounts,
+    movementSchedule,
+    playhead,
+    playheadTime,
     speakerEnabled,
     speakerSolo,
     intensity,
@@ -163,6 +177,9 @@ function ElevationViewImpl({
       const toX = (x: number) => padX + ((x + 1) / 2) * plotWidth;
       const toY = (y: number) =>
         floorY - Math.min(1, y / MAX_HEIGHT) * plotHeight;
+      const movementTime = propsRef.current.playhead?.current
+        ?? propsRef.current.playheadTime
+        ?? 0;
 
       // Full-bleed gradients, not clamped to the padded plot rect: a clamped
       // gradient leaves flat bands and hard edges at the rect boundary.
@@ -315,26 +332,28 @@ function ElevationViewImpl({
         const route = currentRouting[stem] || {};
         const base = stem.split("@", 1)[0];
         const stereo = (currentCounts?.[stem] ?? 2) >= 2;
+        const movement = movementAt(propsRef.current.movementSchedule, stem, movementTime);
+        const movementRight = movementAt(propsRef.current.movementSchedule, stem, movementTime, true);
         if (stereo) {
           const { left, right } = stemPositionStereo(route);
           voices.push({
             key: `${stem}:L`,
             stem,
             base,
-            x: left.x,
-            y: left.y,
+            x: movement ? scenePositionFromMovement(movement.position).x : left.x,
+            y: movement ? scenePositionFromMovement(movement.position).y : left.y,
             sizeScale: 0.8,
           });
           voices.push({
             key: `${stem}:R`,
             stem,
             base,
-            x: right.x,
-            y: right.y,
+            x: movementRight ? scenePositionFromMovement(movementRight.position).x : right.x,
+            y: movementRight ? scenePositionFromMovement(movementRight.position).y : right.y,
             sizeScale: 0.8,
           });
         } else {
-          const pos = stemPosition(route);
+          const pos = movement ? scenePositionFromMovement(movement.position) : stemPosition(route);
           voices.push({
             key: stem,
             stem,
@@ -502,6 +521,8 @@ function ElevationViewImpl({
     speakerEnabled,
     speakerSolo,
     intensity,
+    movementSchedule,
+    playheadTime,
   ]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
