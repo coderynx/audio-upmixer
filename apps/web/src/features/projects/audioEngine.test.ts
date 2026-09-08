@@ -105,7 +105,7 @@ describe("withReferenceMatchParams", () => {
 });
 
 describe("programme updates during movement compilation", () => {
-  it("installs new parameters without the old movement schedule", () => {
+  it("keeps movement while panner parameters update", () => {
     const updates: { params: Record<string, unknown>; schedule: MovementSchedule | null; ready: boolean }[] = [];
     const host = new PreviewHost({
       onReady: () => {}, onLoadProgress: () => {}, onError: () => {}, onPlaying: () => {},
@@ -120,8 +120,13 @@ describe("programme updates during movement compilation", () => {
       layoutChannels: ["FL", "FR", "C", "LFE", "SL", "SR"],
       movementFeaturesUrl: "/movement-features",
     }));
+    Object.assign(host as object, { duration: 1 });
+    const prepared = (host as unknown as { movementRequestForCurrentProgramme: () => { key: string } }).movementRequestForCurrentProgramme();
+    const schedule = { revision: 1 } as MovementSchedule;
     Object.assign(host as object, {
-      movementSchedule: { revision: 1 },
+      movementRequestKey: prepared.key,
+      movementSchedule: schedule,
+      movementReady: true,
       client: { updateParams: (params: Record<string, unknown>, schedule: MovementSchedule | null, ready: boolean) => updates.push({ params, schedule, ready }) },
     });
 
@@ -133,8 +138,8 @@ describe("programme updates during movement compilation", () => {
     }));
 
     expect(updates).toHaveLength(1);
-    expect(updates[0].schedule).toBeNull();
-    expect(updates[0].ready).toBe(false);
+    expect(updates[0].schedule).toBe(schedule);
+    expect(updates[0].ready).toBe(true);
     expect((updates[0].params.stems as { object_placement: { azimuth_deg: number } }[])[0].object_placement.azimuth_deg).toBe(75);
   });
 
@@ -155,11 +160,10 @@ describe("programme updates during movement compilation", () => {
     });
     host.setProgramme(programme());
     Object.assign(host as object, { duration: 1 });
-    const prepared = (host as unknown as { movementRequestForCurrentProgramme: () => { key: string; placementKey: string } }).movementRequestForCurrentProgramme();
+    const prepared = (host as unknown as { movementRequestForCurrentProgramme: () => { key: string } }).movementRequestForCurrentProgramme();
     const schedule = { revision: 1 } as MovementSchedule;
     Object.assign(host as object, {
       movementRequestKey: prepared.key,
-      movementSchedulePlacementKey: prepared.placementKey,
       movementSchedule: schedule,
       movementReady: true,
       client: { updateParams: (_params: Record<string, unknown>, next: MovementSchedule | null, ready: boolean) => updates.push({ schedule: next, ready }) },
