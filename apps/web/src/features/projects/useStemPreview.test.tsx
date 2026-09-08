@@ -3,6 +3,7 @@ import { act, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectStem } from "@/api";
 import { applyTruePeakCeiling, useStemPreview } from "./useStemPreview";
+import { PreviewHost } from "./audioEngine";
 import { TEST_ENGINE_CONSTANTS } from "./engineConstants.fixture";
 import { createPreviewProgramme } from "./previewProgramme";
 
@@ -168,6 +169,26 @@ afterEach(() => {
 });
 
 describe("useStemPreview parameter binding", () => {
+  it("defers preview synchronization after a panner update", async () => {
+    const sync = vi.spyOn(PreviewHost.prototype, "syncProgram").mockResolvedValue();
+    const initialize = vi.spyOn(PreviewHost.prototype, "initialize").mockResolvedValue();
+    try {
+      const { rerender } = await renderPreview();
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 10)); });
+      sync.mockClear();
+
+      rerender(<Harness mix={{ stem_placement: { Vocals: { azimuth_deg: 20, elevation_deg: 0, width_deg: 0, object_size: 0 } } }} />);
+      await act(async () => { await Promise.resolve(); });
+
+      expect(sync).not.toHaveBeenCalled();
+      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 60)); });
+      expect(sync).toHaveBeenCalledOnce();
+    } finally {
+      sync.mockRestore();
+      initialize.mockRestore();
+    }
+  });
+
   it("sends one speaker entry per layout channel, LFE included", async () => {
     await renderPreview();
     const params = sentParams.at(-1) as { speakers: { name: string }[]; lfe_index: number };

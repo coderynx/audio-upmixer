@@ -153,6 +153,11 @@ export function useStemPreview(
   const hasProgramme = Boolean(programme);
   const key = programme?.sourceKey ?? "";
   const programKey = `${programme?.key ?? ""}:${outputMode}:${spatialProfile}:${transauralProfile}:${appleHeadTracking}:${masteringBypassed}:${matchBypassed}`;
+  const placementKey = JSON.stringify(programme?.mix.stem_placement ?? {});
+  const previousPlacementKey = React.useRef<string | undefined>(undefined);
+  const deferProgrammeSync = previousPlacementKey.current !== undefined
+    && previousPlacementKey.current !== placementKey;
+  previousPlacementKey.current = placementKey;
 
   React.useEffect(() => {
     engine.applySpeakerMute();
@@ -203,7 +208,12 @@ export function useStemPreview(
 
   React.useEffect(() => {
     if (!constants) return;
-    void engine.syncProgram();
+    if (!deferProgrammeSync) {
+      void engine.syncProgram();
+      return;
+    }
+    const timer = window.setTimeout(() => { void engine.syncProgram(); }, 50);
+    return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `engine` is a stable ref-backed singleton (see the lazy engineRef init above), never needs to appear in a dependency array
   }, [programKey, ready, constants]);
 
