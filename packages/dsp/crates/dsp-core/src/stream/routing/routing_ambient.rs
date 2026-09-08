@@ -1,10 +1,10 @@
-use crate::routing::ambient::AmbientSplit;
 use crate::kernels::biquad::SosFilter;
 use crate::kernels::butter::linkwitz_riley_lowpass_sos;
+use crate::routing::ambient::AmbientSplit;
 
-use super::{StemRouteState, AMBIENT_HEIGHT, AMBIENT_SURROUND, STEM_INPUT};
-use crate::stream::params::SendParams;
+use super::{StemRouteState, AMBIENT_HEIGHT, AMBIENT_SURROUND, AMBIENT_TEXTURE, STEM_INPUT};
 use crate::routing::sends::height_texture_sos;
+use crate::stream::params::SendParams;
 
 impl StemRouteState {
     /// Build or drop the ambient half.
@@ -74,8 +74,13 @@ impl StemRouteState {
         let start_height = std::array::from_fn(|side| self.ambient_height_gain[side].current());
         let Some(split) = &mut self.split else { return };
         let block = split.advance_with_side_amounts(
-            self.ahead.base, &self.ahead.left, &self.ahead.right, start, count,
-            start_rear, start_height,
+            self.ahead.base,
+            &self.ahead.left,
+            &self.ahead.right,
+            start,
+            count,
+            start_rear,
+            start_height,
         );
         let sources = [
             (AMBIENT_SURROUND, block.rear[0]),
@@ -109,8 +114,10 @@ impl StemRouteState {
         for sample in 0..count {
             let wet_trim = trim_gain.tick(self.ambient_trim_target);
             for i in 0..2 {
-                self.shaped[AMBIENT_SURROUND + i][sample] *= self.ambient_rear_gain[i].tick(rear[i]) * wet_trim;
-                self.shaped[AMBIENT_HEIGHT + i][sample] *= self.ambient_height_gain[i].tick(height[i]) * wet_trim;
+                self.shaped[AMBIENT_SURROUND + i][sample] *=
+                    self.ambient_rear_gain[i].tick(rear[i]) * wet_trim;
+                self.shaped[AMBIENT_HEIGHT + i][sample] *=
+                    self.ambient_height_gain[i].tick(height[i]) * wet_trim;
             }
         }
         self.ambient_trim_gain = trim_gain;
@@ -144,7 +151,7 @@ impl StemRouteState {
             self.ambient_texture_cutoff[side].retune_flat(&cutoff_sos);
             self.ambient_texture_cutoff[side].process(&mut self.texture_scratch[side]);
             self.ambient_texture[side].process_in_place(&mut self.texture_scratch[side]);
-            let output = &mut self.shaped[AMBIENT_HEIGHT + side];
+            let output = &mut self.shaped[AMBIENT_TEXTURE + side];
             if output.len() != count {
                 output.resize(count, 0.0);
             }

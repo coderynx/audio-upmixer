@@ -5,12 +5,9 @@ import math
 
 import numpy as np
 import upmixer_dsp
-
 from upmixer.config import UpmixConfig
 from upmixer.formats import FORMAT_MAP, ChannelLabel, OutputFormat
 from upmixer.separation.stem_router import StemRouter
-
-from test_stem_router import _reverberant
 
 
 def _router(**kwargs: object) -> StemRouter:
@@ -102,6 +99,14 @@ def test_scales_ambient_per_source_side_and_gates_absent_side(monkeypatch):
         )
 
     monkeypatch.setattr(upmixer_dsp, "ambient_route", ambient_route, raising=False)
+    def ambient_expand(rear_l, rear_r, height_l, height_r, sample_rate, destinations):
+        sources = {
+            "SL": rear_l, "SR": rear_r, "BL": rear_l, "BR": rear_r,
+            "TFL": height_l, "TFR": height_r, "TBL": height_l, "TBR": height_r,
+        }
+        return [sources[name] for name in destinations]
+
+    monkeypatch.setattr(upmixer_dsp, "ambient_expand", ambient_expand, raising=False)
     fmt = OutputFormat(
         "asymmetric",
         (
@@ -146,6 +151,16 @@ def test_revision_two_ambient_trim_boosts_wet_feeds_only(monkeypatch):
         return (left, right, left, right, left, right, left, right)
 
     monkeypatch.setattr(upmixer_dsp, "ambient_route", ambient_route, raising=False)
+    monkeypatch.setattr(
+        upmixer_dsp,
+        "ambient_expand",
+        lambda rear_l, rear_r, height_l, height_r, sample_rate, destinations: [
+            {"SL": rear_l, "SR": rear_r, "BL": rear_l, "BR": rear_r,
+             "TFL": height_l, "TFR": height_r, "TBL": height_l, "TBR": height_r}[name]
+            for name in destinations
+        ],
+        raising=False,
+    )
     routing = {"Other": {label.value: 0.0 for label in FORMAT_MAP["7.1.4"].channels}}
     routing["Other"].update({"FL": 1.0, "FR": 1.0})
     common = {
@@ -208,3 +223,65 @@ def test_height_texture_send_uses_shared_filter_and_cutoff(monkeypatch):
     assert calls == {"sample_rate": 48000, "cutoff": 1333.0}
     np.testing.assert_array_equal(rendered, np.full(4, 3.0))
 
+
+def test_fixed_expander_receives_shaped_ambient_and_maps_each_destination(monkeypatch):
+    calls: dict[str, object] = {}
+
+    def ambient_route(
+        left, right, sample_rate, rear, height, cutoff,
+        rear_left=True, rear_right=True, height_left=True, height_right=True,
+    ):
+        zeros = np.zeros_like(left)
+        return (
+            zeros, zeros, zeros, zeros,
+            np.ones_like(left), np.full_like(right, 2.0),
+            np.full_like(left, 3.0), np.full_like(right, 4.0),
+        )
+
+    def ambient_expand(rear_l, rear_r, height_l, height_r, sample_rate, destinations):
+        calls.update({
+            "inputs": (rear_l.copy(), rear_r.copy(), height_l.copy(), height_r.copy()),
+            "sample_rate": sample_rate,
+            "destinations": tuple(destinations),
+        })
+        return [np.full_like(rear_l, index + 1.0) for index, _ in enumerate(destinations)]
+
+    monkeypatch.setattr(upmixer_dsp, "ambient_route", ambient_route)
+    monkeypatch.setattr(upmixer_dsp, "ambient_expand", ambient_expand, raising=False)
+    monkeypatch.setattr(StemRouter, "_surround_send", lambda self, signal: signal * 10.0)
+    monkeypatch.setattr(StemRouter, "_height_send", lambda self, signal: signal * 100.0)
+    routing = {"Other": {label.value: 0.0 for label in FORMAT_MAP["7.1.4"].channels}}
+    routing["Other"].update({"FL": 1.0, "FR": 1.0})
+    router = _router(
+        stem_routing=routing,
+        stem_ambient_rear={"Other": 0.5},
+        stem_ambient_height={"Other": 0.5},
+    )
+    monkeypatch.setattr(router, "_route_scale", lambda *args: 1.0)
+
+    rendered = router.route({"Other": np.ones((8, 2))}, 8)
+
+    assert calls["sample_rate"] == 48000
+    assert calls["destinations"] == ("SL", "SR", "BL", "BR", "TFL", "TFR", "TBL", "TBR")
+    for actual, expected in zip(calls["inputs"], (10.0, 20.0, 300.0, 400.0)):
+        np.testing.assert_array_equal(actual, np.full(8, expected))
+    for index, label in enumerate((
+        "SL", "SR", "BL", "BR", "TFL", "TFR", "TBL", "TBR",
+    ), start=1):
+        expected = index * 0.5 / np.sqrt(2.0) * router._channel_gain(ChannelLabel(label))
+        np.testing.assert_allclose(rendered[label], expected)
+
+
+def test_fixed_expander_is_not_called_without_ambient_destinations(monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("ambient expansion should be a no-op without rear/height speakers")
+
+    monkeypatch.setattr(upmixer_dsp, "ambient_expand", fail, raising=False)
+    router = StemRouter(
+        UpmixConfig(output_format="stereo", stem_ambient_rear={"Other": 1.0}),
+        FORMAT_MAP["stereo"],
+        48000,
+    )
+    audio = np.ones((8, 2))
+    rendered = router.route({"Other": audio}, len(audio))
+    assert np.max(np.abs(rendered["FL"])) > 0.0

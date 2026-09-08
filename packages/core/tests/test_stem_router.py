@@ -6,7 +6,6 @@ import math
 import numpy as np
 import pytest
 import upmixer_dsp
-
 from upmixer.config import UpmixConfig
 from upmixer.formats import FORMAT_MAP
 from upmixer.loudness import measure_integrated_loudness
@@ -21,8 +20,7 @@ from upmixer.separation.stem_router import (
     default_lfe_send,
     fold_route_to_stereo,
 )
-from upmixer.utils import ITU_CENTER_COEFF
-from upmixer.utils import itu_downmix_stereo
+from upmixer.utils import ITU_CENTER_COEFF, itu_downmix_stereo
 
 
 def _audio(n: int = 48000, frequency: float = 440.0) -> np.ndarray:
@@ -217,7 +215,7 @@ def test_generic_and_percussion_defaults_start_conservative():
 
     front, height = {"FL", "FR", "C"}, {"TFL", "TFR", "TBL", "TBR"}
 
-    assert zone("Other", front) > zone("Other", {"SL", "SR"}) > zone("Other", height)
+    assert zone("Other", front) > zone("Other", height) > zone("Other", {"SL", "SR"})
     assert zone("Hi-Hat", front) > zone("Hi-Hat", height)
     assert zone("Crash", front) > zone("Crash", height)
 

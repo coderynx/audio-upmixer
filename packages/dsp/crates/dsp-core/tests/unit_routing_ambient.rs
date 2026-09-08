@@ -1,15 +1,13 @@
 mod common;
 
 mod ambient {
-    use super::common;
     use upmixer_dsp_core::kernels::rng::next_unit;
     use upmixer_dsp_core::routing::ambient::*;
-    use upmixer_dsp_core::routing::ambient_expander::{
-        ambient_expander_fir, FixedAmbientExpander714,
-    };
+    use upmixer_dsp_core::routing::ambient_expander::{ambient_expander_fir, FixedAmbientExpander};
 
     const SR: u32 = 48_000;
     const N: usize = 48_000;
+    const ALL_DESTINATIONS: [&str; 8] = ["SL", "SR", "BL", "BR", "TFL", "TFR", "TBL", "TBR"];
 
     fn noise(seed: u64, n: usize) -> Vec<f64> {
         let mut state = seed;
@@ -451,11 +449,11 @@ mod ambient {
             noise(44, 4096),
         ];
         let refs = [&inputs[0][..], &inputs[1], &inputs[2], &inputs[3]];
-        let mut whole = FixedAmbientExpander714::new(SR);
+        let mut whole = FixedAmbientExpander::new(SR, &ALL_DESTINATIONS);
         let expected = whole.process(refs);
 
-        let mut blocked = FixedAmbientExpander714::new(SR);
-        let mut actual: [Vec<f64>; 8] = Default::default();
+        let mut blocked = FixedAmbientExpander::new(SR, &ALL_DESTINATIONS);
+        let mut actual = vec![Vec::new(); ALL_DESTINATIONS.len()];
         for start in (0..inputs[0].len()).step_by(127) {
             let end = (start + 127).min(inputs[0].len());
             for (output, block) in actual.iter_mut().zip(blocked.process([
@@ -481,7 +479,7 @@ mod ambient {
             .map(|destination| ambient_expander_fir(SR, destination).unwrap().span())
             .max()
             .unwrap();
-        let mut expander = FixedAmbientExpander714::new(SR);
+        let mut expander = FixedAmbientExpander::new(SR, &ALL_DESTINATIONS);
         let _ = expander.process([&impulse[0], &impulse[1], &impulse[2], &impulse[3]]);
         for output in expander.process([&tail[0], &tail[1], &tail[2], &tail[3]]) {
             assert!(output[span..].iter().all(|sample| *sample == 0.0));
@@ -491,7 +489,7 @@ mod ambient {
     #[test]
     fn fixed_expander_uses_a_unique_filter_per_destination() {
         let input = noise(45, 4096);
-        let mut expander = FixedAmbientExpander714::new(SR);
+        let mut expander = FixedAmbientExpander::new(SR, &ALL_DESTINATIONS);
         let output = expander.process([&input, &input, &input, &input]);
         for (index, destination) in ["SL", "SR", "BL", "BR", "TFL", "TFR", "TBL", "TBR"]
             .iter()
@@ -525,5 +523,150 @@ mod ambient {
             }
         }
         assert!(correlation / (pairs as f64) < 0.1);
+    }
+
+    #[test]
+    fn layout_expander_keeps_filters_attached_to_destination_labels() {
+        let inputs = [
+            noise(101, 4096),
+            noise(102, 4096),
+            noise(103, 4096),
+            noise(104, 4096),
+        ];
+        let canonical = ["SL", "SR", "BL", "BR", "TFL", "TFR", "TBL", "TBR"];
+        let permuted = ["TBR", "SL", "TFL", "BR", "SR", "TBL", "BL", "TFR"];
+        let refs = [&inputs[0][..], &inputs[1], &inputs[2], &inputs[3]];
+
+        let mut first = FixedAmbientExpander::new(SR, &canonical);
+        let mut second = FixedAmbientExpander::new(SR, &permuted);
+        let first_output = first.process(refs);
+        let second_output = second.process(refs);
+        for name in canonical {
+            let first_index = first.destinations().position(|destination| destination == name);
+            let second_index = second.destinations().position(|destination| destination == name);
+            assert_eq!(first_output[first_index.unwrap()], second_output[second_index.unwrap()]);
+        }
+    }
+
+    #[test]
+    fn layout_expander_only_uses_the_matching_side_and_zone_input() {
+        let inputs = [
+            noise(111, 4096),
+            noise(112, 4096),
+            noise(113, 4096),
+            noise(114, 4096),
+        ];
+        let destinations = ["SR", "TBL", "SL", "TFR"];
+        let mut expander = FixedAmbientExpander::new(SR, &destinations);
+        let output = expander.process([&inputs[0], &inputs[1], &inputs[2], &inputs[3]]);
+        for (index, destination) in destinations.into_iter().enumerate() {
+            let source = match destination {
+                "SL" | "BL" => &inputs[0],
+                "SR" | "BR" => &inputs[1],
+                "TFL" | "TBL" => &inputs[2],
+                "TFR" | "TBR" => &inputs[3],
+                _ => unreachable!(),
+            };
+            let expected = ambient_expander_fir(SR, destination).unwrap().process(source);
+            assert_eq!(output[index], expected, "{destination}");
+        }
+    }
+
+    #[test]
+    fn layout_expander_supports_absent_zones_ragged_blocks_and_seek() {
+        let inputs = [
+            noise(121, 4096),
+            noise(122, 4096),
+            noise(123, 4096),
+            noise(124, 4096),
+        ];
+        let layout = ["FL", "FR", "C", "LFE", "SL", "SR", "TFL", "TFR"];
+        let active = ["SL", "SR", "TFL", "TFR"];
+        let refs = [&inputs[0][..], &inputs[1], &inputs[2], &inputs[3]];
+        let mut whole = FixedAmbientExpander::new(SR, &layout);
+        let expected = whole.process(refs);
+
+        let mut blocked = FixedAmbientExpander::new(SR, &layout);
+        let mut actual = vec![Vec::new(); active.len()];
+        for start in (0..inputs[0].len()).step_by(127) {
+            let end = (start + 127).min(inputs[0].len());
+            let mut outputs = vec![vec![0.0; end - start]; active.len()];
+            blocked.process_into(
+                [
+                    &inputs[0][start..end],
+                    &inputs[1][start..end],
+                    &inputs[2][start..end],
+                    &inputs[3][start..end],
+                ],
+                &mut outputs,
+            );
+            for (all, block) in actual.iter_mut().zip(outputs) {
+                all.extend(block);
+            }
+        }
+        assert_eq!(blocked.destinations().collect::<Vec<_>>(), active);
+        assert_eq!(actual, expected);
+
+        blocked.reset();
+        assert_eq!(blocked.process(refs), expected);
+        blocked.seek(0);
+        assert_eq!(blocked.process(refs), expected);
+    }
+
+    #[test]
+    fn layout_expander_covers_supported_layout_destination_sets() {
+        let cases: &[(&[&str], &[&str])] = &[
+            (&["FL", "FR"], &[]),
+            (&["FL", "FR", "C", "LFE", "SL", "SR"], &["SL", "SR"]),
+            (
+                &["FL", "FR", "C", "LFE", "SL", "SR", "BL", "BR"],
+                &["SL", "SR", "BL", "BR"],
+            ),
+            (
+                &["FL", "FR", "C", "LFE", "SL", "SR", "TFL", "TFR"],
+                &["SL", "SR", "TFL", "TFR"],
+            ),
+            (
+                &[
+                    "FL", "FR", "C", "LFE", "SL", "SR", "TFL", "TFR", "TBL", "TBR",
+                ],
+                &["SL", "SR", "TFL", "TFR", "TBL", "TBR"],
+            ),
+            (
+                &[
+                    "FL", "FR", "C", "LFE", "SL", "SR", "BL", "BR", "TFL", "TFR",
+                ],
+                &["SL", "SR", "BL", "BR", "TFL", "TFR"],
+            ),
+            (
+                &[
+                    "FL", "FR", "C", "LFE", "SL", "SR", "BL", "BR", "TFL", "TFR",
+                    "TBL", "TBR",
+                ],
+                &ALL_DESTINATIONS,
+            ),
+        ];
+        for (layout, active) in cases {
+            let expander = FixedAmbientExpander::new(SR, layout);
+            assert_eq!(expander.destinations().collect::<Vec<_>>(), *active, "{layout:?}");
+        }
+    }
+
+    #[test]
+    fn layout_expander_keeps_state_for_surviving_destinations_on_layout_change() {
+        let first = [noise(131, 512), noise(132, 512), noise(133, 512), noise(134, 512)];
+        let second = [noise(135, 512), noise(136, 512), noise(137, 512), noise(138, 512)];
+        let mut changed = FixedAmbientExpander::new(SR, &["SL"]);
+        changed.process([&first[0], &first[1], &first[2], &first[3]]);
+        changed.set_destinations(&["TFR", "SL"]);
+        let actual = changed.process([&second[0], &second[1], &second[2], &second[3]]);
+
+        let fir = ambient_expander_fir(SR, "SL").unwrap();
+        let mut expected_line = upmixer_dsp_core::routing::decorrelate::VelvetLine::new(&fir);
+        let mut first_block = first[0].clone();
+        expected_line.process(&mut first_block);
+        let mut second_block = second[0].clone();
+        expected_line.process(&mut second_block);
+        assert_eq!(actual[1], second_block);
     }
 }

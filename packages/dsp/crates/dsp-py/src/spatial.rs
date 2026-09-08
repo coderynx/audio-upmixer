@@ -4,6 +4,7 @@ use numpy::{PyArray1, PyReadonlyArray1};
 use pyo3::prelude::*;
 
 use upmixer_dsp_core::routing::ambient;
+use upmixer_dsp_core::routing::ambient_expander::FixedAmbientExpander;
 use upmixer_dsp_core::routing::decorrelate;
 use upmixer_dsp_core::routing::sends;
 use upmixer_dsp_core::spatial::downmix::{self, DownmixRole, FoldTo51};
@@ -239,7 +240,13 @@ fn ambient_split<'py>(
     let left = left.as_array().to_vec();
     let right = right.as_array().to_vec();
     let n = left.len().min(right.len());
-    let mut split = ambient::AmbientSplit::with_height_crossover(sample_rate, height_crossover_hz);
+    // Keep the legacy argument name while routing it through the revision-2
+    // height cutoff used by ambient_route.
+    let mut split = ambient::AmbientSplit::with_height_crossover_and_cutoff(
+        sample_rate,
+        ambient::AMBIENT_HEIGHT_CROSSOVER_HZ,
+        height_crossover_hz,
+    );
     let block = split.advance(0, &left, &right, 0, n);
     (
         PyArray1::from_slice(py, block.rear[0]),
@@ -316,6 +323,57 @@ fn ambient_route<'py>(
         PyArray1::from_slice(py, block.height[0]),
         PyArray1::from_slice(py, block.height[1]),
     )
+}
+
+/// Apply the fixed ambient FIR for each requested rear/height destination.
+///
+/// Destinations are returned in the same order as `destinations`; canonical
+/// seeds live in the shared Rust core, so the result is stable across layout
+/// subsets and channel permutations. Inputs must be equal-length mono feeds.
+#[pyfunction]
+#[pyo3(signature = (rear_left, rear_right, height_left, height_right, sample_rate, destinations))]
+fn ambient_expand<'py>(
+    py: Python<'py>,
+    rear_left: PyReadonlyArray1<'py, f64>,
+    rear_right: PyReadonlyArray1<'py, f64>,
+    height_left: PyReadonlyArray1<'py, f64>,
+    height_right: PyReadonlyArray1<'py, f64>,
+    sample_rate: u32,
+    destinations: Vec<String>,
+) -> PyResult<Vec<Bound<'py, PyArray1<f64>>>> {
+    let inputs = [
+        rear_left.as_array().to_vec(),
+        rear_right.as_array().to_vec(),
+        height_left.as_array().to_vec(),
+        height_right.as_array().to_vec(),
+    ];
+    let length = inputs[0].len();
+    if inputs.iter().any(|input| input.len() != length) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "ambient expansion inputs must have equal lengths",
+        ));
+    }
+    let destination_refs: Vec<&str> = destinations.iter().map(String::as_str).collect();
+    let mut expander = FixedAmbientExpander::new(sample_rate, &destination_refs);
+    let known: Vec<&str> = expander.destinations().collect();
+    if let Some(destination) = destination_refs
+        .iter()
+        .find(|destination| !known.contains(destination))
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown ambient destination {destination:?}"
+        )));
+    }
+    let expanded = expander.process([
+        inputs[0].as_slice(),
+        inputs[1].as_slice(),
+        inputs[2].as_slice(),
+        inputs[3].as_slice(),
+    ]);
+    expanded
+        .into_iter()
+        .map(|output| Ok(PyArray1::from_vec(py, output)))
+        .collect()
 }
 
 #[pyfunction]
@@ -398,6 +456,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("VELVET_WET", decorrelate::VELVET_WET)?;
     m.add_function(wrap_pyfunction!(ambient_split, m)?)?;
     m.add_function(wrap_pyfunction!(ambient_route, m)?)?;
+    m.add_function(wrap_pyfunction!(ambient_expand, m)?)?;
     m.add_function(wrap_pyfunction!(stem_eq, m)?)?;
     m.add_function(wrap_pyfunction!(stem_dynamics, m)?)?;
     m.add_function(wrap_pyfunction!(stem_dynamic_eq, m)?)?;

@@ -1,9 +1,4 @@
-"""Parity tests for the primary/ambient split binding.
-
-The literals are the same pin `packages/dsp/crates/dsp-core/tests/
-unit_routing_ambient.rs::the_split_matches_the_pinned_samples` asserts, so a
-wheel built from a different split than the wasm preview fails here.
-"""
+"""Parity tests for the revision-2 primary/ambient split binding."""
 from __future__ import annotations
 
 import numpy as np
@@ -13,8 +8,8 @@ SR = 48000
 N = 9600
 PROBES = (2048, 4096, 6144)
 PINNED = {
-    "rear_l": [0.008926457540251778, -0.021217232112214296, 0.016040588631082736],
-    "rear_r": [0.012096055793189401, -0.018773859083148825, 0.008036464006738537],
+    "rear_l": [0.008963053187071718, -0.021152566318558524, 0.015907103213826847],
+    "rear_r": [0.012062078783982693, -0.018655230275436724, 0.007921894153445776],
     "height_l": [3.659564681994046e-5, 6.466579365577319e-5, -0.00013348541725589322],
     "height_r": [-3.397700920671138e-5, 0.00011862880771210135, -0.00011456985329275618],
 }

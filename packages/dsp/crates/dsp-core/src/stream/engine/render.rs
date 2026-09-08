@@ -85,6 +85,7 @@ impl PreviewEngine {
             let shaped: [&[f64]; SIGNALS] = std::array::from_fn(|i| route.signal(i));
             let mix = &self.graph.stem_mix_routes[stem_index];
             let ambient = route.has_ambient().then_some(&mix.ambient);
+            let ambient_texture = route.has_ambient().then_some(&mix.ambient_texture);
 
             if !self.params.spatial_downmix_lock
                 || self.graph.authored_channels > self.params.speakers.len()
@@ -123,6 +124,11 @@ impl PreviewEngine {
                             * gain;
                     }
                     if let Some(feeds) = ambient {
+                        for (channel, slot, weight) in feeds {
+                            routed[*channel][i] += shaped[*slot][i] * weight * gain;
+                        }
+                    }
+                    if let Some(feeds) = ambient_texture {
                         for (channel, slot, weight) in feeds {
                             routed[*channel][i] += shaped[*slot][i] * weight * gain;
                         }

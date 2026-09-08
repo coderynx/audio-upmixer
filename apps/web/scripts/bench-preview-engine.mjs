@@ -19,9 +19,6 @@ const SEEK_FRAMES = 1024;
 const DEADLINE_MS = (QUANTUM / SR) * 1000;
 const SECONDS = 5;
 const RUNS = Number.parseInt(process.env.BENCH_RUNS ?? "3", 10);
-// The ambient case is intentionally identical apart from the processing
-// revision so its cost can be compared against the legacy route.
-const AMBIENT_REVISION = Number.parseInt(process.env.BENCH_AMBIENT_REVISION ?? "2", 10);
 const AMBIENT_TRIM_DB = Number.parseFloat(process.env.BENCH_AMBIENT_TRIM_DB ?? "0");
 const HEIGHT_TEXTURE = Number.parseFloat(process.env.BENCH_HEIGHT_TEXTURE ?? "0");
 const WASM_PATH = process.env.BENCH_WASM_PATH
@@ -111,12 +108,19 @@ const CASES = {
     ambient: true,
     label: "native 7.1.4 + ambient sends on every stem",
   },
+  ambientBinaural: {
+    mode: "binaural",
+    decode: true,
+    ambient: true,
+    label: "binaural + ambient sends on every stem",
+  },
   mixEditPlaying: {
     mode: "native",
     decode: false,
     kind: "playing-update",
+    ambient: true,
     productionFirs: true,
-    label: "mix edit (mute + compressor, playing)",
+    label: "mix edit (ambient sends + compressor, playing)",
   },
   seek: {
     mode: "binaural",
@@ -168,8 +172,6 @@ function params(mode, decodeTaps, options = {}) {
     surround_downmix_coeff: 0.7071067811865476,
     height_downmix_coeff: 0.7071067811865476,
     spatial_downmix_lock: downmixLock,
-    // Exercise the selected ambient path explicitly; omitted revisions are
-    // the legacy renderer and would make this case understate its work.
     sends: {
       surround_bass_cutoff_hz: 250,
       height_low_rolloff_hz: 150, height_low_rolloff_gain: 0.15,
@@ -182,7 +184,7 @@ function params(mode, decodeTaps, options = {}) {
       rebalance_db: 0, enabled: true, eq_fir: [], route_scale: 1,
       ambient_rear: ambient ? 0.8 : 0, ambient_height: ambient ? 0.8 : 0,
       ambient_height_crossover_hz: 2000,
-      ...(ambient && AMBIENT_REVISION === 2 ? {
+      ...(ambient ? {
         ambient_trim_db: AMBIENT_TRIM_DB,
         height_texture: HEIGHT_TEXTURE,
       } : {}),
@@ -328,6 +330,8 @@ function run({ label, mode, decode, kind, ambient, objectMode, downmixLock, prod
       toggle = !toggle;
       const edited = params(mode, decodeTaps, options);
       edited.stems[0].enabled = toggle;
+      edited.stems[0].ambient_rear = toggle ? 0.8 : 0.2;
+      edited.stems[0].ambient_height = toggle ? 0.8 : 0.2;
       edited.master.compressor.threshold_db = toggle ? -20 : -18;
       const encodedEdit = new TextEncoder().encode(JSON.stringify(edited));
       const editPtr = wasm.dsp_alloc(encodedEdit.length);
@@ -377,9 +381,6 @@ function run({ label, mode, decode, kind, ambient, objectMode, downmixLock, prod
 
 if (!Number.isInteger(RUNS) || RUNS < 1) {
   throw new Error("BENCH_RUNS must be a positive integer");
-}
-if (![1, 2].includes(AMBIENT_REVISION)) {
-  throw new Error("BENCH_AMBIENT_REVISION must be 1 or 2");
 }
 if (!Number.isFinite(AMBIENT_TRIM_DB) || AMBIENT_TRIM_DB < 0 || AMBIENT_TRIM_DB > 6) {
   throw new Error("BENCH_AMBIENT_TRIM_DB must be between 0 and 6");

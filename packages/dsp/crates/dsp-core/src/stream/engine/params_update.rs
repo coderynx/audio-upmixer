@@ -14,13 +14,15 @@ pub(crate) fn build_route(
     sample_rate: u32,
     sends: &SendParams,
     stem: &StemParams,
+    destinations: &[&str],
 ) -> StemRouteState {
-    let mut route = StemRouteState::new(
+    let mut route = StemRouteState::new_for_layout(
         sample_rate,
         sends,
         stem.eq.clone(),
         stem.dynamic_eq.clone(),
         stem.dynamics,
+        destinations,
     );
     route.set_ambient(
         sample_rate,
@@ -198,6 +200,11 @@ impl PreviewEngine {
 
         let topology_changed = old.speakers.len() != self.params.speakers.len()
             || old.lfe_index != self.params.lfe_index
+            || old.speakers.iter().map(|speaker| &speaker.name).ne(self
+                .params
+                .speakers
+                .iter()
+                .map(|speaker| &speaker.name))
             || object_topology(&old) != object_topology(&self.params);
         if topology_changed {
             let position = self.emitted;
@@ -252,9 +259,11 @@ impl PreviewEngine {
                     dynamics_changed,
                 );
             }
-            let wants_ambient = self.params.stems.get(i).is_some_and(|s| {
-                s.wants_ambient_or_texture()
-            });
+            let wants_ambient = self
+                .params
+                .stems
+                .get(i)
+                .is_some_and(|s| s.wants_ambient_or_texture());
             let crossover_changed = old.stems.get(i).is_none_or(|stem| {
                 stem.ambient_height_crossover_hz != self.params.stems[i].ambient_height_crossover_hz
                     || stem.ambient_height_cutoff_hz
@@ -262,10 +271,7 @@ impl PreviewEngine {
                     || stem.ambient_trim_db != self.params.stems[i].ambient_trim_db
                     || stem.height_texture != self.params.stems[i].height_texture
             });
-            if wants_ambient != route.has_ambient()
-                || sends_changed
-                || crossover_changed
-            {
+            if wants_ambient != route.has_ambient() || sends_changed || crossover_changed {
                 route.set_ambient(
                     self.sample_rate,
                     &self.params.sends,
@@ -424,13 +430,17 @@ impl PreviewEngine {
     /// `self.params.stems` — used when a stem was added or removed, where
     /// there is no previous per-index state to retune.
     fn rebuild_routes(&mut self) {
+        let speaker_names: Vec<&str> = self
+            .params
+            .speakers
+            .iter()
+            .map(|speaker| speaker.name.as_str())
+            .collect();
         self.graph.routes = self
             .params
             .stems
             .iter()
-            .map(|s| {
-                build_route(self.sample_rate, &self.params.sends, s)
-            })
+            .map(|s| build_route(self.sample_rate, &self.params.sends, s, &speaker_names))
             .collect();
         self.stem_gain = self
             .params

@@ -49,7 +49,7 @@ impl EngineGraph {
             .stems
             .iter()
             .map(|stem| {
-                params_update::build_route(sample_rate, &params.sends, stem)
+                params_update::build_route(sample_rate, &params.sends, stem, &speaker_names)
             })
             .collect();
         let causal = (0..authored_channels)

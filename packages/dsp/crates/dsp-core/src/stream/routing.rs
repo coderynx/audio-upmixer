@@ -3,18 +3,19 @@
 //! Mirrors `separation/stem_router.py::StemRouter.route` block by block: each
 //! shaped send carries the filter state and decorrelator history its offline
 //! counterpart would have accumulated, so the two agree sample for sample.
+use super::params::{SendParams, SendShape};
+use super::state::OnePole;
 use crate::kernels::biquad::SosFilter;
 use crate::kernels::butter::{butter_sos, BandType};
 use crate::routing::ambient::AmbientSplit;
+use crate::routing::ambient_expander::FixedAmbientExpander;
 use crate::routing::decorrelate::{
     velvet_pair_seeded, VelvetFir, VelvetLine, VELVET_SEED, VELVET_SEED_HEIGHT,
 };
 use crate::routing::sends::{directional_band_sos, height_texture_sos};
-use crate::stem_dynamics::{StemDynamics, StemDynamicsParams};
 use crate::stem_dynamic_eq::{StemDynamicEq, StemDynamicEqParams};
+use crate::stem_dynamics::{StemDynamics, StemDynamicsParams};
 use crate::stem_eq::{StemEq, StemEqParams};
-use super::params::{SendParams, SendShape};
-use super::state::OnePole;
 
 const AMBIENT_GAIN_RAMP_MS: f64 = 8.0;
 
@@ -24,7 +25,7 @@ pub use routing_ambient::LfeBus;
 /// One shaped send: a filter chain and, for a send fed from the dry stem,
 /// one side of a decorrelator pair. The ambient sends carry no decorrelator:
 /// their two sides are already independent signals — that is what the split
-    /// selected them for, so a velvet pair would only smear them.
+/// selected them for, so a velvet pair would only smear them.
 struct Send {
     filters: Vec<SosFilter>,
     velvet: Option<VelvetLine>,
@@ -174,9 +175,24 @@ pub const AMBIENT_HEIGHT: usize = 9;
 /// routed sum to. Reading the post-split pair instead would make a stem get
 /// quieter as its sends come up, since the sends are inside the routed sum.
 pub const STEM_INPUT: usize = 11;
+/// Direct-residual height texture, kept separate from expanded ambient sends.
+pub const AMBIENT_TEXTURE: usize = 13;
+/// First per-destination fixed-expansion signal slot.
+pub const AMBIENT_EXPANDED: usize = 15;
+pub const AMBIENT_EXPANDED_COUNT: usize = 8;
 /// Signals a stem's routing can draw on: [`shape_index`]'s seven, the four
-/// ambient sends, then the input pair.
-pub const SIGNALS: usize = 13;
+/// ambient sends, the input pair, direct height texture, and expanded sends.
+pub const SIGNALS: usize = AMBIENT_EXPANDED + AMBIENT_EXPANDED_COUNT;
+
+const AMBIENT_DESTINATIONS: [&str; AMBIENT_EXPANDED_COUNT] =
+    ["SL", "SR", "BL", "BR", "TFL", "TFR", "TBL", "TBR"];
+
+pub fn ambient_expanded_slot(destination: &str) -> Option<usize> {
+    AMBIENT_DESTINATIONS
+        .iter()
+        .position(|candidate| *candidate == destination)
+        .map(|index| AMBIENT_EXPANDED + index)
+}
 
 /// Per-stem shaping state: the four sends plus the optional stem EQ, and —
 /// when the stem asks for it — the primary/ambient split and the four extra
@@ -197,6 +213,10 @@ pub struct StemRouteState {
     ambient_surround: [Send; 2],
     ambient_height: [Send; 2],
     ambient_texture: [Send; 2],
+    ambient_expander: FixedAmbientExpander,
+    ambient_expanded: Vec<Vec<f64>>,
+    ambient_output_slots: [Option<usize>; AMBIENT_EXPANDED_COUNT],
+    ambient_tail_remaining: usize,
     ambient_texture_cutoff: [SosFilter; 2],
     ambient_rear_gain: [OnePole; 2],
     ambient_height_gain: [OnePole; 2],
@@ -227,6 +247,24 @@ impl StemRouteState {
         eq: Option<StemEqParams>,
         dynamic_eq: Option<StemDynamicEqParams>,
         dynamics: Option<StemDynamicsParams>,
+    ) -> Self {
+        Self::new_for_layout(
+            sample_rate,
+            p,
+            eq,
+            dynamic_eq,
+            dynamics,
+            &AMBIENT_DESTINATIONS,
+        )
+    }
+
+    pub fn new_for_layout(
+        sample_rate: u32,
+        p: &SendParams,
+        eq: Option<StemEqParams>,
+        dynamic_eq: Option<StemDynamicEqParams>,
+        dynamics: Option<StemDynamicsParams>,
+        destinations: &[&str],
     ) -> Self {
         let nyq = sample_rate as f64 / 2.0;
         let surround_hp = butter_sos(2, p.surround_bass_cutoff_hz / nyq, BandType::High);
@@ -264,6 +302,14 @@ impl StemRouteState {
             )),
         };
 
+        let ambient_expander = FixedAmbientExpander::new(sample_rate, destinations);
+        let ambient_expanded = vec![Vec::new(); ambient_expander.destinations().len()];
+        let mut ambient_output_slots = [None; AMBIENT_EXPANDED_COUNT];
+        for (output, destination) in ambient_expander.destinations().enumerate() {
+            if let Some(slot) = ambient_expanded_slot(destination) {
+                ambient_output_slots[slot - AMBIENT_EXPANDED] = Some(output);
+            }
+        }
         Self {
             sample_rate_hz: sample_rate as f64,
             eq: eq.map(|params| StemEq::new(sample_rate, params)),
@@ -279,6 +325,10 @@ impl StemRouteState {
             ambient_surround: [surround_send(None), surround_send(None)],
             ambient_height: [height_send(None), height_send(None)],
             ambient_texture: [height_send(None), height_send(None)],
+            ambient_expander,
+            ambient_expanded,
+            ambient_output_slots,
+            ambient_tail_remaining: 0,
             ambient_texture_cutoff: [
                 SosFilter::from_flat(&texture_cutoff),
                 SosFilter::from_flat(&texture_cutoff),
@@ -344,6 +394,13 @@ impl StemRouteState {
             if let Some(split) = &mut self.split {
                 split.reset();
             }
+            // A direct transport jump can bypass the engine-level rewind. Drop
+            // the fixed expander's FIR history too, otherwise the first block
+            // after the jump contains the previous playhead's tail.
+            self.ambient_expander.seek(start);
+            for output in &mut self.ambient_expanded {
+                output.clear();
+            }
         }
         self.ahead.fill(
             stem_left,
@@ -364,36 +421,63 @@ impl StemRouteState {
             self.shaped[STEM_INPUT + i].clear();
             self.shaped[STEM_INPUT + i].extend_from_slice(&self.scratch[i]);
         }
-        let ambient_target = rear.iter().any(|value| *value > 0.0)
-            || height.iter().any(|value| *value > 0.0);
+        let ambient_target =
+            rear.iter().any(|value| *value > 0.0) || height.iter().any(|value| *value > 0.0);
         let ambient_fading = self
-                .ambient_rear_gain
-                .iter()
-                .any(|gain| !gain.is_settled(0.0))
-                || self
-                    .ambient_height_gain
-                    .iter()
-                    .any(|gain| !gain.is_settled(0.0));
-        let texture_target = texture.iter().any(|value| *value > 0.0);
-        let texture_fading = self
-                .height_texture_gain
+            .ambient_rear_gain
+            .iter()
+            .any(|gain| !gain.is_settled(0.0))
+            || self
+                .ambient_height_gain
                 .iter()
                 .any(|gain| !gain.is_settled(0.0));
+        let texture_target = texture.iter().any(|value| *value > 0.0);
+        let texture_fading = self
+            .height_texture_gain
+            .iter()
+            .any(|gain| !gain.is_settled(0.0));
         let ambient_source_active = ambient_target || ambient_fading;
+        if ambient_source_active {
+            self.ambient_tail_remaining = 0;
+        } else if self.split.is_some() && self.ambient_tail_remaining == 0 {
+            // The send ramp has reached zero, but the fixed FIR still has a
+            // real tail. Keep feeding it zeros until that tail has drained
+            // instead of truncating it at the end of the gain ramp.
+            self.ambient_tail_remaining = self.ambient_expander.span();
+        }
         if self.split.is_some() && ambient_source_active {
             self.split_ambient(start, count, rear, height);
+            self.expand_ambient(count);
+        } else if self.split.is_some() && self.ambient_tail_remaining > 0 {
+            for slot in AMBIENT_SURROUND..AMBIENT_SURROUND + 4 {
+                self.shaped[slot].clear();
+                self.shaped[slot].resize(count, 0.0);
+            }
+            self.expand_ambient(count);
+            self.ambient_tail_remaining = self.ambient_tail_remaining.saturating_sub(count);
         } else if !ambient_source_active {
             for slot in AMBIENT_SURROUND..AMBIENT_SURROUND + 4 {
                 self.shaped[slot].clear();
                 self.shaped[slot].resize(count, 0.0);
             }
+            self.clear_expanded(count);
+            self.ambient_expander.reset();
+        }
+        for slot in AMBIENT_TEXTURE..AMBIENT_TEXTURE + 2 {
+            self.shaped[slot].clear();
+            self.shaped[slot].resize(count, 0.0);
         }
         self.shape_sends(count, surround, height_send);
         if self.texture_active && (texture_target || texture_fading) {
             self.apply_height_texture(count, texture);
         }
-        if !ambient_source_active && !texture_target && !texture_fading {
+        if !ambient_source_active && self.ambient_tail_remaining == 0 {
+            // The last zero block was processed above, so leave its drained
+            // output visible until the next block and drop the split now.
             self.split = None;
+            self.ambient_expander.reset();
+        }
+        if !ambient_source_active && !texture_target && !texture_fading {
             self.texture_active = false;
         }
         self.texture_started = true;
@@ -426,6 +510,11 @@ impl StemRouteState {
         if let Some(split) = &mut self.split {
             split.reset();
         }
+        self.ambient_expander.reset();
+        for output in &mut self.ambient_expanded {
+            output.clear();
+        }
+        self.ambient_tail_remaining = 0;
         for side in 0..2 {
             self.ambient_rear_gain[side].reset();
             self.ambient_height_gain[side].reset();
@@ -440,6 +529,25 @@ impl StemRouteState {
         // filter state but does not reapply the parameter block.
         self.texture_started = false;
         self.ahead.clear(0);
+    }
+
+    fn clear_expanded(&mut self, count: usize) {
+        for output in &mut self.ambient_expanded {
+            output.clear();
+            output.resize(count, 0.0);
+        }
+    }
+
+    fn expand_ambient(&mut self, count: usize) {
+        self.clear_expanded(count);
+        let inputs = [
+            &self.shaped[AMBIENT_SURROUND][..count],
+            &self.shaped[AMBIENT_SURROUND + 1][..count],
+            &self.shaped[AMBIENT_HEIGHT][..count],
+            &self.shaped[AMBIENT_HEIGHT + 1][..count],
+        ];
+        self.ambient_expander
+            .process_into(inputs, &mut self.ambient_expanded);
     }
 
     /// Adopt new send shaping and/or a new stem EQ in place, keeping every
@@ -548,11 +656,19 @@ impl StemRouteState {
     /// [`shape_index`].
     #[inline]
     pub fn signal(&self, index: usize) -> &[f64] {
+        if let Some(output) = index
+            .checked_sub(AMBIENT_EXPANDED)
+            .and_then(|slot| self.ambient_output_slots.get(slot).copied().flatten())
+        {
+            return &self.ambient_expanded[output];
+        }
         &self.shaped[index]
     }
 
     pub fn dynamic_eq_gain_reduction_db(&self) -> f64 {
-        self.dynamic_eq.as_ref().map_or(0.0, StemDynamicEq::gain_reduction_db)
+        self.dynamic_eq
+            .as_ref()
+            .map_or(0.0, StemDynamicEq::gain_reduction_db)
     }
 
     pub fn dynamics_gain_reduction_db(&self) -> f64 {

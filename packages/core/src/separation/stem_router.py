@@ -77,6 +77,10 @@ _RIGHT_CHANNELS = {ChannelLabel.FR, ChannelLabel.SR, ChannelLabel.BR, ChannelLab
 
 _SURROUND_CHANNELS = {ChannelLabel.SL, ChannelLabel.SR, ChannelLabel.BL, ChannelLabel.BR}
 _HEIGHT_CHANNELS   = {ChannelLabel.TFL, ChannelLabel.TFR, ChannelLabel.TBL, ChannelLabel.TBR}
+_AMBIENT_DESTINATIONS = (
+    ChannelLabel.SL, ChannelLabel.SR, ChannelLabel.BL, ChannelLabel.BR,
+    ChannelLabel.TFL, ChannelLabel.TFR, ChannelLabel.TBL, ChannelLabel.TBR,
+)
 
 _VOCAL_STEM_NAMES: frozenset[str] = frozenset({
     "Vocals", "Lead Vocals", "Backing Vocals",
@@ -718,6 +722,26 @@ class StemRouter:
                     ChannelLabel.TFL: self._height_send(height_L_amb),
                     ChannelLabel.TFR: self._height_send(height_R_amb),
                 }
+                destinations = tuple(
+                    label for label in _AMBIENT_DESTINATIONS
+                    if label in self._fmt.channels and label.value not in skip
+                )
+                if destinations:
+                    expanded = upmixer_dsp.ambient_expand(
+                        np.ascontiguousarray(ambient[ChannelLabel.SL], dtype=np.float64),
+                        np.ascontiguousarray(ambient[ChannelLabel.SR], dtype=np.float64),
+                        np.ascontiguousarray(ambient[ChannelLabel.TFL], dtype=np.float64),
+                        np.ascontiguousarray(ambient[ChannelLabel.TFR], dtype=np.float64),
+                        self._sr,
+                        [label.value for label in destinations],
+                    )
+                    if len(expanded) != len(destinations):
+                        raise ValueError(
+                            "ambient expansion returned the wrong number of destinations"
+                        )
+                    ambient = dict(zip(destinations, expanded))
+                else:
+                    ambient = {}
 
             texture_amount = self._height_texture_for(stem_key)
             texture: dict[ChannelLabel, np.ndarray] = {}
@@ -810,9 +834,7 @@ class StemRouter:
                 if label.value in skip:
                     continue
                 if label in _SURROUND_CHANNELS and rear_amount > 0.0:
-                    signal = ambient[
-                        ChannelLabel.SL if label in _LEFT_CHANNELS else ChannelLabel.SR
-                    ]
+                    signal = ambient[label]
                     side = 0 if label in _LEFT_CHANNELS else 1
                     gain = (
                         wet_trim
@@ -821,9 +843,7 @@ class StemRouter:
                         * self._channel_gain(label)
                     )
                 elif label in _HEIGHT_CHANNELS and height_amount > 0.0:
-                    signal = ambient[
-                        ChannelLabel.TFL if label in _LEFT_CHANNELS else ChannelLabel.TFR
-                    ]
+                    signal = ambient[label]
                     side = 0 if label in _LEFT_CHANNELS else 1
                     gain = (
                         wet_trim

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use upmixer_dsp_core::kernels::rng::next_unit;
 use upmixer_dsp_core::stream::engine::{PreviewEngine, StemSource};
 use upmixer_dsp_core::stream::params::{EngineParams, SendShape};
-use upmixer_dsp_core::stream::routing::{StemRouteState, AMBIENT_SURROUND};
+use upmixer_dsp_core::stream::routing::{StemRouteState, AMBIENT_EXPANDED, AMBIENT_SURROUND};
 
 const SR: u32 = 48_000;
 const N: usize = 24_000;
@@ -373,4 +373,133 @@ fn ambient_trim_boosts_wet_only_and_leaves_the_anchor_unchanged() {
         (ratio - 4.0).abs() < 0.05,
         "+6 dB wet trim power ratio {ratio:.4}"
     );
+}
+
+#[test]
+fn height_texture_stays_out_of_fixed_ambient_expansion() {
+    let mut plain = engine(0.8, 0.8, false);
+    let mut textured_params = plain.params().clone();
+    textured_params.stems[0].height_texture = 0.2;
+    let mut textured = PreviewEngine::new(SR, textured_params, vec![stem()]);
+    let plain_output = render_block(&mut plain, N);
+    let textured_output = render_block(&mut textured, N);
+
+    for channel in [2, 3] {
+        assert_eq!(
+            plain_output[channel], textured_output[channel],
+            "rear {channel}"
+        );
+    }
+    assert_ne!(
+        plain_output[4], textured_output[4],
+        "height texture was dropped"
+    );
+}
+
+#[test]
+fn fixed_expander_send_fade_preserves_tail_and_reset_starts_cold() {
+    let params = engine(0.8, 0.8, false).params().clone();
+    let mut route = StemRouteState::new(SR, &params.sends, None, None, None);
+    route.set_ambient(SR, &params.sends, true, true, 2000.0, 2000.0, 0.0, 0.0);
+
+    let mut left = vec![0.0f32; 4096];
+    let mut right = vec![0.0f32; 4096];
+    let (mut left_seed, mut right_seed) = (101u64, 202u64);
+    for (left_sample, right_sample) in left.iter_mut().zip(&mut right) {
+        *left_sample = (next_unit(&mut left_seed) * 2.0 - 1.0) as f32;
+        *right_sample = (next_unit(&mut right_seed) * 2.0 - 1.0) as f32;
+    }
+    let mut expanded = Vec::new();
+    route.process_block(
+        &left,
+        &right,
+        0,
+        128,
+        [0.8, 0.8],
+        [0.8, 0.8],
+        [0.0, 0.0],
+        false,
+        false,
+    );
+    for block in 1..32 {
+        route.process_block(
+            &left,
+            &right,
+            block * 128,
+            128,
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.0, 0.0],
+            false,
+            false,
+        );
+        expanded.extend_from_slice(route.signal(AMBIENT_EXPANDED));
+    }
+    assert!(
+        expanded.iter().skip(256).any(|sample| sample.abs() > 1e-12),
+        "fixed FIR tail was truncated at the send ramp"
+    );
+    let mut before_reenable = route.signal(AMBIENT_EXPANDED).to_vec();
+    route.process_block(
+        &left,
+        &right,
+        32 * 128,
+        128,
+        [0.8, 0.8],
+        [0.8, 0.8],
+        [0.0, 0.0],
+        false,
+        false,
+    );
+    let reenabled = route.signal(AMBIENT_EXPANDED);
+    let jump = reenabled[0] - before_reenable.pop().expect("block output");
+    assert!(jump.abs() < 0.5, "send re-enable clicked: {jump}");
+
+    route.reset();
+    route.process_block(
+        &left,
+        &right,
+        0,
+        128,
+        [0.8, 0.8],
+        [0.8, 0.8],
+        [0.0, 0.0],
+        false,
+        false,
+    );
+    let replay = route.signal(AMBIENT_EXPANDED).to_vec();
+    let mut fresh = StemRouteState::new(SR, &params.sends, None, None, None);
+    fresh.set_ambient(SR, &params.sends, true, true, 2000.0, 2000.0, 0.0, 0.0);
+    fresh.process_block(
+        &left,
+        &right,
+        0,
+        128,
+        [0.8, 0.8],
+        [0.8, 0.8],
+        [0.0, 0.0],
+        false,
+        false,
+    );
+    assert_eq!(replay, fresh.signal(AMBIENT_EXPANDED));
+}
+
+#[test]
+fn ambient_seek_starts_the_fixed_expander_cold() {
+    let params = engine(0.8, 0.8, false).params().clone();
+    let mut actual = PreviewEngine::new(SR, params.clone(), vec![stem()]);
+    let first = render_block(&mut actual, 2048);
+
+    actual.seek(0);
+    let replay = render_block(&mut actual, 2048);
+    let mut fresh = PreviewEngine::new(SR, params, vec![stem()]);
+    let expected = render_block(&mut fresh, 2048);
+
+    assert_eq!(first.len(), replay.len());
+    for (channel, (replayed, expected)) in replay.iter().zip(expected.iter()).enumerate() {
+        assert_eq!(
+            replayed, expected,
+            "channel {channel} retained pre-seek FIR state"
+        );
+    }
 }

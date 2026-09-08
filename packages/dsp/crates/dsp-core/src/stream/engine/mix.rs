@@ -1,6 +1,6 @@
 use crate::spatial::panner::{PannerLayout, StemPlacement};
 use crate::stream::params::{EngineParams, ObjectMode, SendShape, SpeakerParams, StemParams};
-use crate::stream::routing::{shape_index, StemRouteState, AMBIENT_HEIGHT, AMBIENT_SURROUND};
+use crate::stream::routing::{ambient_expanded_slot, shape_index, StemRouteState, AMBIENT_TEXTURE};
 
 use super::PreviewEngine;
 
@@ -9,6 +9,7 @@ pub(crate) struct StemMixRoute {
     pub lfe_weight: f64,
     pub objects: Option<Vec<ObjectMixRoute>>,
     pub ambient: Vec<(usize, usize, f64)>,
+    pub ambient_texture: Vec<(usize, usize, f64)>,
     pub needs_surround: bool,
     pub needs_height: bool,
     pub has_surround: [bool; 2],
@@ -67,6 +68,9 @@ pub(crate) fn assemble_stem_into(
         }
         if route.has_ambient() {
             for &(channel, signal, weight) in &mix.ambient {
+                bed[channel][i] += route.signal(signal)[i] * weight * gain;
+            }
+            for &(channel, signal, weight) in &mix.ambient_texture {
                 bed[channel][i] += route.signal(signal)[i] * weight * gain;
             }
         }
@@ -130,7 +134,8 @@ pub(crate) fn build_stem_mix_routes(
                 regular,
                 lfe_weight,
                 objects,
-                ambient: ambient_feeds(params, stem),
+                ambient: ambient_feeds(params),
+                ambient_texture: ambient_texture_feeds(params),
                 needs_surround,
                 needs_height,
                 has_surround: [
@@ -207,20 +212,48 @@ fn direct_object_routes(
     ))
 }
 
-fn ambient_feeds(params: &EngineParams, _stem: &StemParams) -> Vec<(usize, usize, f64)> {
+fn ambient_feeds(params: &EngineParams) -> Vec<(usize, usize, f64)> {
     let mut feeds = Vec::new();
-    for (channel, shape) in params.shapes.iter().enumerate() {
-        let slot = match shape {
-            SendShape::SurroundLeft => AMBIENT_SURROUND,
-            SendShape::SurroundRight => AMBIENT_SURROUND + 1,
-            SendShape::HeightLeft => AMBIENT_HEIGHT,
-            SendShape::HeightRight => AMBIENT_HEIGHT + 1,
+    for channel in 0..params.speakers.len() {
+        let shape = params.shapes[channel];
+        let slot = match ambient_expanded_slot(&params.speakers[channel].name) {
+            Some(slot)
+                if matches!(
+                    shape,
+                    SendShape::SurroundLeft
+                        | SendShape::SurroundRight
+                        | SendShape::HeightLeft
+                        | SendShape::HeightRight
+                ) =>
+            {
+                slot
+            }
             _ => continue,
         };
-        let weight = params.ambient_side_share(*shape) * params.speakers[channel].group_gain;
+        let weight = params.ambient_side_share(shape) * params.speakers[channel].group_gain;
         feeds.push((channel, slot, weight));
     }
     feeds
+}
+
+fn ambient_texture_feeds(params: &EngineParams) -> Vec<(usize, usize, f64)> {
+    params
+        .speakers
+        .iter()
+        .enumerate()
+        .filter_map(|(channel, speaker)| {
+            let side = match params.shapes[channel] {
+                SendShape::HeightLeft => 0,
+                SendShape::HeightRight => 1,
+                _ => return None,
+            };
+            Some((
+                channel,
+                AMBIENT_TEXTURE + side,
+                params.ambient_side_share(params.shapes[channel]) * speaker.group_gain,
+            ))
+        })
+        .collect()
 }
 
 impl PreviewEngine {
