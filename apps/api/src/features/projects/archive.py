@@ -117,6 +117,24 @@ def export_project_archive(
                 if meta_path.is_file():
                     archive.write(meta_path, f"{track_dir}/peaks.json")
 
+            movement_features_entry = None
+            generations = {stem.generation for stem in track.stems}
+            stem_directories = {
+                Path(stem.relative_path).parent for stem in track.stems
+            }
+            if len(generations) <= 1 and len(stem_directories) <= 1:
+                generation = next(iter(generations), project.stem_generation)
+                relative_path = (
+                    track.stems[0].relative_path if track.stems else None
+                )
+                movement_features_path = project_stems.ensure_movement_features(
+                    project.id, track.id, generation=generation,
+                    relative_path=relative_path,
+                )
+                if movement_features_path:
+                    movement_features_entry = f"{track_dir}/movement-features.json"
+                    archive.write(movement_features_path, movement_features_entry)
+
             source_preview_entry = None
             if track.source_preview_relative_path:
                 source_preview_entry = f"{track_dir}/source_preview.ogg"
@@ -147,6 +165,7 @@ def export_project_archive(
                 "stems": stems_meta,
                 "peaks_entry": peaks_entry,
                 "peaks_duration_seconds": track.peaks_duration_seconds,
+                "movement_features_entry": movement_features_entry,
                 "source_preview_entry": source_preview_entry,
             })
 
@@ -402,6 +421,13 @@ def import_project_archive(
                         (track_root / "peaks.json").write_bytes(archive.read(meta_entry))
                     track.peaks_relative_path = str(peaks_dest.relative_to(project_stems.root))
                     track.peaks_duration_seconds = track_data.get("peaks_duration_seconds")
+
+                if track_data.get("movement_features_entry"):
+                    _extract(
+                        archive,
+                        track_data["movement_features_entry"],
+                        track_root / "movement-features.json",
+                    )
 
                 if track_data.get("source_preview_entry"):
                     preview_dest = _extract(archive, track_data["source_preview_entry"], track_root / "source.preview.ogg")

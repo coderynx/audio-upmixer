@@ -81,7 +81,20 @@ impl PreviewEngine {
         let Some(target) = self.seek_target else {
             return true;
         };
-        let step = frames.min(target.saturating_sub(self.emitted));
+        // Worklet callers commonly offer a 1024-frame quantum to finish a
+        // seek quickly. Movement/object programmes carry more authored and
+        // scheduled routes, so split that discarded work into bounded chunks;
+        // the same samples are still rendered and thrown away in order.
+        let max_step = if self.params.movement_schedule.is_some()
+            || self.graph.authored_channels > self.params.speakers.len()
+        {
+            256
+        } else {
+            frames
+        };
+        let step = frames
+            .min(max_step)
+            .min(target.saturating_sub(self.emitted));
         if step > 0 {
             if !self.prepare_render(step, step) {
                 return false;

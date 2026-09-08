@@ -7,15 +7,18 @@ from fractions import Fraction
 
 import numpy as np
 import pytest
+import soundfile as sf
 
 from upmixer.config import UpmixConfig
-from upmixer.formats import FORMAT_MAP, validate_delivery
+from upmixer.formats import FORMAT_MAP, adm_delivery_layout, validate_delivery
 from upmixer.io.adm_chunks import _fmt_time
 from upmixer.io.adm_writer import (
     AdmBwfWriter,
     AdmObject,
+    AdmObjectEvent,
     _DOLBY_ENGINE_ALLOWED_FORMATS,
     _wave_header,
+    render_adm_programme,
 )
 from upmixer.separation.stem_router import StemRouter
 
@@ -59,17 +62,87 @@ def test_allows_dolby_engine_layouts():
     assert _DOLBY_ENGINE_ALLOWED_FORMATS == {"5.1", "7.1", "7.1.2"}
 
 
-@pytest.mark.parametrize("layout", ["stereo", "5.1.2", "5.1.4", "7.1.4"])
-def test_rejects_non_profile_adm_deliveries(layout):
-    with pytest.raises(ValueError, match="adm-bwf output requires"):
-        validate_delivery(layout, "adm-bwf")
+@pytest.mark.parametrize("layout", ["5.1", "7.1", "5.1.2", "5.1.4", "7.1.2", "7.1.4"])
+def test_accepts_all_supported_adm_deliveries(layout):
+    validate_delivery(layout, "adm-bwf")
 
 
-def test_rejects_non_profile_7_1_4_bed(tmp_path):
+def test_adapts_7_1_4_to_a_bed_and_fixed_carriers(tmp_path):
     config = UpmixConfig(output_format="7.1.4")
     channels = {label.value: np.zeros(32) for label in FORMAT_MAP["7.1.4"].channels}
-    with pytest.raises(ValueError, match="supported ADM BWF bed"):
-        AdmBwfWriter(str(tmp_path / "out.wav"), 48_000, config).write(channels)
+    output = tmp_path / "out.wav"
+    AdmBwfWriter(str(output), 48_000, config).write(channels)
+    chunks = _chunks(output.read_bytes())
+    root = _audio_format_extended(chunks[b"axml"])
+    assert struct.unpack_from("<H", chunks[b"fmt "], 2)[0] == 12
+    assert len(root.findall("audioObject")) == 5
+    assert all(obj.attrib["start"] == "00:00:00.00000" for obj in root.findall("audioObject"))
+    assert len(root.findall("audioChannelFormat")) == 12
+    assert [channel.attrib["audioChannelFormatName"] for channel in root.findall("audioChannelFormat")[-4:]] == [
+        "TFL", "TFR", "TBL", "TBR",
+    ]
+
+
+def test_writes_timed_object_blocks_with_contiguous_duration(tmp_path):
+    config = UpmixConfig(output_format="5.1")
+    n_samples = 48_000
+    channels = {label.value: np.zeros(n_samples) for label in FORMAT_MAP["5.1"].channels}
+    obj = AdmObject(
+        "Moving",
+        np.ones(n_samples),
+        (0.0, 1.0, 0.0),
+        events=(
+            AdmObjectEvent(0, (0.0, 1.0, 0.0), 0),
+            AdmObjectEvent(20_000, (0.12345678901234566, 0.9012345678901234, 0.23456789012345678)),
+        ),
+    )
+    output = tmp_path / "timed.wav"
+    AdmBwfWriter(str(output), 48_000, config).write(channels, objects=[obj])
+    root = _audio_format_extended(_chunks(output.read_bytes())[b"axml"])
+    blocks = root.findall("audioChannelFormat")[-1].findall("audioBlockFormat")
+    assert [block.attrib["rtime"] for block in blocks] == [
+        "00:00:00.000000", "00:00:00.020000",
+    ]
+    assert [block.attrib["duration"] for block in blocks] == [
+        "00:00:00.020000", "00:00:00.980000",
+    ]
+    assert [block.find("jumpPosition").attrib["interpolationLength"] for block in blocks] == [
+        "0.000000", "0.005208",
+    ]
+    parsed_events = tuple(
+        AdmObjectEvent(
+            int(Fraction(block.attrib["rtime"].rsplit(":", 1)[1]) * 1_000_000),
+            tuple(float(block.find(f"position[@coordinate='{axis}']").text) for axis in "XYZ"),
+            int(Fraction(block.find("jumpPosition").attrib["interpolationLength"]) * 1_000_000),
+        )
+        for block in blocks
+    )
+    assert parsed_events == obj.events
+    parsed_object = AdmObject("Parsed", obj.audio, parsed_events[0].position, events=parsed_events)
+    rendered = render_adm_programme(channels, FORMAT_MAP["5.1"], [parsed_object], 48_000)
+    # At a sample inside the ramp, gains are affine in time, not a panning
+    # result recomputed from interpolated Cartesian coordinates.
+    import upmixer_dsp
+
+    labels = list(channels)
+    endpoints = [upmixer_dsp.adm_cartesian_object_route(event.position, 0.0, False, [], labels)
+                 for event in parsed_events]
+    sample = 1100
+    fraction = (sample * 1_000_000 / 48_000 - 20_000) / 5208
+    for index, label in enumerate(labels):
+        expected = endpoints[0][index] + fraction * (endpoints[1][index] - endpoints[0][index])
+        assert rendered[label][sample] == pytest.approx(expected, abs=1e-12)
+
+
+def test_rejects_timed_object_final_interpolation_longer_than_block(tmp_path):
+    config = UpmixConfig(output_format="5.1")
+    channels = {label.value: np.zeros(1_200) for label in FORMAT_MAP["5.1"].channels}
+    obj = AdmObject(
+        "Moving", np.ones(1_200), (0.0, 1.0, 0.0),
+        events=(AdmObjectEvent(0, (0.0, 1.0, 0.0), 0), AdmObjectEvent(20_000, (0.2, 1.0, 0.0))),
+    )
+    with pytest.raises(ValueError, match="interpolation exceeds"):
+        AdmBwfWriter(str(tmp_path / "timed.wav"), 48_000, config).write(channels, objects=[obj])
 
 
 def test_uses_default_dbmd_payload_when_not_supplied(tmp_path):
@@ -279,3 +352,47 @@ def test_five_one_bed_uses_dolby_surround_channels(tmp_path):
     assert [channel.find("audioBlockFormat/position[@coordinate='Y']").text for channel in surrounds] == [
         "-1", "-1",
     ]
+
+
+@pytest.mark.parametrize("layout", ["5.1", "7.1", "5.1.2", "5.1.4", "7.1.2", "7.1.4"])
+@pytest.mark.parametrize("sample_rate", [48_000, 96_000])
+def test_adm_layout_impulses_rerender_from_serialized_positions(tmp_path, layout, sample_rate):
+    requested = FORMAT_MAP[layout]
+    realized, carriers = adm_delivery_layout(layout)
+    channels = {label.value: np.zeros(128) for label in requested.channels}
+    for index, audio in enumerate(channels.values()):
+        audio[index * 3] = 0.25
+    output = tmp_path / "impulses.wav"
+    config = UpmixConfig(output_format=layout, output_dither="off")
+    AdmBwfWriter(str(output), sample_rate, config).write(channels)
+    root = _audio_format_extended(_chunks(output.read_bytes())[b"axml"])
+    pcm, rate = sf.read(output, always_2d=True, dtype="float64")
+    assert rate == sample_rate
+    assert sf.info(output).subtype == "PCM_24"
+    assert pcm.shape == (128, requested.n_channels)
+    bed = {label.value: pcm[:, index] for index, label in enumerate(realized.channels)}
+    for label in requested.channels:
+        bed.setdefault(label.value, np.zeros(128))
+    objects = []
+    for index, channel in enumerate(root.findall("audioChannelFormat")[realized.n_channels:]):
+        block = channel.find("audioBlockFormat")
+        position = tuple(float(block.find(f"position[@coordinate='{axis}']").text) for axis in "XYZ")
+        assert block.findtext("width", "0") == "0"
+        assert block.findtext("gain", "1") == "1"
+        objects.append(AdmObject(channel.attrib["audioChannelFormatName"],
+                                 pcm[:, realized.n_channels + index], position))
+    assert len(objects) == len(carriers)
+    rendered = render_adm_programme(bed, requested, objects, sample_rate)
+    for label, expected in channels.items():
+        np.testing.assert_allclose(rendered[label], expected, atol=1e-6, rtol=0)
+
+
+@pytest.mark.parametrize("layout,authored_count", [("7.1.2", 118), ("7.1.4", 114)])
+def test_adm_carriers_count_toward_object_limit(tmp_path, layout, authored_count):
+    config = UpmixConfig(output_format=layout)
+    channels = {label.value: np.zeros(1) for label in FORMAT_MAP[layout].channels}
+    objects = [AdmObject(f"Object {i}", np.zeros(1), (0.0, 1.0, 0.0)) for i in range(authored_count)]
+    writer = AdmBwfWriter(str(tmp_path / "limit.wav"), 48_000, config)
+    writer.write(channels, objects=objects)
+    with pytest.raises(ValueError, match="128 tracks and 118 objects"):
+        writer.write(channels, objects=[*objects, AdmObject("Over limit", np.zeros(1), (0.0, 1.0, 0.0))])

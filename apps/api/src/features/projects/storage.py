@@ -15,6 +15,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from upmixer_web.shared.models import Project, ProjectStem, ProjectTrack
+from upmixer.separation.stem_store import MOVEMENT_FEATURES_FILENAME
 
 REFERENCE_MATCH_META_SUFFIX = ".reference_match.json"
 REFERENCE_MATCH_CACHE_LIMIT = 12
@@ -318,6 +319,80 @@ class ProjectStemStorage:
     ) -> Path | None:
         path = self._peaks_path(project_id, track_id, relative_path, PEAKS_FILENAME)
         return path if path is not None and path.is_file() else None
+
+    def movement_features_path(
+        self,
+        project_id: str,
+        track_id: str,
+        generation: int | None = None,
+        relative_path: str | None = None,
+    ) -> Path | None:
+        """Return one validated canonical-feature sidecar for a track."""
+        if relative_path is not None:
+            candidate = (self.root / relative_path).resolve()
+            if not candidate.is_relative_to(self.root):
+                return None
+            path = candidate.with_name(MOVEMENT_FEATURES_FILENAME)
+        elif generation is not None:
+            path = self.generation_stem_dir(project_id, track_id, generation) / MOVEMENT_FEATURES_FILENAME
+        else:
+            path = self.stem_dir(project_id, track_id) / MOVEMENT_FEATURES_FILENAME
+        return path if path.is_file() else None
+
+    def ensure_movement_features(
+        self,
+        project_id: str,
+        track_id: str,
+        generation: int | None = None,
+        relative_path: str | None = None,
+    ) -> Path | None:
+        """Load or rebuild the sidecar beside one prepared stem snapshot."""
+        if relative_path is not None:
+            candidate = (self.root / relative_path).resolve()
+            if not candidate.is_relative_to(self.root) or not candidate.is_file():
+                return None
+            directory = candidate.parent
+        elif generation is not None:
+            directory = self.generation_stem_dir(project_id, track_id, generation)
+        else:
+            directory = self.stem_dir(project_id, track_id)
+        try:
+            from upmixer.movement import extract_feature_sidecar, validate_feature_sidecar
+            from upmixer.separation.stem_store import PlainStemStore
+
+            store = PlainStemStore(str(directory))
+            path = directory / MOVEMENT_FEATURES_FILENAME
+            try:
+                manifest = json.loads((directory / "stems.json").read_text(encoding="utf-8"))
+                stem_keys = manifest["stem_keys"]
+                sample_rate = int(manifest["sample_rate"])
+                features = json.loads(path.read_text(encoding="utf-8"))
+                validate_feature_sidecar(features, stem_keys)
+                by_key = {entry["stem_key"]: entry for entry in features["stems"]}
+                frame_count = 0
+                for stem_key in stem_keys:
+                    filename = stem_key.replace("@", "__").replace("/", "__").replace("\\", "__") + ".wav"
+                    info = sf.info(str(directory / filename))
+                    if info.samplerate != sample_rate or by_key[stem_key]["features"]["sample_rate"] != sample_rate:
+                        raise ValueError("movement sidecar rate does not match prepared PCM")
+                    if by_key[stem_key]["features"]["frame_count"] != info.frames:
+                        raise ValueError("movement sidecar frame count does not match prepared PCM")
+                    frame_count = max(frame_count, info.frames)
+                if features["frame_count"] != frame_count:
+                    raise ValueError("movement sidecar frame count does not match prepared PCM")
+                return path
+            except (OSError, RuntimeError, TypeError, ValueError, KeyError):
+                pass
+            loaded = store.load()
+            if loaded is None:
+                return None
+            stems, sample_rate = loaded
+            store.write_features(
+                extract_feature_sidecar(stems, sample_rate), stem_keys=list(stems)
+            )
+            return path if path.is_file() else None
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
 
     def _peaks_path(
         self, project_id: str, track_id: str, relative_path: str | None, filename: str

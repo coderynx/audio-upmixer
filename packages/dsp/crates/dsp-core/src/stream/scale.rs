@@ -195,8 +195,12 @@ impl RouteScalePass {
                 .push_input(1, kept(route.signal(INPUT + 1), skip));
         }
         let mut speakers = vec![vec![0.0; count]; self.engine.params().speakers.len()];
-        self.engine
-            .assemble_stem_for_normalization_into(self.stem, count, &mut speakers);
+        self.engine.assemble_stem_for_normalization_into(
+            self.stem,
+            self.cursor,
+            count,
+            &mut speakers,
+        );
         for (channel, signal) in speakers.iter().enumerate() {
             self.meters.push_speaker(channel, kept(signal, skip));
         }

@@ -10,6 +10,7 @@ import {
   type OutputMode,
 } from "./audioEngine";
 import { createPreviewMonitor, type PreviewProgramme } from "./previewProgramme";
+import type { MovementSchedule } from "./wasmEngine/engineTypes";
 
 export type { OutputMode, MasterMeters, MeterLevel, MixPreview } from "./audioEngine";
 export type { LoudnessSummary } from "./audioEngine";
@@ -74,6 +75,7 @@ export function useStemPreview(
   // Measured loudness and the target it is normalized to. React state rather
   // than a meter ref: it moves when a measurement lands, not per frame.
   const [loudness, setLoudness] = React.useState(SILENT_LOUDNESS);
+  const [movementSchedule, setMovementSchedule] = React.useState<MovementSchedule | null>(null);
   const [maxChannels, setMaxChannels] = React.useState(2);
   const [outputDevices, setOutputDevices] = React.useState<MediaDeviceInfo[]>([]);
   const [outputDeviceId, setOutputDeviceIdState] = React.useState("");
@@ -110,6 +112,7 @@ export function useStemPreview(
       onMeasuring: setMeasuring,
       onMeasureProgress: setMeasureProgress,
       onLoudness: setLoudness,
+      onMovementSchedule: setMovementSchedule,
       onMaxChannels: setMaxChannels,
       onVolume: setVolumeState,
       onMuted: setMutedState,
@@ -239,6 +242,7 @@ export function useStemPreview(
     measuring,
     measureProgress,
     loudness,
+    movementSchedule,
     playing,
     currentTime,
     duration,

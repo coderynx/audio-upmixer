@@ -1,6 +1,7 @@
 """Regression tests for static stem spatial routing."""
 from __future__ import annotations
 
+import json
 import math
 
 import numpy as np
@@ -9,6 +10,8 @@ import upmixer_dsp
 from upmixer.config import UpmixConfig
 from upmixer.formats import FORMAT_MAP
 from upmixer.loudness import measure_integrated_loudness
+from upmixer.movement import extract_feature_sidecar
+from upmixer.io.adm_writer import AdmObject, AdmObjectEvent, render_adm_programme
 from upmixer.separation.stem_router import (
     DEFAULT_ROUTING,
     DEFAULT_ROUTING_LAYOUT,
@@ -347,6 +350,143 @@ def test_front_only_stereo_route_still_matches_raw_energy():
     routed = sum(float(np.dot(ch, ch)) for ch in channels.values())
     source = float(np.dot(audio[:, 0], audio[:, 0]) + np.dot(audio[:, 1], audio[:, 1]))
     assert routed == pytest.approx(source, rel=1e-6)
+
+
+def test_stereo_layout_bypasses_stored_movement_features():
+    audio = _audio()
+    config = UpmixConfig(
+        output_format="stereo",
+        stem_movement={"Guitar": {"enabled": True, "depth": 1.0}},
+    )
+    invalid_sidecar = {"stems": "not-a-list"}
+    routed = StemRouter(config, FORMAT_MAP["stereo"], 48_000).route(
+        {"Guitar": audio}, len(audio), movement_features=invalid_sidecar,
+    )
+    plain = StemRouter(
+        UpmixConfig(output_format="stereo"), FORMAT_MAP["stereo"], 48_000,
+    ).route({"Guitar": audio}, len(audio))
+    for channel in FORMAT_MAP["stereo"].channels:
+        np.testing.assert_array_equal(routed[channel.value], plain[channel.value])
+
+
+def test_movement_router_extracts_features_when_standalone():
+    audio = _audio(n=48_000)
+    config = UpmixConfig(
+        output_format="7.1.4",
+        stem_movement={"Guitar": {"enabled": True, "role": "featured", "depth": 0.2}},
+    )
+    fmt = FORMAT_MAP["7.1.4"]
+    implicit = StemRouter(config, fmt, 48_000).route({"Guitar": audio}, len(audio))
+    explicit = StemRouter(config, fmt, 48_000).route(
+        {"Guitar": audio}, len(audio),
+        movement_features=extract_feature_sidecar({"Guitar": audio}, 48_000),
+    )
+    for channel in fmt.channels:
+        np.testing.assert_array_equal(implicit[channel.value], explicit[channel.value])
+
+
+def test_movement_off_keeps_a_custom_bed_map_bit_identical():
+    audio = _audio()
+    custom = {"Guitar": {"FL": 0.2, "FR": 0.8, "SL": 0.1, "SR": 0.0}}
+    config = UpmixConfig(output_format="7.1.4", stem_routing=custom)
+    features = extract_feature_sidecar({"Guitar": audio}, 48_000)
+    plain = StemRouter(config, FORMAT_MAP["7.1.4"], 48_000).route({"Guitar": audio}, len(audio))
+    with_sidecar = StemRouter(config, FORMAT_MAP["7.1.4"], 48_000).route(
+        {"Guitar": audio}, len(audio), movement_features=features,
+    )
+    for channel in FORMAT_MAP["7.1.4"].channels:
+        np.testing.assert_array_equal(plain[channel.value], with_sidecar[channel.value])
+
+
+def test_movement_context_includes_non_solo_stems_and_rejects_bad_sidecars():
+    audio = _audio(n=48_000)
+    stems = {"Guitar": audio, "Vocals": audio}
+    config = UpmixConfig(
+        output_format="7.1.4",
+        stem_solo=["Guitar"],
+        stem_movement={"Guitar": {"enabled": True, "depth": 0.2}},
+    )
+    router = StemRouter(config, FORMAT_MAP["7.1.4"], 48_000)
+    features = extract_feature_sidecar(stems, 48_000)
+    schedules = router._movement_schedule_map(stems, len(audio), features)
+    compiled_stems = json.loads(next(iter(schedules.values()))[0])["stems"]
+    assert {stem["stem_key"] for stem in compiled_stems} == {"Guitar", "Vocals"}
+
+    invalid = json.loads(json.dumps(features))
+    invalid["stems"][0]["features"]["energies"] = []
+    with pytest.raises(ValueError, match="movement feature"):
+        router.route(stems, len(audio), movement_features=invalid)
+
+
+def test_zero_gain_authored_object_does_not_move():
+    audio = _audio(n=48_000)
+    config = UpmixConfig(
+        output_format="7.1.4",
+        output_type="adm-bwf",
+        stem_placement={"Vocals": {"azimuth_deg": 35.0}},
+        stem_object_metadata={"Vocals": {"gain": 0.0}},
+        stem_movement={"Vocals": {"enabled": True, "depth": 0.4}},
+    )
+    programme = StemRouter(config, FORMAT_MAP["7.1.4"], 48_000).route(
+        {"Vocals": audio}, len(audio),
+    )
+    assert programme.objects
+    assert all(not obj.events for obj in programme.objects)
+
+
+def test_movement_keeps_lfe_send_static_and_moves_a_bed():
+    audio = _audio(frequency=880.0)
+    config = UpmixConfig(
+        output_format="7.1.4",
+        stem_placement={"Crowd": {
+            "azimuth_deg": 60.0,
+            "elevation_deg": 0.0,
+            "width_deg": 0.0,
+            "object_size": 0.0,
+        }},
+        stem_routing={"Crowd": {"FL": 0.8, "FR": 0.8, "LFE": 0.4}},
+        stem_movement={"Crowd": {"enabled": True, "role": "featured", "depth": 0.5}},
+    )
+    features = extract_feature_sidecar({"Crowd": audio}, 48_000)
+    plain_config = UpmixConfig(
+        output_format="7.1.4",
+        stem_routing=config.stem_routing,
+    )
+    plain = StemRouter(plain_config, FORMAT_MAP["7.1.4"], 48_000).route(
+        {"Crowd": audio}, len(audio)
+    )
+    moved = StemRouter(config, FORMAT_MAP["7.1.4"], 48_000).route(
+        {"Crowd": audio}, len(audio), movement_features=features,
+    )
+    np.testing.assert_array_equal(plain["LFE"], moved["LFE"])
+    assert any(
+        not np.array_equal(plain[label.value], moved[label.value])
+        for label in FORMAT_MAP["7.1.4"].channels
+        if label.value not in {"LFE"}
+    )
+
+
+def test_authored_object_event_render_uses_cartesian_targets():
+    audio = np.ones(48_000, dtype=np.float64)
+    fmt = FORMAT_MAP["5.1"]
+    position = upmixer_dsp.direction(35.0, 20.0)
+    cartesian = (position[0], -position[2], position[1])
+    obj = AdmObject(
+        "Guitar",
+        audio,
+        cartesian,
+        events=(AdmObjectEvent(0, cartesian),),
+    )
+    timed = render_adm_programme(
+        {label.value: np.zeros(len(audio)) for label in fmt.channels}, fmt, [obj], 48_000,
+    )
+    gains = upmixer_dsp.adm_cartesian_object_route(
+        cartesian, 0.0, False, [], [label.value for label in fmt.channels if label.value != "LFE"],
+    )
+    for channel, gain in zip(
+        (label.value for label in fmt.channels if label.value != "LFE"), gains, strict=True,
+    ):
+        np.testing.assert_allclose(timed[channel], gain * audio, atol=1e-12)
 
 
 def _reverberant(n: int = 48000, seed: int = 7) -> np.ndarray:

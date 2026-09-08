@@ -58,6 +58,7 @@ class SeparationResult:
     source_zones: dict[str, np.ndarray]
     n_samples: int
     stem_summary: list[str]
+    movement_features: dict | None = None
 
 
 def _resolve_output_sample_rate(cfg: UpmixConfig, sr: int) -> int:
@@ -136,6 +137,15 @@ def _resample_audio(
     return sized
 
 
+def _movement_feature_sidecar(
+    stems: dict[str, np.ndarray], sample_rate: int,
+) -> dict:
+    """Extract one canonical sidecar from the prepared float32 stem PCM."""
+    from upmixer.movement import extract_feature_sidecar
+
+    return extract_feature_sidecar(stems, sample_rate)
+
+
 def _resolve_input_format(
     reader: AudioReader, input_format_override: str | None
 ) -> InputFormat:
@@ -191,7 +201,7 @@ def _load_cached_stems(
     input_path: str,
     sep_sr: int,
     cache_identity: str,
-) -> dict[str, np.ndarray] | None:
+) -> tuple[dict[str, np.ndarray], int] | None:
     from upmixer.separation.stem_cache import StemCache
 
     silence_kwargs = _cache_key_kwargs(cfg)
@@ -199,15 +209,16 @@ def _load_cached_stems(
     cache_started = time.monotonic()
     result = cache.load(input_path, cache_identity, sep_sr, **silence_kwargs)
     _log.debug("  Timing cache-read=%.3fs", time.monotonic() - cache_started)
-    return None if result is None else result[0]
+    return result
 
 
 def _save_cached_stems(
     cfg: UpmixConfig,
     input_path: str,
     cache_identity: str,
-    sep_sr: int,
-    all_stems: dict[str, np.ndarray],
+    cache_rate: int,
+    stems: dict[str, np.ndarray],
+    sample_rate: int,
 ) -> None:
     from upmixer.separation.stem_cache import StemCache
 
@@ -215,9 +226,9 @@ def _save_cached_stems(
     StemCache(cfg.stem_cache_dir).save(
         input_path,
         cache_identity,
-        sep_sr,
-        all_stems,
-        sep_sr,
+        cache_rate,
+        stems,
+        sample_rate,
         is_preview=cfg.preview,
         preview_duration=cfg.preview_duration_s,
         preview_start=cfg.preview_start_s,
@@ -402,13 +413,41 @@ def separate(
     cache_identity = ""
     cache_hit_stems: dict[str, np.ndarray] | None = None
     cache_hit_sr: int | None = None
+    # Movement analysis belongs to the exact prepared PCM.  Keep this source
+    # rate beside the delivery-rate arrays so a 44.1/48/96 kHz conversion
+    # never changes the persisted decisions. The source arrays are released
+    # immediately after this sidecar is made.
+    movement_source_sr: int | None = None
+    movement_features: dict | None = None
     if not retain_private and cfg.stem_input_dir:
         from upmixer.separation.stem_store import PlainStemStore
+        from upmixer.movement import (
+            extract_feature_sidecar,
+            validate_feature_sidecar_for_stems,
+        )
 
-        stem_input_result = PlainStemStore(cfg.stem_input_dir).load()
+        prepared_store = PlainStemStore(cfg.stem_input_dir)
+        stem_input_result = prepared_store.load()
         if stem_input_result is not None:
             cache_hit_stems = stem_input_result[0]
             cache_hit_sr = stem_input_result[1]
+            movement_source_sr = cache_hit_sr
+            movement_features = prepared_store.load_features(list(cache_hit_stems))
+            if movement_features is not None:
+                try:
+                    movement_features = validate_feature_sidecar_for_stems(
+                        movement_features, cache_hit_stems, cache_hit_sr,
+                    )
+                except ValueError:
+                    movement_features = None
+            if movement_features is None:
+                movement_features = extract_feature_sidecar(
+                    cache_hit_stems, cache_hit_sr,
+                )
+                prepared_store.write_features(
+                    movement_features, stem_keys=list(cache_hit_stems),
+                )
+        del stem_input_result
     if cache_hit_stems is None:
         inference_sr = _resolve_separation_sample_rate(plan, out_sr)
     else:
@@ -425,9 +464,12 @@ def separate(
         cache_identity = stem_cache_identity(plan, cfg, inference_sr) + (
             "|stereo" if stereo_folded_input else ""
         )
-        cache_hit_stems = _load_cached_stems(
+        cached = _load_cached_stems(
             cfg, input_path, sep_sr, cache_identity
         )
+        if cached is not None:
+            cache_hit_stems, cache_hit_sr = cached
+            del cached
 
     if (audio_full.shape[1] if audio_full.ndim > 1 else 1) <= 2:
         if forced_stereo_array:
@@ -460,13 +502,12 @@ def separate(
 
     if cache_hit_stems is not None:
         all_stems = cache_hit_stems
+        movement_source_sr = cache_hit_sr or sep_sr
+        if movement_features is None and all_stems:
+            movement_features = _movement_feature_sidecar(
+                all_stems, movement_source_sr,
+            )
         cache_hit_stems = None
-        all_stems = _resample_stems(
-            all_stems,
-            cache_hit_sr or sep_sr,
-            sep_sr,
-            target_frames,
-        )
         _log.info("stem_cache_hit")
         progress("  Using cached stems...", 0.75)
     else:
@@ -486,7 +527,11 @@ def separate(
             retain_private=retain_private,
         )
 
-        all_stems = _resample_stems(all_stems, inference_sr, sep_sr, target_frames)
+        movement_source_sr = inference_sr
+        if all_stems:
+            movement_features = _movement_feature_sidecar(
+                all_stems, movement_source_sr,
+            )
 
         if (
             not retain_private
@@ -494,12 +539,30 @@ def separate(
             and not cfg.stem_input_dir
             and all_stems
         ):
-            _save_cached_stems(cfg, input_path, cache_identity, sep_sr, all_stems)
+            _save_cached_stems(
+                cfg,
+                input_path,
+                cache_identity,
+                sep_sr,
+                all_stems,
+                movement_source_sr,
+            )
 
-        if cfg.stem_output_dir and all_stems:
+    if all_stems:
+        if movement_features is None or movement_source_sr is None:
+            raise RuntimeError("movement analysis source is unavailable")
+        if cfg.stem_output_dir:
             from upmixer.separation.stem_store import PlainStemStore
 
-            PlainStemStore(cfg.stem_output_dir).write(all_stems, sep_sr)
+            # A prepared store is the canonical source for later exports, so
+            # keep the native PCM beside the native-rate sidecar. Delivery
+            # conversion happens only in the in-memory route below.
+            PlainStemStore(cfg.stem_output_dir).write(
+                all_stems, movement_source_sr, movement_features=movement_features,
+            )
+        all_stems = _resample_stems(
+            all_stems, movement_source_sr, sep_sr, target_frames,
+        )
 
     del sep_zones
 
@@ -550,4 +613,5 @@ def separate(
         source_zones=source_zones,
         n_samples=n_samples,
         stem_summary=stem_summary,
+        movement_features=movement_features,
     )

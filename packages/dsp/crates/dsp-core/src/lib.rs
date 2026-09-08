@@ -8,11 +8,12 @@ pub mod loudness;
 pub mod loudness_stream;
 pub mod mastering;
 pub mod match_reference;
+pub mod movement;
 pub mod routing;
 pub mod spatial;
 pub mod stem_cleanup;
-pub mod stem_dynamics;
 pub mod stem_dynamic_eq;
+pub mod stem_dynamics;
 pub mod stem_eq;
 pub mod stream;
 

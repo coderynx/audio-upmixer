@@ -61,7 +61,9 @@ def test_load_writes_no_hash_subdirectory(tmp_path):
     assert "stems.json" in entries
     assert "Vocals.wav" in entries
     assert "Drums__front.wav" in entries
-    assert len(entries) == 3
+    assert "movement-features.json" in entries
+    assert len(entries) == 4
+    assert PlainStemStore(str(tmp_path)).load_features(["Vocals", "Drums@front"]) is not None
 
 
 def test_above_unity_stem_is_not_clipped(tmp_path):

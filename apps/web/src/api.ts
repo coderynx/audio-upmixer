@@ -133,6 +133,8 @@ export type ProjectTrack = {
   peaks_bins: number
   peaks_stem_keys: string[]
   peaks_duration_seconds: number | null
+  /** Generation-addressed canonical movement features, when prepared. */
+  movement_features_url?: string | null
   error: string | null
   asset: Asset
   stems: ProjectStem[]
@@ -197,6 +199,7 @@ export type Configuration = {
     output_subtypes: string[]
     sample_rates: number[]
     adm_beds?: string[]
+    adm_delivery_layouts?: string[]
     binaural_profiles?: string[]
     binaural_beds?: string[]
     transaural_profiles?: string[]

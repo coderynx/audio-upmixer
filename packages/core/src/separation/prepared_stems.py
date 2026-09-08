@@ -27,6 +27,25 @@ def render_prepared_stem_bed(config: UpmixConfig, input_path: str) -> tuple[dict
     if loaded is None:
         raise RuntimeError("Prepared stem store is unavailable")
     all_stems, stem_sr = loaded
+    stem_store = PlainStemStore(config.stem_input_dir)
+    movement_features = stem_store.load_features(list(all_stems))
+    if movement_features is None:
+        from upmixer.movement import extract_feature_sidecar
+
+        movement_features = extract_feature_sidecar(all_stems, stem_sr)
+        stem_store.write_features(movement_features, stem_keys=list(all_stems))
+    else:
+        from upmixer.movement import validate_feature_sidecar_for_stems
+
+        try:
+            movement_features = validate_feature_sidecar_for_stems(
+                movement_features, all_stems, stem_sr,
+            )
+        except ValueError:
+            from upmixer.movement import extract_feature_sidecar
+
+            movement_features = extract_feature_sidecar(all_stems, stem_sr)
+            stem_store.write_features(movement_features, stem_keys=list(all_stems))
 
     reader = AudioReader(input_path)
     source_audio, source_sr = reader.read(dtype="float32")
@@ -65,7 +84,12 @@ def render_prepared_stem_bed(config: UpmixConfig, input_path: str) -> tuple[dict
             for name, audio in passthrough.items()
         }
     router = StemRouter(config, output_fmt, stem_sr)
-    programme = router.route(all_stems, n_samples, passthrough_channels=set(passthrough))
+    programme = router.route(
+        all_stems,
+        n_samples,
+        passthrough_channels=set(passthrough),
+        movement_features=movement_features,
+    )
     channels = programme.bed
     for name, audio in passthrough.items():
         if name in channels:
@@ -78,6 +102,7 @@ def render_prepared_stem_bed(config: UpmixConfig, input_path: str) -> tuple[dict
             bed,
             output_fmt,
             [replace(obj, audio=linked[str(index)]) for index, obj in enumerate(programme.objects)],
+            stem_sr,
         )
 
     channels = apply_source_anchor(

@@ -64,6 +64,19 @@ def project_view(
             track.peaks_bins = peaks_meta.get("bins", 0)
             track.peaks_stem_keys = peaks_meta.get("stems", [])
             track.peaks_duration_seconds = peaks_meta.get("duration_seconds")
+        generations = {stem_by_id[stem.id].generation for stem in track.stems}
+        generation = next(iter(generations), 0) if len(generations) <= 1 else 0
+        relative_path = (
+            stem_by_id[track.stems[0].id].relative_path
+            if track.stems else None
+        )
+        if len(generations) <= 1 and project_stems and project_stems.ensure_movement_features(
+            project.id, track.id, generation=generation, relative_path=relative_path,
+        ):
+            track.movement_features_url = (
+                f"{root_path}/api/v1/projects/{project.id}/tracks/{track.id}/movement-features"
+                f"?v={generation}"
+            )
         for stem in track.stems:
             base_url = (
                 f"{root_path}/api/v1/projects/{project.id}/tracks/{track.id}/"

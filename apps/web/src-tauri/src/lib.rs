@@ -38,9 +38,17 @@ struct NativeCapabilities {
 struct UpdateRequest {
     session_id: u64,
     params: Value,
+    #[serde(default)]
+    movement_schedule: Option<Value>,
+    #[serde(default = "movement_ready")]
+    movement_ready: bool,
     assets: NativeAssets,
     renderer: NativeRenderer,
     apple_head_tracking: bool,
+}
+
+fn movement_ready() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -123,6 +131,8 @@ fn native_preview_update(
         request.session_id,
         Command::Update {
             params: request.params,
+            movement_schedule: request.movement_schedule,
+            movement_ready: request.movement_ready,
             assets: request.assets,
             renderer: request.renderer,
             apple_head_tracking: request.apple_head_tracking,

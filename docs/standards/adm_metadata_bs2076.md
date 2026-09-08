@@ -88,7 +88,9 @@ audioTrackFormat (0..*)
 
 *(BS.2076-3 §5.13)*
 
-Primary format: `HH:MM:SS.SSSSS` (5 decimal places, hours can exceed 24).
+Primary format: `HH:MM:SS.SSSSS` (at least 5 decimal places, hours can exceed 24).
+Six decimal places preserve the integer-microsecond movement boundaries.
+See [EBU timing guidance](https://adm.ebu.io/tutorial/timing.html).
 
 Sample-accurate form: `HH:MM:SS.SSSSSSNnnnnn` where `S` denotes sample count suffix — e.g. `00:00:05.00000S48000` = 5 seconds at 48 kHz.
 
@@ -396,11 +398,11 @@ Zero UID (`ATU_00000000`) = track absent or silent — use when a bed channel po
 
 ## Not an ADM delivery target: the `stereo` layout
 
-`FORMAT_MAP["stereo"]` (BS.2051 System A) is a selectable output layout but not
-an ADM-BWF one. `AdmBwfWriter`'s `_DOLBY_ENGINE_ALLOWED_FORMATS` never admitted
-it, and `formats.validate_delivery` now rejects the combination up front so a
-stereo project fails in preflight rather than at write time. A stereo layout
-delivers a plain WAV; see
+The `stereo` layout (BS.2051 System A) is not an ADM-BWF delivery target.
+Validation rejects the combination before rendering. All six surround layouts
+are eligible through the legal-bed/fixed-object mapping in
+[Dolby Atmos profile](dolby_atmos_profile.md). A stereo layout delivers a
+plain WAV; see
 [Spatial layouts](spatial_layouts_bs775_bs2051.md)'s System A section.
 
 ---

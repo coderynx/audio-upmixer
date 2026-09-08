@@ -1,6 +1,7 @@
 """CLI flag application and resource-limit setup for the ``upmixer`` CLI."""
 
 import argparse
+import json
 import math
 
 from upmixer.config import UpmixConfig
@@ -184,6 +185,35 @@ def _apply_cli_flags(config: UpmixConfig, args: argparse.Namespace, sample_rate_
         if invalid:
             raise SystemExit(f"--stem-object-mode accepts linked-stereo or mono, got {invalid}.")
         config.stem_object_mode = {**(config.stem_object_mode or {}), **modes}
+    if args.stem_movement is not None:
+        from upmixer.movement import validate_stem_movement
+
+        movement = dict(config.stem_movement or {})
+        for assignment in args.stem_movement:
+            if "=" not in assignment:
+                raise SystemExit(
+                    "Invalid --stem-movement value. Expected 'STEM={JSON}'."
+                )
+            stem_key, encoded = assignment.split("=", 1)
+            stem_key = stem_key.strip()
+            if not stem_key:
+                raise SystemExit("Invalid --stem-movement value: stem key is empty.")
+            try:
+                entry = json.loads(encoded)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"Invalid --stem-movement JSON for '{stem_key}': {exc.msg}.") from exc
+            if not isinstance(entry, dict):
+                raise SystemExit(f"--stem-movement value for '{stem_key}' must be a JSON object.")
+            current = movement.get(stem_key)
+            if current is None and "@" in stem_key:
+                current = movement.get(stem_key.split("@", 1)[0])
+            if current is not None and not isinstance(current, dict):
+                raise SystemExit(f"Manifest movement entry for '{stem_key}' must be an object.")
+            movement[stem_key] = {**(current or {}), **entry}
+        try:
+            config.stem_movement = validate_stem_movement(movement)
+        except ValueError as exc:
+            raise SystemExit(f"Invalid stem movement settings: {exc}") from exc
     for arg, field in (
         (args.stem_ambient_rear, "stem_ambient_rear"),
         (args.stem_ambient_height, "stem_ambient_height"),

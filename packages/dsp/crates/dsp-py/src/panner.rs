@@ -128,6 +128,41 @@ fn adm_object_routes(
     (left, right)
 }
 
+/// Route one already-serialized ADM Cartesian endpoint through the shared
+/// BS.2127 implementation. Keeping the position Cartesian preserves radius
+/// and height exactly across Python, Rust, and ADM renderers.
+#[pyfunction]
+fn adm_cartesian_object_route(
+    position: (f64, f64, f64),
+    object_size: f64,
+    channel_lock: bool,
+    zone_exclusion: Vec<String>,
+    channels: Vec<String>,
+) -> PyResult<Vec<f64>> {
+    if position.0.is_nan()
+        || position.1.is_nan()
+        || position.2.is_nan()
+        || !(-1.0..=1.0).contains(&position.0)
+        || !(-1.0..=1.0).contains(&position.1)
+        || !(-1.0..=1.0).contains(&position.2)
+        || !object_size.is_finite()
+        || !(0.0..=1.0).contains(&object_size)
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "ADM Cartesian object position and size are outside their finite ranges",
+        ));
+    }
+    let zones = as_refs(&zone_exclusion);
+    Ok(
+        panner::PannerLayout::new(&as_refs(&channels)).cartesian_object_route(
+            [position.0, position.1, position.2],
+            object_size,
+            channel_lock,
+            &zones,
+        ),
+    )
+}
+
 #[pyfunction]
 fn project_placement(
     azimuth_deg: f64,
@@ -189,6 +224,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(placement_route, m)?)?;
     m.add_function(wrap_pyfunction!(object_routes, m)?)?;
     m.add_function(wrap_pyfunction!(adm_object_routes, m)?)?;
+    m.add_function(wrap_pyfunction!(adm_cartesian_object_route, m)?)?;
     m.add_function(wrap_pyfunction!(project_placement, m)?)?;
     m.add_function(wrap_pyfunction!(build_stem_routing, m)?)?;
     m.add_function(wrap_pyfunction!(fold_route_to_stereo, m)?)?;

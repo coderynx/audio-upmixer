@@ -66,6 +66,47 @@ def test_native_separation_uses_model_config_rate_and_delivery_length(tmp_path: 
     assert len(result.all_stems["Vocals"]) == round(480 * 96_000 / 48_000)
 
 
+def test_native_cache_reuses_canonical_source_rate_for_movement(tmp_path: Path):
+    source = _source(tmp_path / "source.wav")
+    cache_dir = tmp_path / "cache"
+    prepared_dir = tmp_path / "prepared"
+    seen: list[tuple[int, int]] = []
+
+    def fake_execute(_get_separator, plan, sep_path, sep_sr, *_args, **_kwargs):
+        audio, source_sr = sf.read(sep_path, dtype="float32", always_2d=True)
+        seen.append((source_sr, sep_sr))
+        return {
+            name: np.ones((len(audio), 2), dtype=np.float32)
+            for name in plan.requested_stems
+        }
+
+    config = UpmixConfig(
+        stems=["Vocals"],
+        output_sample_rate=96_000,
+        stem_cache_dir=str(cache_dir),
+        stem_output_dir=str(prepared_dir),
+        stem_silence_skip=False,
+    )
+    pipeline = StemUpmixPipeline(config)
+    try:
+        with patch(
+            "upmixer.separation.stem_pipeline_separate.execute_plan",
+            side_effect=fake_execute,
+        ):
+            first = pipeline._separate(source, None, lambda *_: None)
+            second = pipeline._separate(source, None, lambda *_: None)
+    finally:
+        pipeline.close()
+
+    assert seen == [(44_100, 44_100)]
+    assert first.movement_features == second.movement_features
+    assert first.movement_features["sample_rate"] == 44_100
+    stored, stored_rate = PlainStemStore(str(prepared_dir)).load()
+    assert stored_rate == 44_100
+    assert PlainStemStore(str(prepared_dir)).load_features(list(stored)) == first.movement_features
+    assert len(second.all_stems["Vocals"]) == round(480 * 96_000 / 48_000)
+
+
 def test_native_separation_keeps_silence_skip_zone_at_native_rate(tmp_path: Path):
     source_path = tmp_path / "active-source.wav"
     source_audio = np.zeros((4_800, 2), dtype=np.float32)

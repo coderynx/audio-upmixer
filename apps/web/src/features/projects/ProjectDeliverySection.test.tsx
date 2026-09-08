@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ProjectDeliverySection } from "./ProjectDeliverySection";
 import { defaultProjectManifest, type Manifest } from "@/lib/manifest";
+import { ADM_DELIVERY_LAYOUTS } from "@/lib/layouts";
 
 function renderSection(format: Partial<Manifest["format"]> = {}, layout = "7.1.4") {
   const onChange = vi.fn();
@@ -38,6 +39,13 @@ describe("ProjectDeliverySection", () => {
     renderSection({ type }, layout);
     expect(
       within(screen.getByRole("combobox", { name: "Format" })).getByText(label),
+    ).toBeInTheDocument();
+  });
+
+  it.each(ADM_DELIVERY_LAYOUTS)("keeps ADM available on the %s delivery layout", (layout) => {
+    renderSection({ type: "adm-bwf" }, layout);
+    expect(
+      within(screen.getByRole("combobox", { name: "Format" })).getByText("ADM Broadcast Wave Format"),
     ).toBeInTheDocument();
   });
 

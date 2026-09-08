@@ -128,6 +128,118 @@ function render(wasm, config, stem) {
   return channels.map((channel) => Float32Array.from(channel));
 }
 
+function installMovementSchedule(wasm, engine, schedule, paramsPtr, paramsLength) {
+  const encoded = new TextEncoder().encode(JSON.stringify(schedule));
+  const schedulePtr = wasm.dsp_alloc(encoded.length);
+  new Uint8Array(wasm.memory.buffer, schedulePtr, encoded.length).set(encoded);
+  try {
+    if (!wasm.dsp_engine_set_params_and_movement(engine, paramsPtr, paramsLength, schedulePtr, encoded.length)) {
+      throw new Error("WASM movement schedule installation failed");
+    }
+  } finally {
+    wasm.dsp_free(schedulePtr, encoded.length);
+  }
+}
+
+function renderMovement(wasm, config, schedule, audio, keys, channels, blockSize) {
+  // The schedule is deliberately absent from the JSON params. It crosses the
+  // same sibling buffer setter used by the worklet so this parity check also
+  // exercises the live transport boundary.
+  const { movement_schedule: _movementSchedule, ...engineConfig } = config;
+  const encoded = new TextEncoder().encode(JSON.stringify(engineConfig));
+  const configPtr = wasm.dsp_alloc(encoded.length);
+  new Uint8Array(wasm.memory.buffer, configPtr, encoded.length).set(encoded);
+  const engine = wasm.dsp_engine_new(SAMPLE_RATE, configPtr, encoded.length);
+  if (!engine) throw new Error("WASM rejected movement parity parameters");
+  installMovementSchedule(wasm, engine, schedule, configPtr, encoded.length);
+  wasm.dsp_free(configPtr, encoded.length);
+  for (const key of keys) {
+    const stem = audio[key];
+    const left = Float32Array.from(stem.left);
+    const right = Float32Array.from(stem.right);
+    const leftMem = writeF32(wasm, left);
+    const rightMem = writeF32(wasm, right);
+    wasm.dsp_engine_add_stem(engine, leftMem.ptr, rightMem.ptr, left.length);
+    wasm.dsp_free(leftMem.ptr, leftMem.bytes);
+    wasm.dsp_free(rightMem.ptr, rightMem.bytes);
+  }
+  const outBytes = channels.length * blockSize * 4;
+  const outPtr = wasm.dsp_alloc(outBytes);
+  const output = channels.map(() => []);
+  for (;;) {
+    const written = wasm.dsp_engine_render(engine, outPtr, channels.length, blockSize);
+    if (!written) break;
+    const block = new Float32Array(wasm.memory.buffer, outPtr, channels.length * blockSize);
+    for (let channel = 0; channel < channels.length; channel += 1) {
+      for (let frame = 0; frame < written; frame += 1) {
+        output[channel].push(block[channel * blockSize + frame]);
+      }
+    }
+  }
+  wasm.dsp_free(outPtr, outBytes);
+  wasm.dsp_engine_free(engine);
+  return output.map((channel) => Float32Array.from(channel));
+}
+
+function compileMovement(wasm, request) {
+  const encoded = new TextEncoder().encode(JSON.stringify(request));
+  const requestPtr = wasm.dsp_alloc(encoded.length);
+  new Uint8Array(wasm.memory.buffer, requestPtr, encoded.length).set(encoded);
+  try {
+    const handle = wasm.dsp_movement_compile_json(requestPtr, encoded.length);
+    if (!handle) throw new Error("WASM movement compiler returned no result");
+    try {
+      const resultPtr = wasm.dsp_movement_result_ptr(handle);
+      const resultLength = wasm.dsp_movement_result_len(handle);
+      if (!resultPtr || !resultLength) throw new Error("WASM movement compiler returned an empty result");
+      const result = JSON.parse(new TextDecoder().decode(
+        new Uint8Array(wasm.memory.buffer, resultPtr, resultLength),
+      ));
+      if (typeof result.error === "string") throw new Error(result.error);
+      return result;
+    } finally {
+      wasm.dsp_movement_result_free(handle);
+    }
+  } finally {
+    wasm.dsp_free(requestPtr, encoded.length);
+  }
+}
+
+function movementDifference(expected, actual, path = "$") {
+  if (expected === null || actual === null) {
+    if (expected !== actual) throw new Error(`${path}: movement result shape mismatch`);
+    return { maxAbs: 0, path };
+  }
+  if (typeof expected === "number" && typeof actual === "number") {
+    return { maxAbs: Math.abs(expected - actual), path };
+  }
+  if (typeof expected !== typeof actual) {
+    throw new Error(`${path}: movement result shape mismatch`);
+  }
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(actual) || expected.length !== actual.length) {
+      throw new Error(`${path}: movement result length mismatch`);
+    }
+    return expected.reduce((best, value, index) => {
+      const next = movementDifference(value, actual[index], `${path}[${index}]`);
+      return next.maxAbs > best.maxAbs ? next : best;
+    }, { maxAbs: 0, path });
+  }
+  if (typeof expected === "object") {
+    const expectedKeys = Object.keys(expected).sort();
+    const actualKeys = Object.keys(actual).sort();
+    if (expectedKeys.join("\0") !== actualKeys.join("\0")) {
+      throw new Error(`${path}: movement result fields mismatch`);
+    }
+    return expectedKeys.reduce((best, key) => {
+      const next = movementDifference(expected[key], actual[key], `${path}.${key}`);
+      return next.maxAbs > best.maxAbs ? next : best;
+    }, { maxAbs: 0, path });
+  }
+  if (expected !== actual) throw new Error(`${path}: movement result value mismatch`);
+  return { maxAbs: 0, path };
+}
+
 const fixture = JSON.parse(execFileSync("uv", ["run", "python", resolve(webRoot, "scripts/routing-parity-fixture.py")], {
   cwd: repoRoot,
   encoding: "utf8",
@@ -176,5 +288,111 @@ for (const [name, expectedCase] of Object.entries(fixture.cases)) {
   const ok = maxAbs <= tolerance;
   failed ||= !ok;
   console.log(`${ok ? "ok" : "FAIL"} ${name.padEnd(14)} route_scale ${expectedCase.route_scale.toFixed(9)} rear_peak ${rearPeak.toExponential(3)} height_peak ${heightPeak.toExponential(3)} max_abs ${maxAbs.toExponential(3)} rms ${rms.toExponential(3)}`);
+}
+
+for (const [layout, expectedCase] of Object.entries(fixture.movement_cases?.layouts ?? {})) {
+  const actual = compileMovement(wasm, expectedCase.request);
+  const comparison = movementDifference(expectedCase.schedule, actual);
+  if (comparison.maxAbs > tolerance) {
+    throw new Error(`movement ${layout}: max_abs ${comparison.maxAbs} at ${comparison.path}`);
+  }
+  console.log(`ok movement-${layout.padEnd(6)} canonical schedule max_abs ${comparison.maxAbs.toExponential(3)}`);
+  const channels = expectedCase.request.channels;
+  for (const [caseName, movementCase] of Object.entries(expectedCase.cases ?? {})) {
+    for (const blockSize of expectedCase.block_sizes ?? []) {
+      const rendered = renderMovement(
+        wasm,
+        movementCase.params,
+        expectedCase.schedule,
+        fixture.movement_cases.audio,
+        expectedCase.audio_keys,
+        channels,
+        blockSize,
+      );
+      let maxAbs = 0;
+      let maxChannel = 0;
+      let maxFrame = 0;
+      let maxExpected = 0;
+      let maxActual = 0;
+      let sumSq = 0;
+      let count = 0;
+      for (let channel = 0; channel < channels.length; channel += 1) {
+        const expected = Float32Array.from(movementCase.expected[channel]);
+        if (expected.length !== rendered[channel].length) {
+          throw new Error(`movement ${layout}/${caseName}/${blockSize}: frame count mismatch`);
+        }
+        for (let frame = 0; frame < expected.length; frame += 1) {
+          const delta = rendered[channel][frame] - expected[frame];
+          if (Math.abs(delta) > maxAbs) {
+            maxAbs = Math.abs(delta);
+            maxChannel = channel;
+            maxFrame = frame;
+            maxExpected = expected[frame];
+            maxActual = rendered[channel][frame];
+          }
+          sumSq += delta * delta;
+          count += 1;
+        }
+      }
+      const rms = Math.sqrt(sumSq / Math.max(1, count));
+      const ok = maxAbs <= tolerance;
+      failed ||= !ok;
+      console.log(
+        `${ok ? "ok" : "FAIL"} movement-${layout.padEnd(6)} ${caseName.padEnd(12)} ` +
+        `block ${String(blockSize).padStart(4)} ragged max_abs ${maxAbs.toExponential(3)} ` +
+        `rms ${rms.toExponential(3)}` +
+        (ok ? "" : ` at ${channels[maxChannel]}[${maxFrame}] expected ${maxExpected.toExponential(3)} actual ${maxActual.toExponential(3)}`),
+      );
+    }
+  }
+  for (const [lockName, collapseModes] of Object.entries(expectedCase.collapse_cases ?? {})) {
+    for (const [mode, collapseCase] of Object.entries(collapseModes)) {
+      for (const blockSize of [127, 511, 1024]) {
+        const rendered = renderMovement(
+          wasm,
+          collapseCase.params,
+          expectedCase.schedule,
+          fixture.movement_cases.audio,
+          expectedCase.audio_keys,
+          ["FL", "FR"],
+          blockSize,
+        );
+        let maxAbs = 0;
+        let maxChannel = 0;
+        let maxFrame = 0;
+        let maxExpected = 0;
+        let maxActual = 0;
+        let sumSq = 0;
+        let count = 0;
+        for (let channel = 0; channel < 2; channel += 1) {
+          const expected = Float32Array.from(collapseCase.expected[channel]);
+          if (expected.length !== rendered[channel].length) {
+            throw new Error(`movement ${layout}/${lockName}/${mode}/${blockSize}: frame count mismatch`);
+          }
+          for (let frame = 0; frame < expected.length; frame += 1) {
+            const delta = rendered[channel][frame] - expected[frame];
+            if (Math.abs(delta) > maxAbs) {
+              maxAbs = Math.abs(delta);
+              maxChannel = channel;
+              maxFrame = frame;
+              maxExpected = expected[frame];
+              maxActual = rendered[channel][frame];
+            }
+            sumSq += delta * delta;
+            count += 1;
+          }
+        }
+        const rms = Math.sqrt(sumSq / Math.max(1, count));
+        const ok = maxAbs <= tolerance;
+        failed ||= !ok;
+        console.log(
+          `${ok ? "ok" : "FAIL"} movement-${layout.padEnd(6)} ${lockName.padEnd(12)} ` +
+          `${mode.padEnd(9)} block ${String(blockSize).padStart(4)} collapse ` +
+          `max_abs ${maxAbs.toExponential(3)} rms ${rms.toExponential(3)}` +
+          (ok ? "" : ` at [${maxChannel}][${maxFrame}] expected ${maxExpected.toExponential(3)} actual ${maxActual.toExponential(3)}`),
+        );
+      }
+    }
+  }
 }
 if (failed) process.exit(1);

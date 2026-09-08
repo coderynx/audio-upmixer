@@ -374,6 +374,26 @@ class TestSingleAssetParse:
         _, jobs = parse_manifest(data)
         assert jobs[0].config.get("format") == "7.1.4"
 
+    def test_stem_movement_round_trips_after_boundary_validation(self):
+        data = _minimal(mixing={"stem_movement": {
+            "Guitar": {"enabled": True, "depth": 0.3},
+        }})
+        validate_manifest(data)
+        _, jobs = parse_manifest(data)
+        assert jobs[0].config["stem_movement"] == {
+            "Guitar": {"enabled": True, "depth": 0.3},
+        }
+
+    @pytest.mark.parametrize("entry", [
+        {"enabled": 1},
+        {"depth": 1.1},
+        {"start_s": 2.0, "end_s": 2.0},
+        {"unknown": True},
+    ])
+    def test_stem_movement_rejects_invalid_entries(self, entry):
+        with pytest.raises(ManifestError, match="stem_movement"):
+            validate_manifest(_minimal(mixing={"stem_movement": {"Guitar": entry}}))
+
     def test_height_cutoff_maps_separately_from_legacy_crossover(self):
         data = _minimal(mixing={
             "stem_ambient_trim_db": {"Vocals": 3.0},

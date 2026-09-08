@@ -7,6 +7,10 @@ export const OUTPUT_TYPES = ["multichannel", "adm-bwf", "binaural", "transaural"
 
 export const DOLBY_ADM_BEDS = ["5.1", "7.1", "7.1.2"];
 
+/** Requested surround layouts accepted by the ADM delivery adapter. This is
+ * intentionally separate from the legal DirectSpeakers bed list above. */
+export const ADM_DELIVERY_LAYOUTS = ["5.1", "7.1", "5.1.2", "5.1.4", "7.1.2", "7.1.4"];
+
 export const STEREO_LAYOUT = "stereo";
 
 /** Two-channel delivery: no centre, surrounds, height or LFE, so no bed
@@ -21,7 +25,7 @@ export function isStereoLayout(layout: string | undefined): boolean {
  * projects; bed-only types (binaural/transaural) are handled there since the
  * bed lists come from the server. */
 export function deliveryTypeForLayout(layout: string, type: string): string {
-  if (type === "adm-bwf" && !DOLBY_ADM_BEDS.includes(layout)) return "multichannel";
+  if (type === "adm-bwf" && !ADM_DELIVERY_LAYOUTS.includes(layout)) return "multichannel";
   return isStereoLayout(layout) && type !== "multichannel" ? "multichannel" : type;
 }
 

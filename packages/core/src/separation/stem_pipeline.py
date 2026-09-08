@@ -318,7 +318,15 @@ class StemUpmixPipeline:
             AudioWriter(output_path, out_sr, cfg).write(channels)
 
         if cfg.downmix_output_path and output_fmt.n_channels > 2:
-            self._write_downmix(channels, out_sr)
+            downmix_channels = channels
+            if cfg.output_type == "adm-bwf" and objects:
+                # Companion downmix QC measures the complete ADM programme,
+                # including authored timed objects, while the BWF itself keeps
+                # the bed and object tracks separate.
+                downmix_channels = render_adm_programme(
+                    channels, output_fmt, objects, out_sr,
+                )
+            self._write_downmix(downmix_channels, out_sr)
 
         return channels, output_fmt, mastering_result
 
@@ -416,6 +424,7 @@ class StemUpmixPipeline:
             all_stems,
             n_samples,
             passthrough_channels=set(passthrough_resampled.keys()),
+            movement_features=sep.movement_features,
         )
         channels = programme.bed
         objects = programme.objects
@@ -435,7 +444,7 @@ class StemUpmixPipeline:
                 replace(obj, audio=linked_channels[str(index)])
                 for index, obj in enumerate(objects or [])
             ]
-            return render_adm_programme(bed, output_fmt, rendered_objects)
+            return render_adm_programme(bed, output_fmt, rendered_objects, sep_sr)
 
         if cfg.stem_source_anchor_strength > 0.0 and not objects:
             _progress("  Applying source anchor...", 0.83)

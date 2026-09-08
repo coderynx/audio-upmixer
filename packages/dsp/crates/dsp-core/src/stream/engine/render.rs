@@ -69,10 +69,11 @@ impl PreviewEngine {
                 continue;
             };
             let target_gain = if sp.enabled {
-                10.0_f64.powf(sp.rebalance_db / 20.0) * self.route_scale(stem_index)
+                10.0_f64.powf(sp.rebalance_db / 20.0)
             } else {
                 0.0
             };
+            let target_route_scale = self.route_scale(stem_index);
             if !sp.enabled && self.stem_gain[stem_index].is_settled(0.0) {
                 // Already faded out and staying muted — skip the routing and
                 // EQ work entirely, same as the old hard cut did.
@@ -81,15 +82,17 @@ impl PreviewEngine {
             self.route_stem_block(stem_index, start, count);
 
             let smoother = &mut self.stem_gain[stem_index];
+            let route_scale_smoother = &mut self.stem_route_scale[stem_index];
             let route = &self.graph.routes[stem_index];
             let shaped: [&[f64]; SIGNALS] = std::array::from_fn(|i| route.signal(i));
             let mix = &self.graph.stem_mix_routes[stem_index];
             let ambient = route.has_ambient().then_some(&mix.ambient);
             let ambient_texture = route.has_ambient().then_some(&mix.ambient_texture);
 
-            if !self.params.spatial_downmix_lock
-                || self.graph.authored_channels > self.params.speakers.len()
-            {
+            if !self.params.spatial_downmix_lock {
+                let steady_gains = (smoother.current() == target_gain
+                    && route_scale_smoother.current() == target_route_scale)
+                    .then_some((target_gain, target_route_scale));
                 assemble_stem_into(
                     mix,
                     route,
@@ -98,39 +101,108 @@ impl PreviewEngine {
                     StemAssemblyPolicy::Render,
                     &mut bed,
                     Some(&mut lfe_sum),
+                    self.params
+                        .movement_schedule
+                        .as_ref()
+                        .and_then(|schedule| schedule.stem(stem_index)),
+                    start,
+                    self.sample_rate,
+                    steady_gains,
                     || smoother.tick(target_gain),
+                    || route_scale_smoother.tick(target_route_scale),
                 );
             } else {
                 let mut routed = vec![vec![0.0; count]; bed.len()];
+                // Authored object channels are projected once in
+                // `render_authored_into`. Keep their dynamic projection here
+                // only to calculate the lock correction, then subtract it
+                // back before the authored render is appended.
+                let mut object_routed = mix
+                    .objects
+                    .as_ref()
+                    .map(|_| vec![vec![0.0; count]; bed.len()]);
                 let mut input_left = vec![0.0; count];
                 let mut input_right = vec![0.0; count];
+                let movement = self
+                    .params
+                    .movement_schedule
+                    .as_ref()
+                    .and_then(|schedule| schedule.stem(stem_index));
+                let mut movement_gains = vec![0.0; self.params.speakers.len()];
                 for i in 0..count {
                     let gain = smoother.tick(target_gain);
+                    let route_scale = route_scale_smoother.tick(target_route_scale);
+                    let routed_gain = gain * route_scale;
+                    if let Some(schedule) = movement {
+                        schedule.sample_into_at(
+                            (start as f64 + i as f64) * 1_000_000.0
+                                / self.sample_rate.max(1) as f64,
+                            false,
+                            &mut movement_gains,
+                        );
+                    }
                     input_left[i] = shaped[STEM_INPUT][i] * gain;
                     input_right[i] = shaped[STEM_INPUT + 1][i] * gain;
                     if let Some(objects) = &mix.objects {
                         for object in objects {
-                            bed[object.authored_channel][i] += shaped[object.signal][i] * gain;
+                            let sample = shaped[object.signal][i];
+                            bed[object.authored_channel][i] += sample * routed_gain;
+                            if let Some(object_routed) = &mut object_routed {
+                                if let Some(schedule) = movement {
+                                    schedule.sample_into_at(
+                                        (start as f64 + i as f64) * 1_000_000.0
+                                            / self.sample_rate.max(1) as f64,
+                                        object.endpoint == 1,
+                                        &mut movement_gains,
+                                    );
+                                    for (channel, weight) in
+                                        movement_gains.iter().copied().enumerate()
+                                    {
+                                        if weight > 0.0 && channel < self.params.speakers.len() {
+                                            let contribution =
+                                                sample * routed_gain * object.gain * weight;
+                                            routed[channel][i] += contribution;
+                                            object_routed[channel][i] += contribution;
+                                        }
+                                    }
+                                } else {
+                                    for &(channel, weight) in &object.speakers {
+                                        let contribution =
+                                            sample * routed_gain * object.gain * weight;
+                                        routed[channel][i] += contribution;
+                                        object_routed[channel][i] += contribution;
+                                    }
+                                }
+                            }
                         }
                     }
                     if mix.lfe_weight != 0.0 {
                         lfe_sum[i] +=
                             shaped[shape_index(SendShape::Mono)][i] * mix.lfe_weight * gain;
                     }
-                    for (channel, signal, weight) in &mix.regular {
-                        routed[*channel][i] += shaped[*signal][i]
-                            * weight
-                            * self.params.speakers[*channel].group_gain
-                            * gain;
+                    if movement.is_some() {
+                        for (channel, signal, group_gain) in &mix.dynamic_regular {
+                            routed[*channel][i] += shaped[*signal][i]
+                                * movement_gains[*channel]
+                                * group_gain
+                                * routed_gain;
+                        }
+                    } else {
+                        for (channel, signal, weight) in &mix.regular {
+                            routed[*channel][i] += shaped[*signal][i]
+                                * weight
+                                * self.params.speakers[*channel].group_gain
+                                * routed_gain;
+                        }
                     }
                     if let Some(feeds) = ambient {
                         for (channel, slot, weight) in feeds {
-                            routed[*channel][i] += shaped[*slot][i] * weight * gain;
+                            routed[*channel][i] += shaped[*slot][i] * weight * routed_gain;
                         }
                     }
                     if let Some(feeds) = ambient_texture {
                         for (channel, slot, weight) in feeds {
-                            routed[*channel][i] += shaped[*slot][i] * weight * gain;
+                            routed[*channel][i] += shaped[*slot][i] * weight * routed_gain;
                         }
                     }
                 }
@@ -145,9 +217,13 @@ impl PreviewEngine {
                     self.params.surround_downmix_coeff,
                     self.params.height_downmix_coeff,
                 );
-                for (target, source) in bed.iter_mut().zip(routed) {
-                    for (target, source) in target.iter_mut().zip(source) {
-                        *target += source;
+                for (channel, (target, source)) in bed.iter_mut().zip(routed).enumerate() {
+                    let object = object_routed
+                        .as_ref()
+                        .and_then(|routed| routed.get(channel));
+                    for (index, (target, source)) in target.iter_mut().zip(source).enumerate() {
+                        let object_source = object.map_or(0.0, |values| values[index]);
+                        *target += source - object_source;
                     }
                 }
             }
@@ -169,7 +245,7 @@ impl PreviewEngine {
             let object_sources = self.graph.authored_channels > self.params.speakers.len();
             let mut detector = object_sources.then(|| {
                 let mut rendered = std::mem::take(&mut self.graph.speaker_render_scratch);
-                self.render_authored_into(&bed, &mut rendered);
+                self.render_authored_into(start, &bed, &mut rendered);
                 rendered
             });
             if let Some(dyn_eq) = &mut self.graph.dyn_eq {
@@ -181,7 +257,7 @@ impl PreviewEngine {
             }
             let targets = self.non_lfe();
             if let Some(rendered) = &mut detector {
-                self.render_authored_into(&bed, rendered);
+                self.render_authored_into(start, &bed, rendered);
             }
             let detector_channels = if object_sources {
                 (0..self.params.speakers.len())
@@ -235,19 +311,61 @@ impl PreviewEngine {
         unify.max(decorr)
     }
 
-    fn render_authored_into(&self, authored: &[Vec<f64>], rendered: &mut Vec<Vec<f64>>) {
+    fn render_authored_into(
+        &self,
+        start_frame: usize,
+        authored: &[Vec<f64>],
+        rendered: &mut Vec<Vec<f64>>,
+    ) {
         let n_speakers = self.params.speakers.len();
         rendered.resize_with(n_speakers, Vec::new);
         for (target, source) in rendered.iter_mut().zip(authored) {
             target.clear();
             target.extend_from_slice(source);
         }
-        for route in &self.graph.stem_mix_routes {
+        for (stem_index, route) in self.graph.stem_mix_routes.iter().enumerate() {
+            let movement = self
+                .params
+                .movement_schedule
+                .as_ref()
+                .and_then(|schedule| schedule.stem(stem_index));
             for object in route.objects.iter().flatten() {
                 let audio = &authored[object.authored_channel];
-                for &(speaker, gain) in &object.speakers {
-                    for (target, source) in rendered[speaker].iter_mut().zip(audio) {
-                        *target += gain * object.gain * source;
+                if let Some(schedule) = movement {
+                    let us_per_sample = 1_000_000.0 / self.sample_rate.max(1) as f64;
+                    if let Some(gains) = schedule.constant_gains_for_range(
+                        start_frame as f64 * us_per_sample,
+                        (start_frame + audio.len().saturating_sub(1)) as f64 * us_per_sample,
+                        object.endpoint == 1,
+                    ) {
+                        for (speaker, gain) in gains.iter().copied().enumerate() {
+                            if gain > 0.0 {
+                                for (target, source) in rendered[speaker].iter_mut().zip(audio) {
+                                    *target += gain * object.gain * source;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    let mut gains = vec![0.0; n_speakers];
+                    for (sample_index, source) in audio.iter().copied().enumerate() {
+                        schedule.sample_into_at(
+                            (start_frame as f64 + sample_index as f64) * 1_000_000.0
+                                / self.sample_rate.max(1) as f64,
+                            object.endpoint == 1,
+                            &mut gains,
+                        );
+                        for (speaker, gain) in gains.iter().copied().enumerate() {
+                            if gain > 0.0 {
+                                rendered[speaker][sample_index] += gain * object.gain * source;
+                            }
+                        }
+                    }
+                } else {
+                    for &(speaker, gain) in &object.speakers {
+                        for (target, source) in rendered[speaker].iter_mut().zip(audio) {
+                            *target += gain * object.gain * source;
+                        }
                     }
                 }
             }
@@ -357,7 +475,7 @@ impl PreviewEngine {
         }
         if self.graph.authored_channels > self.params.speakers.len() {
             let mut rendered = std::mem::take(&mut self.graph.speaker_render_scratch);
-            self.render_authored_into(&window, &mut rendered);
+            self.render_authored_into(start, &window, &mut rendered);
             for (speaker, block) in rendered.iter().enumerate() {
                 if self.params.lfe_index != Some(speaker) {
                     self.post.channels[self.graph.rendered_channels[speaker]]

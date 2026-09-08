@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { SwitchRow } from "@/components/forms/fields";
 import { MasteringSection } from "@/features/composer/sections/MasteringSection";
 import { isStereoLayout, outputModeForLayoutSwitch } from "@/lib/layouts";
-import { type Manifest, type StemDynamicEqSettings, type StemDynamicsSettings, type StemEqSettings } from "@/lib/manifest";
+import { type Manifest, type StemDynamicEqSettings, type StemDynamicsSettings, type StemEqSettings, type StemMovementSettings } from "@/lib/manifest";
 import { isBedStem } from "@/lib/stems";
 import { useRuntime } from "@/runtime";
 import { cn } from "@/lib/utils";
@@ -90,7 +90,14 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
     [configuration, selectedLayout],
   );
   const realization = useTrackLayoutRealization({
-    projectId, projectManifest: manifest, track: selected, layout: selectedLayout, channels, save: saveTrack, onError: setError,
+    projectId,
+    projectManifest: manifest,
+    track: selected,
+    layout: selectedLayout,
+    channels,
+    movementPresets: configuration?.constants?.movement?.presets,
+    save: saveTrack,
+    onError: setError,
   });
   const trackManifest = realization.manifest;
   const updateTrackManifest = realization.update;
@@ -167,7 +174,8 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
     mastering: monitoredMastering,
     routing: trackManifest.routing,
     layoutChannels: channels,
-  }) : null, [channels, monitoredMastering, previewStems, selected?.source_preview_url, trackManifest]);
+    movementFeaturesUrl: selected?.movement_features_url || null,
+  }) : null, [channels, monitoredMastering, previewStems, selected?.movement_features_url, selected?.source_preview_url, trackManifest]);
   const preview = useStemPreview(previewProgramme, {
     outputMode,
     spatialProfile,
@@ -283,14 +291,25 @@ export function ProjectDetailPage({ configuration }: { configuration: Configurat
       stem_object_mode: { ...trackManifest.mixing.stem_object_mode, [stem]: mode },
     } }, true);
   };
+  const movementFor = (stem: string): StemMovementSettings | undefined => {
+    const base = stem.split("@", 1)[0];
+    return trackManifest?.mixing.stem_movement[stem] ?? trackManifest?.mixing.stem_movement[base];
+  };
+  const updateMovement = (stem: string, movement: StemMovementSettings) => {
+    if (!trackManifest) return;
+    updateTrackManifest({ ...trackManifest, mixing: {
+      ...trackManifest.mixing,
+      stem_movement: { ...trackManifest.mixing.stem_movement, [stem]: movement },
+    } }, true);
+  };
   const updatePlacement = realization.setPlacement;
   const objectPannerForStem = (stem: string, ariaLabel = "Object panner") => {
     if (!trackManifest || isBedStem(stem)) return null;
-    return <ObjectPannerWindow key={`panner-${stem}`} stemName={stem} placement={placementFor(stem)} maxElevationDeg={maxElevationDeg} objectMode={trackManifest.mixing.stem_object_mode[stem] ?? "linked-stereo"} channels={channels} ambientRear={trackManifest.mixing.stem_ambient_rear[stem] ?? 0} ambientHeight={trackManifest.mixing.stem_ambient_height[stem] ?? 0} ambientTrimDb={trackManifest.mixing.stem_ambient_trim_db[stem] ?? 0} heightTexture={trackManifest.mixing.stem_height_texture[stem] ?? 0} ambientHeightCutoffHz={trackManifest.mixing.stem_ambient_height_cutoff_hz[stem] ?? 2000} ambientHeightCrossoverHz={trackManifest.mixing.stem_ambient_height_crossover_hz[stem] ?? 2000} ariaLabel={ariaLabel} onPlacement={(next) => updatePlacement(stem, next)} onObjectMode={(mode) => setStemObjectMode(stem, mode)} onAmbient={(patch) => updateAmbient(stem, patch)} />;
+    return <ObjectPannerWindow key={`panner-${stem}`} stemName={stem} placement={placementFor(stem)} maxElevationDeg={maxElevationDeg} objectMode={trackManifest.mixing.stem_object_mode[stem] ?? "linked-stereo"} channels={channels} ambientRear={trackManifest.mixing.stem_ambient_rear[stem] ?? 0} ambientHeight={trackManifest.mixing.stem_ambient_height[stem] ?? 0} ambientTrimDb={trackManifest.mixing.stem_ambient_trim_db[stem] ?? 0} heightTexture={trackManifest.mixing.stem_height_texture[stem] ?? 0} ambientHeightCutoffHz={trackManifest.mixing.stem_ambient_height_cutoff_hz[stem] ?? 2000} ambientHeightCrossoverHz={trackManifest.mixing.stem_ambient_height_crossover_hz[stem] ?? 2000} movement={movementFor(stem)} movementDefaults={engineConstants?.movementDefaults} ariaLabel={ariaLabel} onPlacement={(next) => updatePlacement(stem, next)} onObjectMode={(mode) => setStemObjectMode(stem, mode)} onAmbient={(patch) => updateAmbient(stem, patch)} onMovement={(next) => updateMovement(stem, next)} />;
   };
   const bedPannerForStem = (stem: string, ariaLabel = "Bed panner") => {
     if (!trackManifest || !isBedStem(stem)) return null;
-    return <BedPannerWindow key={`bed-panner-${stem}`} stemName={stem} placement={placementFor(stem)} route={routing[stem] || {}} channels={channels} inputChannels={stemChannelCounts[stem] ?? 1} maxElevationDeg={maxElevationDeg} ambientRear={trackManifest.mixing.stem_ambient_rear[stem] ?? 0} ambientHeight={trackManifest.mixing.stem_ambient_height[stem] ?? 0} ambientTrimDb={trackManifest.mixing.stem_ambient_trim_db[stem] ?? 0} heightTexture={trackManifest.mixing.stem_height_texture[stem] ?? 0} ambientHeightCutoffHz={trackManifest.mixing.stem_ambient_height_cutoff_hz[stem] ?? 2000} ambientHeightCrossoverHz={trackManifest.mixing.stem_ambient_height_crossover_hz[stem] ?? 2000} ariaLabel={ariaLabel} onPlacement={(next) => updatePlacement(stem, next)} onRoute={(patch) => updateRoute(stem, patch)} onAmbient={(patch) => updateAmbient(stem, patch)} />;
+    return <BedPannerWindow key={`bed-panner-${stem}`} stemName={stem} placement={placementFor(stem)} route={routing[stem] || {}} channels={channels} inputChannels={stemChannelCounts[stem] ?? 1} maxElevationDeg={maxElevationDeg} ambientRear={trackManifest.mixing.stem_ambient_rear[stem] ?? 0} ambientHeight={trackManifest.mixing.stem_ambient_height[stem] ?? 0} ambientTrimDb={trackManifest.mixing.stem_ambient_trim_db[stem] ?? 0} heightTexture={trackManifest.mixing.stem_height_texture[stem] ?? 0} ambientHeightCutoffHz={trackManifest.mixing.stem_ambient_height_cutoff_hz[stem] ?? 2000} ambientHeightCrossoverHz={trackManifest.mixing.stem_ambient_height_crossover_hz[stem] ?? 2000} movement={movementFor(stem)} movementDefaults={engineConstants?.movementDefaults} ariaLabel={ariaLabel} onPlacement={(next) => updatePlacement(stem, next)} onRoute={(patch) => updateRoute(stem, patch)} onAmbient={(patch) => updateAmbient(stem, patch)} onMovement={(next) => updateMovement(stem, next)} />;
   };
   const updateStemEq = (stem: string, eq: string | StemEqSettings | null) => {
     if (!trackManifest) return;

@@ -55,6 +55,7 @@
 
 use super::adm_extent;
 use super::downmix::ITU_CENTER_COEFF;
+use serde::{Deserialize, Serialize};
 
 /// Angular spacing of the virtual sources spanning a placement's width. Finer
 /// than the tightest speaker spacing in any supported layout, so a width reads
@@ -86,7 +87,7 @@ pub const STEREO_PLACEMENT_CHANNELS: [&str; 12] = [
 /// azimuth = left, positive elevation = up. `width_deg` is the image's
 /// left/right extent: the stem renders as an arc of virtual sources spanning
 /// `azimuth ± width/2`. `object_size` is the normalized ADM Cartesian extent.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StemPlacement {
     pub azimuth_deg: f64,
     pub elevation_deg: f64,
@@ -561,6 +562,10 @@ impl PannerLayout {
         }
     }
 
+    pub fn max_elevation_deg(&self) -> f64 {
+        self.layout.max_elevation_deg
+    }
+
     pub fn placement_route(&self, placement: &StemPlacement) -> Vec<f64> {
         let mut gains = self.layout_gains(placement);
         let diversity = placement.diversity.clamp(0.0, 1.0);
@@ -655,6 +660,20 @@ impl PannerLayout {
         channel_lock: bool,
         zone_exclusion: &[&str],
     ) -> Vec<f64> {
+        let [x, y, z] = direction(azimuth_deg, elevation_deg);
+        self.cartesian_object_route([x, -z, y], object_size, channel_lock, zone_exclusion)
+    }
+
+    /// Route an ADM object from its serialized allocentric Cartesian position.
+    /// This is the canonical object path used by movement schedules and ADM
+    /// rendering; callers do not lose radius by converting through angles.
+    pub fn cartesian_object_route(
+        &self,
+        position: [f64; 3],
+        object_size: f64,
+        channel_lock: bool,
+        zone_exclusion: &[&str],
+    ) -> Vec<f64> {
         let has_rear = self
             .positional_names
             .iter()
@@ -668,7 +687,6 @@ impl PannerLayout {
             .iter()
             .filter_map(|name| allocentric_position(name, has_rear, has_top_rear))
             .collect();
-        let [x, y, z] = direction(azimuth_deg, elevation_deg);
         let priorities: Vec<[i64; 4]> = self
             .positional_names
             .iter()
@@ -677,7 +695,7 @@ impl PannerLayout {
         let gains = adm_extent::gains_with_metadata(
             &positions,
             &priorities,
-            [x, -z, y],
+            position,
             object_size,
             channel_lock,
             zone_exclusion,

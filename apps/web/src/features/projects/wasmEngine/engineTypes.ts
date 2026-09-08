@@ -1,5 +1,10 @@
 import { speakerCoordinates } from "@/lib/spatial";
-import type { StemDynamicEqSettings, StemDynamicsSettings, StemEqSettings } from "@/lib/manifest";
+import type {
+  StemDynamicEqSettings,
+  StemDynamicsSettings,
+  StemEqSettings,
+  StemMovementSettings,
+} from "@/lib/manifest";
 
 export type EngineRef<T> = { current: T };
 
@@ -18,6 +23,7 @@ export type MixPreview = {
   stem_eq?: Record<string, string | StemEqSettings>;
   stem_dynamic_eq?: Record<string, StemDynamicEqSettings>;
   stem_dynamics?: Record<string, StemDynamicsSettings>;
+  stem_movement?: Record<string, StemMovementSettings>;
   stem_ambient_rear?: Record<string, number>;
   stem_ambient_height?: Record<string, number>;
   stem_ambient_trim_db?: Record<string, number>;
@@ -31,6 +37,33 @@ export type MixPreview = {
   stem_enabled?: Record<string, boolean>;
   stem_solo?: string[];
   stem_source_anchor_strength?: number;
+};
+
+/** One immutable event emitted by the shared movement compiler. */
+export type MovementEvent = {
+  time_us: number;
+  position: [number, number, number];
+  gains: number[];
+  right_position?: [number, number, number] | null;
+  right_gains?: number[] | null;
+  interpolation_us: number;
+};
+
+export type MovementStemSchedule = {
+  stem_key: string;
+  stem_index: number;
+  events: MovementEvent[];
+};
+
+/** Wire shape of the immutable schedule compiled off the audio thread. */
+export type MovementSchedule = {
+  version: number;
+  revision: number;
+  sample_rate: number;
+  duration_frames: number;
+  grid_us: number;
+  interpolation_us: number;
+  stems: MovementStemSchedule[];
 };
 
 /** The slow half of the master readout: what the delivered programme measures
@@ -75,4 +108,6 @@ export type EngineCallbacks = {
   onMuted(muted: boolean): void;
   onLoop(loop: boolean): void;
   onEngineStatus(kind: "native" | "wasm", fallbackReason: string | null): void;
+  /** Installed movement schedule, for the scene and transport display. */
+  onMovementSchedule?(schedule: MovementSchedule | null): void;
 };

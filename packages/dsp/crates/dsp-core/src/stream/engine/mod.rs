@@ -30,7 +30,7 @@ use mix::StemMixRoute;
 
 /// Frames the LF unifier advances per call. Larger amortizes its zero-phase
 /// context further but raises the worst-case cost of a single render.
-const UNIFY_STRIDE: usize = 512;
+const UNIFY_STRIDE: usize = 256;
 
 /// Metering window, in frames — matches the pre-Rust preview's 2048-sample
 /// analyser tap. `render()` runs one audio-worklet quantum (128 frames) at a
@@ -82,7 +82,9 @@ impl Queue {
         let keep_from = absolute
             .saturating_sub(self.base)
             .min(self.channels[0].len());
-        if keep_from < 128 {
+        // Amortize moving the retained lookahead instead of copying every
+        // channel on each 128-frame callback. At most 1023 old frames remain.
+        if keep_from < 1024 {
             return;
         }
         for channel in &mut self.channels {
@@ -112,6 +114,9 @@ pub struct PreviewEngine {
     collapsed: Vec<Vec<f64>>,
     /// One smoother per stem, tracking its mute/solo/rebalance gain.
     stem_gain: Vec<OnePole>,
+    /// Route normalization is smoothed separately from the fader so the LFE
+    /// effect send keeps its explicit level when a measured scale arrives.
+    stem_route_scale: Vec<OnePole>,
     master_gain: OnePole,
     monitor_gain: OnePole,
     pre: Queue,
@@ -238,7 +243,6 @@ impl PreviewEngine {
         let graph = EngineGraph::new(sample_rate, &params, None, None, 0);
         let authored_channels = graph.authored_channels;
         let post_channels = graph.post_channels();
-        let object_sources = authored_channels > n_channels;
         let total_frames = stems.iter().map(|s| s.len()).max().unwrap_or(0);
 
         let stem_gain = params
@@ -246,12 +250,17 @@ impl PreviewEngine {
             .iter()
             .map(|s| {
                 let target = if s.enabled {
-                    10.0_f64.powf(s.rebalance_db / 20.0) * s.route_scale
+                    10.0_f64.powf(s.rebalance_db / 20.0)
                 } else {
                     0.0
                 };
                 OnePole::new_at(GAIN_RAMP_MS, sample_rate as f64, target)
             })
+            .collect();
+        let stem_route_scale = params
+            .stems
+            .iter()
+            .map(|s| OnePole::new_at(GAIN_RAMP_MS, sample_rate as f64, s.route_scale))
             .collect();
         let master_gain =
             OnePole::new_at(GAIN_RAMP_MS, sample_rate as f64, params.master.output_gain);
@@ -265,6 +274,7 @@ impl PreviewEngine {
             sample_rate,
             collapsed: vec![Vec::new(); n_channels.max(2)],
             stem_gain,
+            stem_route_scale,
             master_gain,
             monitor_gain,
             graph,
@@ -276,11 +286,7 @@ impl PreviewEngine {
             pre: Queue::new(authored_channels),
             post: Queue::new(post_channels),
             comp_gr: Queue::new(1),
-            unify_stride: if object_sources {
-                UNIFY_STRIDE / 2
-            } else {
-                UNIFY_STRIDE
-            },
+            unify_stride: UNIFY_STRIDE,
             unify_done: 0,
             emitted: 0,
             seek_target: None,
@@ -379,6 +385,7 @@ impl PreviewEngine {
         engine.decode_taps_override = self.decode_taps_override.clone();
         engine.xtc_taps_override = self.xtc_taps_override.clone();
         engine.measured_scales = self.measured_scales.clone();
+        engine.stem_route_scale = self.stem_route_scale.clone();
         engine
     }
 

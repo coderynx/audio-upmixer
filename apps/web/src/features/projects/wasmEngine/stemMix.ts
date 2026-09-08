@@ -2,7 +2,12 @@ import type { ProjectStem, StemScene } from "@/api";
 import type { EngineConstants } from "../masteringProfiles";
 import { estimateRouteScale } from "../masteringProfiles";
 import type { StemMix } from "./engineParams";
-import type { StemDynamicEqSettings, StemDynamicsSettings, StemEqSettings } from "@/lib/manifest";
+import type {
+  StemDynamicEqSettings,
+  StemDynamicsSettings,
+  StemEqSettings,
+  StemMovementSettings,
+} from "@/lib/manifest";
 import { isBedStem } from "@/lib/stems";
 
 export type MixPreviewShape = {
@@ -14,6 +19,7 @@ export type MixPreviewShape = {
   stem_eq?: Record<string, string | StemEqSettings>;
   stem_dynamic_eq?: Record<string, StemDynamicEqSettings>;
   stem_dynamics?: Record<string, StemDynamicsSettings>;
+  stem_movement?: Record<string, StemMovementSettings>;
   stem_ambient_rear?: Record<string, number>;
   stem_ambient_height?: Record<string, number>;
   stem_ambient_trim_db?: Record<string, number>;
@@ -61,7 +67,9 @@ export function resolveStemMixes(options: {
     const soloed = mix?.stem_solo?.length
       ? mix.stem_solo.includes(stem.stem_key) || mix.stem_solo.includes(base)
       : true;
-    const enabled = soloed && mix?.stem_enabled?.[base] !== false && scene.enabled !== false;
+    const storedEnabled = mix?.stem_enabled?.[stem.stem_key] ?? mix?.stem_enabled?.[base];
+    const persistentEnabled = storedEnabled !== false && scene.enabled !== false;
+    const enabled = soloed && persistentEnabled;
 
     const send = (table: Record<string, number> | undefined) => {
       const value = table?.[stem.stem_key] ?? table?.[base] ?? 0;
@@ -103,17 +111,31 @@ export function resolveStemMixes(options: {
     } : preset;
     const dynamics = mix?.stem_dynamics?.[stem.stem_key] ?? mix?.stem_dynamics?.[base];
     const dynamicEq = mix?.stem_dynamic_eq?.[stem.stem_key] ?? mix?.stem_dynamic_eq?.[base];
+    const movement = mix?.stem_movement?.[stem.stem_key] ?? mix?.stem_movement?.[base];
+    const stemGainDb = mix?.stem_rebalance?.[stem.stem_key]
+      ?? mix?.stem_rebalance?.[base]
+      ?? 0;
+    const persistentObjectGainDb = objectMode
+      ? 20 * Math.log10(Math.max(objectMetadata?.gain ?? 1, 1e-6))
+      : 0;
     const anchorDb = 20 * Math.log10(Math.max(1 - anchor * frontFraction, 1e-6));
     return {
       id: stem.id,
       routing,
-      rebalanceDb: (mix?.stem_rebalance?.[base] || 0)
+      rebalanceDb: stemGainDb
         + (isBedStem(stem.stem_key) ? mix?.bed_trim_db || 0 : 0)
         + anchorDb,
       enabled,
       eq,
       dynamics,
       dynamicEq,
+      movement,
+      // The compiler must see persistent project state rather than monitor
+      // Solo. Keep these alongside the resolved playback values so callers
+      // cannot accidentally use `enabled`/`rebalanceDb` for decisions.
+      persistentGainDb: stemGainDb
+        + (isBedStem(stem.stem_key) ? mix?.bed_trim_db || 0 : persistentObjectGainDb),
+      persistentEnabled,
       routeScale: objectMode ? 1 : estimateRouteScale(routing, constants.channelGains),
       ambientRear: send(mix?.stem_ambient_rear),
       ambientHeight: send(mix?.stem_ambient_height),

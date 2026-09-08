@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectTrack } from "@/api";
-import { normalizeManifest } from "@/lib/manifest";
+import { normalizeManifest, type StemMovementSettings } from "@/lib/manifest";
 import { resolveTrackLayoutManifest, useTrackLayoutRealization } from "./useTrackLayoutRealization";
 
 const panner = {
@@ -22,10 +22,15 @@ const track = {
   scene_overrides: {},
 } as unknown as ProjectTrack;
 
-function renderRealization(save = vi.fn(async () => {})) {
+function renderRealization(
+  save = vi.fn(async () => {}),
+  movement?: { presets: Record<string, Record<string, StemMovementSettings>> },
+) {
   const base = normalizeManifest({ mixing: { bed_trim_db: 1 } });
   return renderHook(() => useTrackLayoutRealization({
-    projectId: "project-a", projectManifest: base, track, layout: "7.1.4", channels: ["FL", "FR"], save, onError: () => {},
+    projectId: "project-a", projectManifest: base, track, layout: "7.1.4", channels: ["FL", "FR"],
+    movementPresets: movement?.presets,
+    save, onError: () => {},
   }));
 }
 
@@ -75,6 +80,33 @@ describe("Track Layout Realization", () => {
 
     expect(panner.presetTreatments).toHaveBeenLastCalledWith("balanced", ["Vocals", "Other"], ["FL", "FR"]);
     expect(result.current.manifest?.mixing.stem_placement).toMatchObject({ Vocals: { width_deg: 32 }, Other: { azimuth_deg: 55 } });
+  });
+
+  it("applies the core movement preset and keeps zone stems disabled", async () => {
+    panner.presetTreatments.mockReturnValueOnce({
+      Guitar: { placement: { azimuth_deg: 20, elevation_deg: 0, width_deg: 20, object_size: 0 }, sends: { lfe: 0, rear: 0, height: 0, heightCrossoverHz: 4000 } },
+      "Backing Vocals": { placement: { azimuth_deg: -20, elevation_deg: 0, width_deg: 20, object_size: 0 }, sends: { lfe: 0, rear: 0, height: 0, heightCrossoverHz: 4000 } },
+      Other: { placement: { azimuth_deg: 0, elevation_deg: 0, width_deg: 20, object_size: 0 }, sends: { lfe: 0, rear: 0, height: 0, heightCrossoverHz: 4000 } },
+    });
+    const { result } = renderRealization(undefined, {
+      presets: {
+        intimate: {
+          Guitar: { enabled: true, role: "auto", depth: .15, response: 1, sensitivity: .5, start_s: 0, end_s: null },
+          "Backing Vocals": { enabled: true, role: "supporting", depth: .15, response: 1, sensitivity: .5, start_s: 0, end_s: null },
+          Other: { enabled: false, role: "auto", depth: 0, response: 1, sensitivity: .5, start_s: 0, end_s: null },
+        },
+      },
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    act(() => result.current.applyPreset("intimate", ["Guitar", "Backing Vocals", "Guitar@rear", "Other"]));
+
+    expect(result.current.manifest?.mixing.stem_movement).toEqual({
+      Guitar: { enabled: true, role: "auto", depth: .15, response: 1, sensitivity: .5, start_s: 0, end_s: null },
+      "Backing Vocals": { enabled: true, role: "supporting", depth: .15, response: 1, sensitivity: .5, start_s: 0, end_s: null },
+      "Guitar@rear": { enabled: false, role: "auto", depth: 0, response: 1, sensitivity: .5, start_s: 0, end_s: null },
+      Other: { enabled: false, role: "auto", depth: 0, response: 1, sensitivity: .5, start_s: 0, end_s: null },
+    });
   });
 
   it("commits undo through the realization", async () => {

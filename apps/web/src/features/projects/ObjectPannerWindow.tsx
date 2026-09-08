@@ -4,7 +4,9 @@ import { CloudFog, MoveVertical, UserRound, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { getStemColor, getStemIcon } from "@/lib/stems";
+import type { StemMovementSettings } from "@/lib/manifest";
 import type { StemPlacement } from "./wasmEngine/panner";
+import { StemMovementControls, type StemMovementDefaults } from "./StemMovementControls";
 
 export type PannerPosition = { lateral: number; depth: number };
 
@@ -91,6 +93,9 @@ export function ObjectPannerWindow({
   onPlacement,
   onObjectMode = () => {},
   onAmbient = () => {},
+  movement,
+  movementDefaults,
+  onMovement = () => {},
 }: {
   stemName: string;
   placement: StemPlacement;
@@ -107,6 +112,9 @@ export function ObjectPannerWindow({
   onPlacement: (next: StemPlacement) => void;
   onObjectMode?: (mode: "linked-stereo" | "mono") => void;
   onAmbient?: (patch: { rear?: number; height?: number; ambientTrimDb?: number; heightTexture?: number; heightCrossoverHz?: number; heightCutoffHz?: number }) => void;
+  movement?: StemMovementSettings;
+  movementDefaults?: StemMovementDefaults;
+  onMovement?: (value: StemMovementSettings) => void;
 }) {
   const [open, setOpen] = React.useState(false);
   const [windowPosition, setWindowPosition] = React.useState<{ left: number; top: number } | null>(null);
@@ -373,6 +381,7 @@ export function ObjectPannerWindow({
               </label>}
             </div>}
           </div>
+          <StemMovementControls stemName={stemName} value={movement} channels={channels} defaults={movementDefaults} onChange={onMovement} />
         </div>
       </div>
     </div>,

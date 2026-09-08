@@ -339,6 +339,22 @@ def validate_manifest(data: dict) -> None:
         mixing = blocks.get("mixing")
         if not isinstance(mixing, dict):
             return
+        movement = mixing.get("stem_movement")
+        if movement is not None:
+            if not isinstance(movement, dict):
+                raise ManifestError(f"{location}.mixing.stem_movement must be a mapping.")
+            from upmixer.movement import validate_stem_movement
+            try:
+                validate_stem_movement(movement)
+            except ValueError as exc:
+                raise ManifestError(f"{location}.mixing.stem_movement: {exc}") from exc
+        tuning = mixing.get("stem_movement_tuning")
+        if tuning is not None:
+            from upmixer.movement import movement_tuning
+            try:
+                movement_tuning(tuning)
+            except ValueError as exc:
+                raise ManifestError(f"{location}.mixing.stem_movement_tuning: {exc}") from exc
         stem_eq = mixing.get("stem_eq")
         if stem_eq is not None:
             if not isinstance(stem_eq, dict):

@@ -3,6 +3,10 @@
 use upmixer_dsp_core::stream::engine::{PreviewEngine, StemSource};
 use upmixer_dsp_core::stream::params::EngineParams;
 
+fn valid_params(params: &EngineParams) -> bool {
+    params.validate_movement().is_ok()
+}
+
 /// Create a preview engine from a JSON parameter block.
 ///
 /// Returns null if the JSON does not parse. Stems are added separately, in
@@ -20,6 +24,9 @@ pub unsafe extern "C" fn dsp_engine_new(
     let Ok(params) = serde_json::from_slice::<EngineParams>(json) else {
         return std::ptr::null_mut();
     };
+    if !valid_params(&params) {
+        return std::ptr::null_mut();
+    }
     Box::into_raw(Box::new(PreviewEngine::new(
         sample_rate,
         params,
@@ -199,12 +206,98 @@ pub unsafe extern "C" fn dsp_engine_set_params(
     };
     let json = std::slice::from_raw_parts(params_ptr, params_len);
     match serde_json::from_slice::<EngineParams>(json) {
-        Ok(params) => {
+        Ok(params) if valid_params(&params) => {
             engine.update_params(params);
             1
         }
+        Ok(_) => 0,
         Err(_) => 0,
     }
+}
+
+/// Replace ordinary parameters and the compiled movement schedule atomically.
+/// The schedule is parsed from the separate buffer so a worker result cannot
+/// be installed after a parameter update has already been accepted. The JSON
+/// literal `null` clears movement. Returns 1 only after both blocks pass the
+/// same validation used by the native engine.
+///
+/// # Safety
+/// `params_ptr`/`params_len` must address a UTF-8 JSON `EngineParams` object;
+/// `schedule_ptr`/`schedule_len` must address a UTF-8 JSON `MovementSchedule`
+/// or the JSON literal `null`; and `engine` must come from
+/// [`dsp_engine_new`].
+#[no_mangle]
+pub unsafe extern "C" fn dsp_engine_set_params_and_movement(
+    engine: *mut PreviewEngine,
+    params_ptr: *const u8,
+    params_len: usize,
+    schedule_ptr: *const u8,
+    schedule_len: usize,
+) -> u32 {
+    let Some(engine) = engine.as_mut() else {
+        return 0;
+    };
+    if params_ptr.is_null() || params_len == 0 || schedule_ptr.is_null() || schedule_len == 0 {
+        return 0;
+    }
+    let params_json = std::slice::from_raw_parts(params_ptr, params_len);
+    let schedule_json = std::slice::from_raw_parts(schedule_ptr, schedule_len);
+    let Ok(params) = serde_json::from_slice::<EngineParams>(params_json) else {
+        return 0;
+    };
+    let Ok(schedule) = serde_json::from_slice::<Option<upmixer_dsp_core::movement::MovementSchedule>>(
+        schedule_json,
+    ) else {
+        return 0;
+    };
+    engine
+        .update_params_with_movement(params, schedule)
+        .is_ok()
+        .into()
+}
+
+/// Install or clear the compiled movement schedule on a live engine.
+///
+/// The schedule travels separately from ordinary parameter edits so a worker
+/// can compile it once and the worklet can install the matching immutable
+/// result without rebuilding the JSON parameter block. `null` clears the
+/// current schedule. Validation happens before the engine is mutated.
+///
+/// Returns 1 when the JSON parses and the schedule is valid, otherwise 0.
+///
+/// # Safety
+/// `schedule_ptr`/`schedule_len` must address a UTF-8 JSON `MovementSchedule`
+/// or the JSON literal `null`, and `engine` must come from
+/// [`dsp_engine_new`].
+#[no_mangle]
+pub unsafe extern "C" fn dsp_engine_set_movement_schedule(
+    engine: *mut PreviewEngine,
+    schedule_ptr: *const u8,
+    schedule_len: usize,
+) -> u32 {
+    let Some(engine) = engine.as_mut() else {
+        return 0;
+    };
+    if schedule_ptr.is_null() || schedule_len == 0 {
+        return 0;
+    }
+    let json = std::slice::from_raw_parts(schedule_ptr, schedule_len);
+    let Ok(schedule) =
+        serde_json::from_slice::<Option<upmixer_dsp_core::movement::MovementSchedule>>(json)
+    else {
+        return 0;
+    };
+    if schedule.as_ref().is_some_and(|value| {
+        value.validate(engine.params().speakers.len()).is_err()
+            || value
+                .stems
+                .iter()
+                .any(|stem| stem.stem_index >= engine.params().stems.len())
+    }) {
+        return 0;
+    }
+    engine.set_movement_schedule(schedule);
+    1
 }
 
 /// Move the playhead, warming filter states up from before the target.

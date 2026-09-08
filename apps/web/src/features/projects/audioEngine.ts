@@ -32,9 +32,16 @@ import {
 } from "./masteringProfiles";
 import { NativePreviewClient, type NativePreviewAssets, type NativeRenderer } from "./nativePreviewClient";
 import { createPreviewMonitor, type PreviewMonitor, type PreviewProgramme } from "./previewProgramme";
-import { DspEngineClient } from "./wasmEngine/engineClient";
+import { DspEngineClient, loadDspModule } from "./wasmEngine/engineClient";
 import { buildEngineParams } from "./wasmEngine/engineParams";
+import type { StemMix } from "./wasmEngine/engineParams";
 import { LoudnessCalibration } from "./wasmEngine/calibration";
+import {
+  MovementCompilerClient,
+  type MovementCompileRequest,
+  type MovementPlacement,
+  type MovementStemRequest,
+} from "./wasmEngine/movementCompiler";
 import { FilterTapCache, withReferenceMatchParams } from "./wasmEngine/filterTaps";
 import {
   SILENT_MASTER_METERS,
@@ -55,6 +62,7 @@ import {
   type EngineRef,
   type LoudnessSummary,
   type MixPreview,
+  type MovementSchedule,
   type OutputMode,
 } from "./wasmEngine/engineTypes";
 
@@ -67,6 +75,7 @@ export {
   type EngineRef,
   type LoudnessSummary,
   type MixPreview,
+  type MovementSchedule,
   type OutputMode,
 } from "./wasmEngine/engineTypes";
 export { withReferenceMatchParams } from "./wasmEngine/filterTaps";
@@ -122,6 +131,14 @@ export class PreviewHost {
   private stemOrder: string[] = [];
   /** Parallel to `stemOrder` — how many bars each stem's meter shows. */
   private stemChannelCounts: number[] = [];
+  private movementCompiler: MovementCompilerClient | null = null;
+  private movementSchedule: MovementSchedule | null = null;
+  /** Compiled replacement waiting for the matching engine update to land. */
+  private pendingMovement: { schedule: MovementSchedule | null; revision: number | null } | null = null;
+  private movementRevision = 0;
+  private movementRequestKey = "";
+  private movementReady = true;
+  private movementWasmModule: Promise<WebAssembly.Module> | null = null;
 
   readonly stemSpectrum: EngineRef<Map<string, StemSpectrum>> = engineRef(new Map());
   readonly channelLevels: EngineRef<Map<string, MeterLevel>> = engineRef(new Map());
@@ -135,9 +152,16 @@ export class PreviewHost {
   readonly masterMeters: EngineRef<MasterMeters> = engineRef(SILENT_MASTER_METERS);
   readonly currentTimeRef: EngineRef<number> = engineRef(0);
 
+  get installedMovementSchedule(): MovementSchedule | null {
+    return this.movementSchedule;
+  }
+
   constructor(private readonly callbacks: EngineCallbacks) {}
 
   setProgramme(programme: PreviewProgramme | null) {
+    if (programme?.key !== this.programme?.key) {
+      this.movementReady = !programme?.movementFeaturesUrl || programme.layoutChannels.length === 2;
+    }
     this.programme = programme;
   }
 
@@ -162,6 +186,7 @@ export class PreviewHost {
   private get speakerEnabled() { return this.monitor.speakerEnabled; }
   private get masteringBypassed() { return this.monitor.masteringBypassed; }
   private get matchBypassed() { return this.monitor.matchBypassed; }
+  private get movementFeaturesUrl() { return this.programme?.movementFeaturesUrl ?? null; }
   private get programKey() {
     return `${this.programme?.key ?? ""}:${this.outputMode}:${this.spatialProfile}:${this.transauralProfile}:${this.appleHeadTracking}:${this.masteringBypassed}:${this.matchBypassed}`;
   }
@@ -308,6 +333,7 @@ export class PreviewHost {
 
   async syncProgram() {
     if (this.nativeClient) {
+      if (!await this.ensureMovementSchedule()) return;
       this.apply();
       if (!this.playing) await this.measureIfNeeded();
       return;
@@ -322,6 +348,8 @@ export class PreviewHost {
         this.loadCurrentSpatialFilterSets(),
       ]);
       if (!spatialLoaded || key !== this.programKey) return;
+      if (!await this.ensureMovementSchedule()) return;
+      if (key !== this.programKey) return;
       const recovered = this.spatialLoadFailed;
       this.callbacks.onError(null);
       this.spatialLoadFailed = false;
@@ -432,13 +460,156 @@ export class PreviewHost {
     return this.stems.filter((stem) => stem.preview_url || stem.audio_url);
   }
 
+  private movementPlacement(stem: ProjectStem, resolved: StemMix): MovementPlacement {
+    const base = stem.stem_key.split("@", 1)[0];
+    const authored = this.mix?.stem_placement?.[stem.stem_key]
+      ?? this.mix?.stem_placement?.[base];
+    const scene = this.scene.stems?.[stem.stem_key]
+      ?? this.scene.stems?.[base];
+    const placement = authored ?? (scene?.azimuth_deg != null ? {
+      azimuth_deg: scene.azimuth_deg,
+      elevation_deg: scene.elevation_deg ?? 0,
+      width_deg: 0,
+      object_size: 0,
+      diversity: 0,
+      center_level_db: 0,
+    } : null);
+    return {
+      azimuth_deg: placement?.azimuth_deg ?? 0,
+      elevation_deg: placement?.elevation_deg ?? 0,
+      width_deg: placement?.width_deg ?? 0,
+      object_size: placement?.object_size ?? 0,
+      lfe: resolved.routing.LFE ?? 0,
+      diversity: placement?.diversity ?? 0,
+      center_level_db: placement?.center_level_db ?? 0,
+    };
+  }
+
+  private movementRequest(resolvedStems: StemMix[]): MovementCompileRequest | null {
+    const featureUrl = this.movementFeaturesUrl;
+    const stems = this.previewableStems();
+    if (!featureUrl || this.layoutChannels.length === 2 || !this.duration || !stems.length) return null;
+    const movementStems: MovementStemRequest[] = stems.map((stem, index) => {
+      const resolved = resolvedStems[index];
+      const route = this.layoutChannels.map((channel) => resolved.routing[channel] ?? 0);
+      const placement = this.movementPlacement(stem, resolved);
+      return {
+        stem_key: stem.stem_key,
+        stem_name: stem.stem_key.split("@", 1)[0],
+        gain_db: resolved.persistentGainDb ?? 0,
+        enabled: (resolved.persistentEnabled ?? true)
+          && (resolved.objectPlacement?.gain ?? 1) > 0,
+        included: true,
+        placement,
+        // The shared object panner derives both linked endpoints from the
+        // authored Cartesian placement. Supplying a bed route here would
+        // lose the stereo width at the Supporting state.
+        home_gains: resolved.objectMode ? [] : route,
+        home_right_gains: resolved.objectMode ? [] : route,
+        settings: resolved.movement,
+        object_mode: resolved.objectMode ?? null,
+        channel_lock: resolved.objectPlacement?.channel_lock ?? false,
+        zone_exclusion: resolved.objectPlacement?.zone_exclusion ?? [],
+      };
+    });
+    return {
+      sample_rate: CONTEXT_SAMPLE_RATE,
+      duration_frames: Math.round(this.duration * CONTEXT_SAMPLE_RATE),
+      revision: 0,
+      channels: [...this.layoutChannels],
+      stems: movementStems,
+      tuning: this.constants.movementTuning,
+    };
+  }
+
+  private async ensureMovementSchedule(resolvedStems?: StemMix[]): Promise<boolean> {
+    if (this.layoutChannels.length === 2 || !this.movementFeaturesUrl) {
+      this.movementReady = true;
+      if (this.movementSchedule || this.pendingMovement) {
+        this.pendingMovement = { schedule: null, revision: null };
+      }
+      return true;
+    }
+    const resolved = resolvedStems ?? resolveStemMixes({
+      stems: this.previewableStems(),
+      scene: this.scene,
+      mix: this.mix,
+      stemEqTaps: this.taps.stemEqTaps,
+      constants: this.constants,
+    });
+    const request = this.movementRequest(resolved);
+    if (!request || !this.movementFeaturesUrl) return false;
+    const requestKey = JSON.stringify({
+      features: this.movementFeaturesUrl,
+      ...request,
+      revision: undefined,
+    });
+    if (
+      this.movementRequestKey === requestKey &&
+      (this.movementSchedule || this.pendingMovement)
+    ) {
+      this.movementReady = true;
+      return true;
+    }
+    this.movementRequestKey = requestKey;
+    this.movementReady = false;
+    const revision = ++this.movementRevision;
+    try {
+      const wasmModule = this.client?.wasmModule
+        ?? await (this.movementWasmModule ??= loadDspModule());
+      const compiler = this.movementCompiler ??= new MovementCompilerClient(undefined, wasmModule);
+      const schedule = await compiler.compile(this.movementFeaturesUrl, { ...request, revision });
+      if (revision !== this.movementRevision || requestKey !== this.movementRequestKey) return false;
+      // Keep the old audible schedule visible while the matching parameter
+      // block is still pending. `apply` commits this pair together.
+      this.pendingMovement = { schedule, revision: schedule.revision };
+      this.movementReady = true;
+      return true;
+    } catch (error) {
+      if (revision === this.movementRevision && requestKey === this.movementRequestKey) {
+        this.callbacks.onError(error instanceof Error ? error.message : "Movement compilation failed");
+      }
+      return false;
+    }
+  }
+
   apply() {
     if (!this.constants) return;
+    // Keep the currently audible pair intact while a changed movement request
+    // is compiling. The matching params and schedule are installed together
+    // by the completion path below.
+    if (this.movementFeaturesUrl && this.layoutChannels.length !== 2 && !this.movementReady) return;
+    const movementSchedule = this.movementReady
+      ? this.pendingMovement
+        ? this.pendingMovement.schedule
+        : this.movementSchedule
+      : null;
     if (this.nativeClient) {
-      this.nativeClient.updateParams(this.buildParams(), this.nativeAssets(), this.nativeRenderer(), this.appleHeadTracking);
+      this.nativeClient.updateParams(
+        this.buildParams(),
+        this.nativeAssets(),
+        this.nativeRenderer(),
+        this.appleHeadTracking,
+        movementSchedule,
+        this.movementReady,
+      );
     } else {
-      this.client?.updateParams(this.buildParams());
+      if (!this.client) return;
+      this.client.updateParams(
+        this.buildParams(),
+        movementSchedule,
+        this.movementReady,
+      );
     }
+  }
+
+  /** Commit only after the renderer confirms the matching sibling buffer. */
+  private commitMovementSchedule(revision: number | null) {
+    const pending = this.pendingMovement;
+    if (!pending || pending.revision !== revision) return;
+    this.movementSchedule = pending.schedule;
+    this.pendingMovement = null;
+    this.callbacks.onMovementSchedule?.(this.movementSchedule);
   }
 
   private buildParams() {
@@ -636,7 +807,7 @@ export class PreviewHost {
   }
 
   private async measureIfNeeded() {
-    if ((!this.client && !this.nativeClient) || !this.loaded) return;
+    if ((!this.client && !this.nativeClient) || !this.loaded || !this.movementReady) return;
     await this.calibration.ensure(this.measureKey(), this.measureWeights());
   }
 
@@ -691,6 +862,7 @@ export class PreviewHost {
         onMeasured: (result, requestId) => {
           if (this.calibration.refine(result, requestId)) this.apply();
         },
+        onMovementInstalled: (revision) => this.commitMovementSchedule(revision),
         onError: (message) => this.callbacks.onError(message),
       });
       if (token !== this.loadToken) {
@@ -705,7 +877,11 @@ export class PreviewHost {
       this.monitorGain.gain.value = this.muted ? 0 : this.volume;
       client.node.connect(this.monitorGain).connect(context.destination);
 
-      client.setParams(this.buildParams());
+      client.setParams(
+        this.buildParams(),
+        this.movementReady ? this.movementSchedule : null,
+        this.movementReady,
+      );
       const initialLoads = await Promise.allSettled([
         this.loadSpatialFilterSets(),
         Promise.all([this.loadMasteringFirs(), this.loadReferenceMatchFir()]).then(() => this.apply()),
@@ -739,6 +915,10 @@ export class PreviewHost {
         return;
       }
 
+      if (!await this.ensureMovementSchedule()) {
+        this.callbacks.onReady(false);
+        return;
+      }
       this.apply();
       this.loaded = true;
       this.spatialLoadFailed = false;
@@ -770,6 +950,8 @@ export class PreviewHost {
     const client = await NativePreviewClient.create({
       sources,
       params: this.buildParams(),
+      movementSchedule: this.movementReady ? this.movementSchedule : null,
+      movementReady: this.movementReady,
       assets: this.nativeAssets(),
       renderer: this.nativeRenderer(),
       appleHeadTracking: this.appleHeadTracking,
@@ -786,6 +968,7 @@ export class PreviewHost {
       onMeasured: (result, requestId) => {
         if (this.calibration.refine(result, requestId)) this.apply();
       },
+      onMovementInstalled: (revision) => this.commitMovementSchedule(revision),
       onError: (message) => {
         if (ready) void this.fallbackToWeb(message);
       },
@@ -794,6 +977,10 @@ export class PreviewHost {
     await client.ready;
     if (token !== this.loadToken) {
       client.dispose();
+      return;
+    }
+    if (!await this.ensureMovementSchedule()) {
+      this.callbacks.onReady(false);
       return;
     }
     ready = true;
@@ -933,6 +1120,13 @@ export class PreviewHost {
     this.sentDecodeTaps = null;
     this.sentXtcTaps = null;
     this.taps.resetPerProject();
+    this.movementCompiler?.dispose();
+    this.movementCompiler = null;
+    this.movementSchedule = null;
+    this.pendingMovement = null;
+    this.movementRequestKey = "";
+    this.movementReady = true;
+    this.callbacks.onMovementSchedule?.(null);
     this.client?.dispose();
     this.client = null;
     this.nativeClient?.dispose();

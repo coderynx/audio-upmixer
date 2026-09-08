@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deliveryTypeForLayout, isStereoLayout, outputModeForLayoutSwitch } from "./layouts";
+import { ADM_DELIVERY_LAYOUTS, deliveryTypeForLayout, isStereoLayout, outputModeForLayoutSwitch } from "./layouts";
 
 describe("isStereoLayout", () => {
   it("is true only for the literal stereo layout", () => {
@@ -18,9 +18,16 @@ describe("deliveryTypeForLayout", () => {
     expect(deliveryTypeForLayout("5.1", "binaural")).toBe("binaural");
   });
 
-  it("retargets ADM when the layout is outside the Dolby profile", () => {
-    expect(deliveryTypeForLayout("7.1.4", "adm-bwf")).toBe("multichannel");
-    expect(deliveryTypeForLayout("7.1.2", "adm-bwf")).toBe("adm-bwf");
+  it("accepts ADM delivery for every supported surround layout", () => {
+    expect(ADM_DELIVERY_LAYOUTS).toEqual(["5.1", "7.1", "5.1.2", "5.1.4", "7.1.2", "7.1.4"]);
+    for (const layout of ADM_DELIVERY_LAYOUTS) {
+      expect(deliveryTypeForLayout(layout, "adm-bwf")).toBe("adm-bwf");
+    }
+  });
+
+  it("retargets ADM for stereo and unknown layouts", () => {
+    expect(deliveryTypeForLayout("stereo", "adm-bwf")).toBe("multichannel");
+    expect(deliveryTypeForLayout("9.1.6", "adm-bwf")).toBe("multichannel");
   });
 });
 

@@ -467,7 +467,6 @@ impl StemRouteState {
                 self.shaped[slot].resize(count, 0.0);
             }
             self.clear_expanded(count);
-            self.ambient_expander.reset();
         }
         for slot in AMBIENT_TEXTURE..AMBIENT_TEXTURE + 2 {
             self.shaped[slot].clear();
@@ -477,7 +476,7 @@ impl StemRouteState {
         if self.texture_active && (texture_target || texture_fading) {
             self.apply_height_texture(count, texture);
         }
-        if !ambient_source_active && self.ambient_tail_remaining == 0 {
+        if self.split.is_some() && !ambient_source_active && self.ambient_tail_remaining == 0 {
             // The last zero block was processed above, so leave its drained
             // output visible until the next block and drop the split now.
             self.split = None;

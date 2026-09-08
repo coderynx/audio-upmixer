@@ -9,10 +9,10 @@ license = "MIT"
 
 [workspace.dependencies]
 upmixer-dsp-core = { path = "crates/dsp-core" }
-rustfft = "6"
+rustfft = { version = "6", features = ["wasm_simd"] }
 realfft = "3"
 num-complex = "0.4"
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 
 [profile.release]

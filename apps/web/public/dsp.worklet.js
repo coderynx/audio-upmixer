@@ -56,6 +56,7 @@ class UpmixerDspProcessor extends AudioWorkletProcessor {
     this.scaleRestartAt = 0;
     this.backgroundTurn = "scale";
     this.pendingSeekId = null;
+    this.movementReady = true;
 
     try {
       this.instance = new WebAssembly.Instance(module);
@@ -112,7 +113,10 @@ class UpmixerDspProcessor extends AudioWorkletProcessor {
     switch (message.type) {
       case "params":
         this.primedFrames = 0;
-        this.setParams(message.bytes);
+        this.movementReady = message.movementReady !== false;
+        if (this.setParams(message.bytes, message.movementSchedule)) {
+          this.ackMovement(message.movementSchedule, message.movementRevision);
+        }
         this.setFirs(message.firs);
         break;
       case "stem":
@@ -124,12 +128,18 @@ class UpmixerDspProcessor extends AudioWorkletProcessor {
       case "xtcTaps":
         this.setXtcTaps(message.taps);
         break;
+      case "movementSchedule":
+        this.setMovementSchedule(message.bytes);
+        break;
       case "rewind":
         if (this.engine) this.wasm.dsp_engine_rewind(this.engine);
         this.ended = false;
         break;
       case "update":
-        this.updateParams(message.bytes);
+        this.movementReady = message.movementReady !== false;
+        if (this.updateParams(message.bytes, message.movementSchedule)) {
+          this.ackMovement(message.movementSchedule, message.movementRevision);
+        }
         this.setFirs(message.firs);
         break;
       case "transport":
@@ -155,28 +165,36 @@ class UpmixerDspProcessor extends AudioWorkletProcessor {
     }
   }
 
-  setParams(encoded) {
+  setParams(encoded, movementSchedule) {
     // A pass in flight measures a forked copy of the engine being replaced.
     this.endMeasure();
     this.endScale();
     const { ptr, bytes } = this.copyBytes(encoded);
     const engine = this.wasm.dsp_engine_new(sampleRate, ptr, bytes);
+    let ok = Boolean(engine);
+    if (engine && movementSchedule !== undefined) {
+      const schedule = this.copyBytes(movementSchedule || new Uint8Array([110, 117, 108, 108]));
+      ok = this.wasm.dsp_engine_set_params_and_movement(engine, ptr, bytes, schedule.ptr, schedule.bytes);
+      this.wasm.dsp_free(schedule.ptr, schedule.bytes);
+    }
     this.wasm.dsp_free(ptr, bytes);
 
-    if (!engine) {
+    if (!ok) {
+      if (engine) this.wasm.dsp_engine_free(engine);
       this.port.postMessage({ type: "error", message: "engine parameters rejected" });
-      return;
+      return false;
     }
     if (this.engine) this.wasm.dsp_engine_free(this.engine);
     this.engine = engine;
     this.ended = false;
+    return true;
   }
 
   // Replacing the parameter block keeps the loaded stems and the playhead,
   // so mute, solo, rebalance, routing, mastering and output-mode changes all
   // take effect without a reload.
-  updateParams(encoded) {
-    if (!this.engine) return;
+  updateParams(encoded, movementSchedule) {
+    if (!this.engine) return false;
     // Deliberately does not `endMeasure()`: a pass in flight forked its own
     // engine (see `PreviewEngine::fork`) and keeps measuring it against the
     // parameters at the moment `measure()` started. `setParams`/`dispose`
@@ -186,17 +204,27 @@ class UpmixerDspProcessor extends AudioWorkletProcessor {
     // leave `DspEngineClient.measure()`'s promise on the main thread waiting
     // for a "measured" message that would never arrive.
     const { ptr, bytes } = this.copyBytes(encoded);
-    const ok = this.wasm.dsp_engine_set_params(this.engine, ptr, bytes);
+    let ok;
+    if (movementSchedule === undefined) {
+      ok = this.wasm.dsp_engine_set_params(this.engine, ptr, bytes);
+    } else {
+      const schedule = this.copyBytes(movementSchedule || new Uint8Array([110, 117, 108, 108]));
+      ok = this.wasm.dsp_engine_set_params_and_movement(
+        this.engine, ptr, bytes, schedule.ptr, schedule.bytes,
+      );
+      this.wasm.dsp_free(schedule.ptr, schedule.bytes);
+    }
     this.wasm.dsp_free(ptr, bytes);
     if (!ok) {
       this.port.postMessage({ type: "error", message: "engine parameters rejected" });
-      return;
+      return false;
     }
+    // Both buffers are validated before either is installed or measured.
     // A route-scale pass in flight forked the parameters it started on, so a
     // mix edit invalidates it. Unlike the loudness pass it owes the main
     // thread nothing, so it can simply be dropped and started again: the
     // engine asks for a new one whenever the edit touched the routing.
-    if (this.wasm.dsp_engine_wants_route_scale(this.engine)) {
+    if (this.movementReady && this.wasm.dsp_engine_wants_route_scale(this.engine)) {
       this.endScale();
       this.scaleRestartAt = currentTime + SCALE_RESTART_DELAY_SECONDS;
     }
@@ -205,6 +233,7 @@ class UpmixerDspProcessor extends AudioWorkletProcessor {
       this.primedFrames = 0;
     }
     this.channelCount = channelCount;
+    return true;
   }
 
   addStem(left, right) {
@@ -239,6 +268,29 @@ class UpmixerDspProcessor extends AudioWorkletProcessor {
     this.wasm.dsp_free(ptr, bytes);
   }
 
+  setMovementSchedule(encoded) {
+    if (!this.engine) return false;
+    // AudioWorkletGlobalScope has no TextEncoder; these are the UTF-8 bytes
+    // for JSON null when a programme has no movement schedule.
+    const values = encoded || new Uint8Array([110, 117, 108, 108]);
+    const { ptr, bytes } = this.copyBytes(values);
+    const ok = this.wasm.dsp_engine_set_movement_schedule(this.engine, ptr, bytes);
+    this.wasm.dsp_free(ptr, bytes);
+    if (!ok) {
+      this.port.postMessage({ type: "error", message: "movement schedule rejected" });
+      return false;
+    }
+    return true;
+  }
+
+  ackMovement(encoded, revision) {
+    if (encoded === undefined) return;
+    this.port.postMessage({
+      type: "movementInstalled",
+      revision: revision == null ? null : Number(revision),
+    });
+  }
+
   setFirs(firs) {
     if (!this.engine || !firs) return;
     if (firs.masterEq) this.setFir(firs.masterEq, this.wasm.dsp_engine_set_master_eq_taps);
@@ -246,7 +298,7 @@ class UpmixerDspProcessor extends AudioWorkletProcessor {
     for (const { index, taps } of firs.stemEq || []) {
       this.setFir(taps, this.wasm.dsp_engine_set_stem_eq_taps, index);
     }
-    if (firs.stemEq?.length && this.wasm.dsp_engine_wants_route_scale(this.engine)) {
+    if (this.movementReady && firs.stemEq?.length && this.wasm.dsp_engine_wants_route_scale(this.engine)) {
       this.endScale();
       this.scaleRestartAt = currentTime + SCALE_RESTART_DELAY_SECONDS;
     }
@@ -426,6 +478,7 @@ class UpmixerDspProcessor extends AudioWorkletProcessor {
   }
 
   advanceBackground() {
+    if (!this.movementReady) return;
     const first = this.backgroundTurn;
     this.backgroundTurn = first === "scale" ? "measure" : "scale";
     if (first === "scale" ? this.advanceScale() : this.advanceMeasure()) return;

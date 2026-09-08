@@ -1,6 +1,12 @@
 import { SelectField, ToggleField } from "@/components/forms/fields";
 import { OUTPUT_CODECS, codecUnavailableReason, resolveCodec, subtypesFor } from "@/lib/codecs";
-import { CHANNEL_LAYOUTS, OUTPUT_TYPES, deliveryTypeForLayout, isStereoLayout } from "@/lib/layouts";
+import {
+  ADM_DELIVERY_LAYOUTS,
+  CHANNEL_LAYOUTS,
+  OUTPUT_TYPES,
+  deliveryTypeForLayout,
+  isStereoLayout,
+} from "@/lib/layouts";
 import type { Manifest } from "@/lib/manifest";
 import type { ManifestSectionProps } from "./types";
 
@@ -71,7 +77,7 @@ export function OutputSection({
         }))}
       />
       {(() => {
-        const admBeds = choices?.adm_beds || ["5.1", "7.1", "7.1.2"];
+        const admBeds = choices?.adm_delivery_layouts || ADM_DELIVERY_LAYOUTS;
         const admBedSupported = admBeds.includes(manifest.mixing.channel_layout);
         const binauralBeds = choices?.binaural_beds || ["5.1.4", "7.1.2", "7.1.4"];
         const bedSupported = binauralBeds.includes(manifest.mixing.channel_layout);

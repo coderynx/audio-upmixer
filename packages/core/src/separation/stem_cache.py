@@ -359,7 +359,13 @@ class StemCache:
             "  StemCache: HIT — loaded %d stems from %s",
             len(stems), entry_dir,
         )
-        return stems, sep_sr
+        try:
+            stored_sample_rate = int(meta.get("sample_rate", sep_sr))
+        except (TypeError, ValueError):
+            return None
+        if stored_sample_rate <= 0:
+            return None
+        return stems, stored_sample_rate
 
 
     def save(
@@ -450,6 +456,7 @@ class StemCache:
             "size": source_stat.st_size,
             "stems_hash": stems_hash,
             "sep_sr": sep_sr,
+            "sample_rate": sample_rate,
             "stem_keys": list(stems.keys()),
             "silence_skip": silence_skip,
             "silence_threshold_db": silence_threshold_db,

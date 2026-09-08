@@ -126,9 +126,19 @@ def _fmt_time(sample_count: int, sample_rate: int) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{fraction:06d}"
 
 
+def _fmt_time_us(microseconds: int) -> str:
+    """Format an absolute ADM time from integer microseconds."""
+    if microseconds < 0:
+        raise ValueError("ADM time must be non-negative")
+    seconds, fraction = divmod(microseconds, 1_000_000)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{fraction:06d}"
+
+
 def _pos_str(v: float) -> str:
-    """Render a position coordinate as integer string where possible."""
-    return str(int(v)) if v == int(v) else f"{v:.6g}"
+    """Render a Cartesian coordinate without lossy decimal rounding."""
+    return format(float(v), ".17g")
 
 
 def _object_size_str(v: float) -> str:
@@ -238,10 +248,7 @@ def _axml_chunk(
     sample_count: int,
     sample_rate: int,
     bit_depth: int,
-    objects: tuple[
-        tuple[str, tuple[float, float, float], float, bool, float, int, bool, tuple[str, ...]],
-        ...,
-    ] = (),
+    objects: tuple[tuple, ...] = (),
 ) -> bytes:
     """Generate Dolby Atmos Master ADM Profile v1.1 compliant XML."""
     dur = _fmt_time(sample_count, sample_rate)
@@ -301,7 +308,8 @@ def _axml_chunk(
         a(f'          <audioTrackUIDRef>ATU_{i + 1:08X}</audioTrackUIDRef>')
     a('        </audioObject>')
 
-    for i, (name, _, _, _, _, _, _, _) in enumerate(objects):
+    for i, metadata in enumerate(objects):
+        name = metadata[0]
         number = object_number(i)
         a(f'        <audioObject audioObjectID="AO_{object_id(i):04X}"')
         a(f'                     audioObjectName="{xml_attr(name)}"')
@@ -336,9 +344,9 @@ def _axml_chunk(
         a('          </audioBlockFormat>')
         a('        </audioChannelFormat>')
 
-    for i, (name, position, extent, diffuse, gain, importance, channel_lock, zones) in enumerate(objects):
+    for i, metadata in enumerate(objects):
+        name, position, extent, diffuse, gain, importance, channel_lock, zones = metadata[:8]
         number = object_number(i)
-        x, y, z = position
         a(f'        <audioPackFormat audioPackFormatID="AP_0003{number:04X}"')
         a(f'                         audioPackFormatName="{xml_attr(name)}"')
         a('                         typeLabel="0003" typeDefinition="Objects">')
@@ -347,32 +355,79 @@ def _axml_chunk(
         a(f'        <audioChannelFormat audioChannelFormatID="AC_0003{number:04X}"')
         a(f'                            audioChannelFormatName="{xml_attr(name)}"')
         a('                            typeLabel="0003" typeDefinition="Objects">')
-        a(f'          <audioBlockFormat audioBlockFormatID="AB_0003{number:04X}_00000001">')
-        a('            <cartesian>1</cartesian>')
-        a(f'            <position coordinate="X">{_pos_str(x)}</position>')
-        a(f'            <position coordinate="Y">{_pos_str(y)}</position>')
-        a(f'            <position coordinate="Z">{_pos_str(z)}</position>')
-        if extent > 0.0:
-            a(f'            <width>{_object_size_str(extent)}</width>')
-            a(f'            <height>{_object_size_str(extent)}</height>')
-            a(f'            <depth>{_object_size_str(extent)}</depth>')
-        if diffuse:
-            a('            <diffuse>1</diffuse>')
-        if gain != 1.0:
-            a(f'            <gain>{_object_size_str(gain)}</gain>')
-        if importance != 10:
-            a(f'            <importance>{importance}</importance>')
-        if channel_lock:
-            a('            <channelLock>1</channelLock>')
-        if zones:
-            a('            <zoneExclusion>')
-            for zone in zones:
-                values = _DOLBY_ZONE[zone]
-                attrs = " ".join(f'{key}="{_pos_str(value)}"' for key, value in values.items())
-                a(f'              <zone {attrs} />')
-            a('            </zoneExclusion>')
-        a('            <jumpPosition interpolationLength="0.000000">1</jumpPosition>')
-        a('          </audioBlockFormat>')
+        raw_events = metadata[8] if len(metadata) > 8 else ()
+        if raw_events:
+            programme_us = sample_count * 1_000_000 // sample_rate
+            event_values = tuple(raw_events)
+            for event_index, (time_us, event_position, interpolation_us) in enumerate(event_values):
+                next_time = (
+                    event_values[event_index + 1][0]
+                    if event_index + 1 < len(event_values)
+                    else programme_us
+                )
+                duration_us = max(0, next_time - time_us)
+                block_id = f"AB_0003{number:04X}_{event_index + 1:08X}"
+                x, y, z = event_position
+                a(
+                    f'          <audioBlockFormat audioBlockFormatID="{block_id}" '
+                    f'rtime="{_fmt_time_us(time_us)}" duration="{_fmt_time_us(duration_us)}">'
+                )
+                a('            <cartesian>1</cartesian>')
+                a(f'            <position coordinate="X">{_pos_str(x)}</position>')
+                a(f'            <position coordinate="Y">{_pos_str(y)}</position>')
+                a(f'            <position coordinate="Z">{_pos_str(z)}</position>')
+                if extent > 0.0:
+                    a(f'            <width>{_object_size_str(extent)}</width>')
+                    a(f'            <height>{_object_size_str(extent)}</height>')
+                    a(f'            <depth>{_object_size_str(extent)}</depth>')
+                if diffuse:
+                    a('            <diffuse>1</diffuse>')
+                if gain != 1.0:
+                    a(f'            <gain>{_object_size_str(gain)}</gain>')
+                if importance != 10:
+                    a(f'            <importance>{importance}</importance>')
+                if channel_lock:
+                    a('            <channelLock>1</channelLock>')
+                if zones:
+                    a('            <zoneExclusion>')
+                    for zone in zones:
+                        values = _DOLBY_ZONE[zone]
+                        attrs = " ".join(f'{key}="{_pos_str(value)}"' for key, value in values.items())
+                        a(f'              <zone {attrs} />')
+                    a('            </zoneExclusion>')
+                interpolation = 0 if event_index == 0 else interpolation_us
+                a(
+                    f'            <jumpPosition interpolationLength="{interpolation / 1_000_000:.6f}">1</jumpPosition>'
+                )
+                a('          </audioBlockFormat>')
+        else:
+            x, y, z = position
+            a('          <audioBlockFormat audioBlockFormatID="AB_0003%04X_00000001">' % number)
+            a('            <cartesian>1</cartesian>')
+            a(f'            <position coordinate="X">{_pos_str(x)}</position>')
+            a(f'            <position coordinate="Y">{_pos_str(y)}</position>')
+            a(f'            <position coordinate="Z">{_pos_str(z)}</position>')
+            if extent > 0.0:
+                a(f'            <width>{_object_size_str(extent)}</width>')
+                a(f'            <height>{_object_size_str(extent)}</height>')
+                a(f'            <depth>{_object_size_str(extent)}</depth>')
+            if diffuse:
+                a('            <diffuse>1</diffuse>')
+            if gain != 1.0:
+                a(f'            <gain>{_object_size_str(gain)}</gain>')
+            if importance != 10:
+                a(f'            <importance>{importance}</importance>')
+            if channel_lock:
+                a('            <channelLock>1</channelLock>')
+            if zones:
+                a('            <zoneExclusion>')
+                for zone in zones:
+                    values = _DOLBY_ZONE[zone]
+                    attrs = " ".join(f'{key}="{_pos_str(value)}"' for key, value in values.items())
+                    a(f'              <zone {attrs} />')
+                a('            </zoneExclusion>')
+            a('            <jumpPosition interpolationLength="0.000000">1</jumpPosition>')
+            a('          </audioBlockFormat>')
         a('        </audioChannelFormat>')
 
     for i, label in enumerate(fmt.channels):
@@ -388,7 +443,8 @@ def _axml_chunk(
         a(f'          <audioTrackFormatIDRef>{tid}</audioTrackFormatIDRef>')
         a('        </audioStreamFormat>')
 
-    for i, (name, _, _, _, _, _, _, _) in enumerate(objects):
+    for i, metadata in enumerate(objects):
+        name = metadata[0]
         number = object_number(i)
         a(f'        <audioStreamFormat audioStreamFormatID="AS_0003{number:04X}"')
         a(f'                           audioStreamFormatName="PCM_{xml_attr(name)}"')
@@ -408,7 +464,8 @@ def _axml_chunk(
         a(f'          <audioStreamFormatIDRef>{sid}</audioStreamFormatIDRef>')
         a('        </audioTrackFormat>')
 
-    for i, (name, _, _, _, _, _, _, _) in enumerate(objects):
+    for i, metadata in enumerate(objects):
+        name = metadata[0]
         number = object_number(i)
         a(f'        <audioTrackFormat audioTrackFormatID="AT_0003{number:04X}_01"')
         a(f'                          audioTrackFormatName="PCM_{xml_attr(name)}"')

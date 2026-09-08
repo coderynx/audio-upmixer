@@ -1,5 +1,11 @@
 // See docs/contracts/preview_export_parity.md §2.
-import type { DynamicEqBand, StemDynamicEqBand, StemDynamicsSettings, StemEqSettings } from "@/lib/manifest";
+import type {
+  DynamicEqBand,
+  StemDynamicEqBand,
+  StemDynamicsSettings,
+  StemEqSettings,
+  StemMovementSettings,
+} from "@/lib/manifest";
 
 export type EqProfileName =
   | "spatial-transparent"
@@ -341,6 +347,18 @@ export type ServedEngineConstants = {
   stem_eq_settings: Record<string, StemEqSettings>;
   decode_filter_set: Record<string, string>;
   xtc_filter_set: Record<string, string>;
+  /** Movement defaults/tuning are owned by core and carried to the controls
+   * and compiler with the rest of the served engine constants. */
+  movement?: {
+    feature_version: number;
+    feature_window_us: number;
+    grid_us: number;
+    interpolation_us: number;
+    defaults?: Partial<StemMovementSettings>;
+    presets?: Record<string, Record<string, StemMovementSettings>>;
+    tuning: Record<string, number>;
+    preset_depths: Record<string, number>;
+  };
 };
 
 /** Normalized engine constants the preview graph builders consume. */
@@ -397,6 +415,10 @@ export type EngineConstants = {
   stemEqSettings: Record<string, StemEqSettings>;
   decodeFilterSet: Record<SpatialProfile, string>;
   xtcFilterSet: Record<TransauralProfile, string>;
+  movementDefaults?: Partial<StemMovementSettings>;
+  movementPresets?: Record<string, Record<string, StemMovementSettings>>;
+  movementTuning?: Record<string, number>;
+  movementPresetDepths?: Record<string, number>;
 };
 
 function voicingFromServed(v: ServedVoicingParams): VoicingParams {
@@ -482,5 +504,9 @@ export function resolveEngineConstants(s: ServedEngineConstants): EngineConstant
     stemEqSettings: s.stem_eq_settings,
     decodeFilterSet: s.decode_filter_set as Record<SpatialProfile, string>,
     xtcFilterSet: s.xtc_filter_set as Record<TransauralProfile, string>,
+    movementDefaults: s.movement?.defaults,
+    movementPresets: s.movement?.presets,
+    movementTuning: s.movement?.tuning,
+    movementPresetDepths: s.movement?.preset_depths,
   };
 }

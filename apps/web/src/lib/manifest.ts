@@ -31,6 +31,19 @@ export type StemDynamicEqSettings = {
   enabled: boolean; profile?: string | null; bands: StemDynamicEqBand[]; mix: number;
 };
 
+/** Persistent, per-stem movement controls. The compiler and its tuning live
+ * in the shared DSP; the web app only carries the user's choices. */
+export type StemMovementRole = "auto" | "supporting" | "featured";
+export type StemMovementSettings = {
+  enabled: boolean;
+  role: StemMovementRole;
+  depth: number;
+  response: number;
+  sensitivity: number;
+  start_s: number;
+  end_s?: number | null;
+};
+
 export type AdmObjectMetadata = {
   gain: number;
   importance: number;
@@ -60,6 +73,7 @@ export type Manifest = {
     stem_eq: Record<string, string | StemEqSettings>;
     stem_dynamic_eq: Record<string, StemDynamicEqSettings>;
     stem_dynamics: Record<string, StemDynamicsSettings>;
+    stem_movement: Record<string, StemMovementSettings>;
     stem_ambient_rear: Record<string, number>;
     stem_ambient_height: Record<string, number>;
     stem_ambient_trim_db: Record<string, number>;
@@ -201,6 +215,7 @@ export const defaultManifest: Manifest = {
     stem_eq: {},
     stem_dynamic_eq: {},
     stem_dynamics: {},
+    stem_movement: {},
     stem_ambient_rear: {},
     stem_ambient_height: {},
     stem_ambient_trim_db: {},
@@ -297,6 +312,7 @@ export function normalizeManifest(source: Record<string, unknown>): Manifest {
       stem_eq: { ...defaultManifest.mixing.stem_eq, ...value.mixing?.stem_eq },
       stem_dynamic_eq: { ...defaultManifest.mixing.stem_dynamic_eq, ...value.mixing?.stem_dynamic_eq },
       stem_dynamics: { ...defaultManifest.mixing.stem_dynamics, ...value.mixing?.stem_dynamics },
+      stem_movement: { ...defaultManifest.mixing.stem_movement, ...value.mixing?.stem_movement },
       stem_ambient_rear: {
         ...defaultManifest.mixing.stem_ambient_rear,
         ...value.mixing?.stem_ambient_rear,

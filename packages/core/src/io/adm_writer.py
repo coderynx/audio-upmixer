@@ -7,8 +7,10 @@ key ADM/Dolby profile design choices they implement.
 
 from __future__ import annotations
 
+import json
 import math
 import struct
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import numpy as np
@@ -17,11 +19,14 @@ import upmixer_dsp
 
 from upmixer.config import UpmixConfig
 from upmixer.formats import (
+    ADM_DELIVERY_LAYOUTS,
     DOLBY_ADM_BED_FORMATS,
     FORMAT_MAP,
     ChannelLabel,
     OutputFormat,
+    adm_delivery_layout,
 )
+from upmixer.direct_speakers import direct_speakers
 from upmixer.io.adm_chunks import (
     _audio_to_pcm,
     _axml_chunk,
@@ -42,6 +47,8 @@ _DOLBY_BASIC_ZONES = frozenset({
 _DOLBY_HEIGHT_ZONES = frozenset({"ZB", "ZT"})
 _UINT32_MAX = 0xFFFFFFFF
 _DS64_DATA_SIZE = 28
+_MOVEMENT_GRID_US = 20_000
+_MOVEMENT_INTERPOLATION_US = 5_208
 
 
 def _valid_zone_exclusion(zones: tuple[str, ...]) -> bool:
@@ -51,6 +58,15 @@ def _valid_zone_exclusion(zones: tuple[str, ...]) -> bool:
         and sum(zone in _DOLBY_HEIGHT_ZONES for zone in zones) <= 1
         and all(zone in _DOLBY_BASIC_ZONES | _DOLBY_HEIGHT_ZONES for zone in zones)
     )
+
+
+@dataclass(frozen=True)
+class AdmObjectEvent:
+    """One timed Cartesian position for an ADM object channel."""
+
+    time_us: int
+    position: tuple[float, float, float]
+    interpolation_us: int = _MOVEMENT_INTERPOLATION_US
 
 
 @dataclass(frozen=True)
@@ -66,6 +82,7 @@ class AdmObject:
     importance: int = 10
     channel_lock: bool = False
     zone_exclusion: tuple[str, ...] = ()
+    events: tuple[AdmObjectEvent, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.diffuse, bool):
@@ -99,33 +116,123 @@ def _validated_audio(name: str, audio: np.ndarray) -> np.ndarray:
     return array
 
 
+def _event(value: AdmObjectEvent | Mapping[str, object]) -> AdmObjectEvent:
+    if isinstance(value, AdmObjectEvent):
+        return value
+    if not isinstance(value, Mapping):
+        raise ValueError("ADM object events must be objects")
+    try:
+        position = tuple(float(item) for item in value["position"])  # type: ignore[index]
+        time_raw = value["time_us"]  # type: ignore[index]
+        if isinstance(time_raw, bool) or not isinstance(time_raw, int):
+            raise TypeError("time_us must be an integer")
+        time_us = time_raw
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("ADM object events require time_us and position") from exc
+    interpolation_raw = value.get("interpolation_us", _MOVEMENT_INTERPOLATION_US)
+    if isinstance(interpolation_raw, bool) or not isinstance(interpolation_raw, int):
+        raise ValueError("ADM object event interpolation_us must be an integer")
+    interpolation = interpolation_raw
+    if len(position) != 3:
+        raise ValueError("ADM object event positions must have three coordinates")
+    return AdmObjectEvent(time_us, position, interpolation)
+
+
+def _events(obj: AdmObject, n_samples: int, sample_rate: int) -> tuple[AdmObjectEvent, ...]:
+    values = tuple(_event(value) for value in obj.events)
+    if not values:
+        return ()
+    duration_us = n_samples * 1_000_000 // sample_rate
+    if values[0].time_us != 0:
+        raise ValueError(f"ADM object '{obj.name}' events must begin at time zero")
+    previous = -1
+    for index, value in enumerate(values):
+        if value.time_us <= previous or value.time_us < 0:
+            raise ValueError(f"ADM object '{obj.name}' event times must be increasing")
+        if value.time_us % _MOVEMENT_GRID_US:
+            raise ValueError(f"ADM object '{obj.name}' event times must use a 20 ms grid")
+        if value.time_us > duration_us:
+            raise ValueError(f"ADM object '{obj.name}' event exceeds programme duration")
+        if index == 0:
+            if value.interpolation_us not in (0, _MOVEMENT_INTERPOLATION_US):
+                raise ValueError(f"ADM object '{obj.name}' first event interpolation must be zero")
+        elif value.interpolation_us != _MOVEMENT_INTERPOLATION_US:
+            raise ValueError(
+                f"ADM object '{obj.name}' later event interpolation must be {_MOVEMENT_INTERPOLATION_US} us"
+            )
+        if any(not math.isfinite(coordinate) or not -1.0 <= coordinate <= 1.0 for coordinate in value.position):
+            raise ValueError(f"ADM object '{obj.name}' has an invalid event position")
+        previous = value.time_us
+    for index, value in enumerate(values):
+        next_time = values[index + 1].time_us if index + 1 < len(values) else duration_us
+        interpolation = 0 if index == 0 else value.interpolation_us
+        if interpolation > next_time - value.time_us:
+            raise ValueError(f"ADM object '{obj.name}' event interpolation exceeds its block")
+    return values
+
+
 def render_adm_programme(
     channels: dict[str, np.ndarray],
     fmt: OutputFormat,
     objects: list[AdmObject],
+    sample_rate: int = 48_000,
 ) -> dict[str, np.ndarray]:
-    """Render one ADM bed and its static objects to the bed layout."""
+    """Render one ADM bed and its authored objects to the bed layout."""
     rendered = {label.value: channels[label.value].copy() for label in fmt.channels}
-    speakers = [label.value for label in fmt.channels if label != ChannelLabel.LFE]
+    schedule_channels = [label.value for label in fmt.channels]
+    speakers = [label for label in schedule_channels if label != ChannelLabel.LFE.value]
     for obj in objects:
-        x, y, z = obj.position
-        radius = math.sqrt(x * x + y * y + z * z)
-        elevation = math.degrees(math.asin(z / radius)) if radius else 0.0
-        azimuth = math.degrees(math.atan2(-x, y)) if radius else 0.0
-        gains, _ = upmixer_dsp.adm_object_routes(
-            azimuth, elevation, 0.0, obj.object_size, obj.channel_lock,
-            list(obj.zone_exclusion), speakers,
-        )
-        for speaker, gain in zip(speakers, gains):
-            rendered[speaker] += obj.gain * gain * obj.audio
+        events = _events(obj, len(obj.audio), sample_rate)
+        if events:
+            movement_events = []
+            for event in events:
+                panner_gains = upmixer_dsp.adm_cartesian_object_route(
+                    event.position, obj.object_size, obj.channel_lock,
+                    list(obj.zone_exclusion), speakers,
+                )
+                gain_by_channel = dict(zip(speakers, panner_gains, strict=True))
+                movement_events.append({
+                    "time_us": event.time_us,
+                    "position": list(event.position),
+                    "gains": [gain_by_channel.get(channel, 0.0) for channel in schedule_channels],
+                    "interpolation_us": _MOVEMENT_INTERPOLATION_US,
+                })
+            schedule_json = json.dumps({
+                "version": 1,
+                "revision": 0,
+                "sample_rate": sample_rate,
+                "duration_frames": len(obj.audio),
+                "grid_us": _MOVEMENT_GRID_US,
+                "interpolation_us": _MOVEMENT_INTERPOLATION_US,
+                "stems": [{
+                    "stem_key": obj.name,
+                    "stem_index": 0,
+                    "events": movement_events,
+                }],
+            }, separators=(",", ":"))
+            gains = upmixer_dsp.apply_movement_schedule(
+                schedule_json, 0,
+                [np.ascontiguousarray(obj.audio, dtype=np.float64)],
+                [0] * len(schedule_channels), 0, sample_rate, False, schedule_channels,
+            )
+            for speaker, gain in zip(schedule_channels, gains, strict=True):
+                if speaker != ChannelLabel.LFE.value:
+                    rendered[speaker] += obj.gain * np.asarray(gain)
+        else:
+            gains = upmixer_dsp.adm_cartesian_object_route(
+                tuple(obj.position), obj.object_size, obj.channel_lock,
+                list(obj.zone_exclusion), speakers,
+            )
+            for speaker, gain in zip(speakers, gains, strict=True):
+                rendered[speaker] += obj.gain * gain * obj.audio
     return rendered
 
 
 class AdmBwfWriter:
     """Writes multichannel audio as a Dolby Atmos Master ADM Profile v1.1 BWF file.
 
-    Supports bed configurations: 5.1, 7.1, and 7.1.2.
-    Use --output-type wav for any other format.
+    Supports the six surround ADM delivery layouts; wider beds serialize
+    finished height channels as fixed mono carrier objects.
     """
 
     def __init__(self, file_path: str, sample_rate: int, config: UpmixConfig):
@@ -151,7 +258,14 @@ class AdmBwfWriter:
                              MAX_TRUE_PEAK_LEVEL field.  None = "not indicated".
             objects: Mono object tracks written after the one DirectSpeakers bed.
         """
-        fmt = self._format
+        requested_fmt = self._format
+        try:
+            fmt, carrier_labels = adm_delivery_layout(requested_fmt.name)
+        except ValueError:
+            raise ValueError(
+                f"Output format '{requested_fmt.name}' is not a supported ADM delivery. "
+                f"Supported: {sorted(ADM_DELIVERY_LAYOUTS)}. Use --output-type wav for other formats."
+            ) from None
         if fmt.name not in _DOLBY_ENGINE_ALLOWED_FORMATS:
             raise ValueError(
                 f"Output format '{fmt.name}' is not a supported ADM BWF bed configuration. "
@@ -168,15 +282,27 @@ class AdmBwfWriter:
             self._config.output_subtype, 24
         )
 
-        objects = objects or []
+        ordered = []
+        for label in requested_fmt.channels:
+            key = label.value
+            if key not in channels:
+                raise ValueError(f"Missing channel '{key}' for {requested_fmt.name} output")
+        authored_objects = list(objects or [])
+        carriers_by_label = {item.channel: item for item in direct_speakers(requested_fmt)}
+        carriers = [
+            AdmObject(
+                label.value,
+                np.asarray(channels[label.value]),
+                carriers_by_label[label].cartesian_position,
+            )
+            for label in carrier_labels
+        ]
+        objects = carriers + authored_objects
         if len(objects) > 118 or fmt.n_channels + len(objects) > 128:
             raise ValueError("Dolby ADM-BWF allows at most 128 tracks and 118 objects")
 
-        ordered = []
         for label in fmt.channels:
             key = label.value
-            if key not in channels:
-                raise ValueError(f"Missing channel '{key}' for {fmt.name} output")
             ordered.append(_validated_audio(key, channels[key]))
         for obj in objects:
             if not obj.name or len(obj.name) > 64:
@@ -204,6 +330,7 @@ class AdmBwfWriter:
                 raise ValueError(f"ADM object '{obj.name}' channel lock must be a boolean")
             if not _valid_zone_exclusion(obj.zone_exclusion):
                 raise ValueError(f"ADM object '{obj.name}' has an invalid zone exclusion")
+            _events(obj, len(channels[fmt.channels[0].value]), sr)
             ordered.append(_validated_audio(obj.name, obj.audio))
 
         n_samples = len(ordered[0])
@@ -219,6 +346,10 @@ class AdmBwfWriter:
             (
                 obj.name, obj.position, obj.object_size, obj.diffuse, obj.gain,
                 obj.importance, obj.channel_lock, obj.zone_exclusion,
+                tuple(
+                    (event.time_us, event.position, event.interpolation_us)
+                    for event in _events(obj, n_samples, sr)
+                ),
             )
             for obj in objects
         )

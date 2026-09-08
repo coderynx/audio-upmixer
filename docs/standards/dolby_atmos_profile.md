@@ -201,7 +201,10 @@ Required sub-elements:
   - For blocks where `zzzzzzzz` in `AB_yyyyxxxx_zzzzzzzz` = `0x00000001` (first block): **`0.000000`** (0 samples)
   - For all other blocks: **`0.005208`** (≈ 250 samples @ 48 kHz; ≈ 500 samples @ 96 kHz)
 
-> Renderer treats all audioBlock instances as discrete metadata events. interpolationLength is static, not a ramp.
+> Blocks are discrete metadata events. `interpolationLength` specifies the
+> transition after an event: Upmixer interpolates previous-to-target speaker
+> gains over 5208 microseconds, then holds them. This is distinct from the
+> 20 ms event grid; the first target applies immediately.
 
 ### Upmixer object authoring
 
@@ -319,10 +322,23 @@ Only the following channel configurations are allowed, with the specified channe
 | 7.0.2 | L R C Lss Rss Lrs Rrs Lts Rts |
 | 7.1.2 | L R C LFE Lss Rss Lrs Rrs Lts Rts |
 
-Upmixer currently emits the profile configurations that map exactly to its
-speaker layouts: 5.1, 7.1, and 7.1.2. Other application layouts remain
-available for WAV, binaural, and transaural delivery but are rejected at the
-ADM-BWF boundary.
+Upmixer delivers all six surround layouts using legal beds plus fixed mono
+objects where necessary. Mixing and mastering retain the requested layout;
+only the writer adapts the finished channels:
+
+| Requested layout | DirectSpeakers bed | Fixed mono objects |
+|---|---|---|
+| 5.1 | 5.1 | None |
+| 7.1 | 7.1 | None |
+| 5.1.2 | 5.1 | TFL, TFR |
+| 5.1.4 | 5.1 | TFL, TFR, TBL, TBR |
+| 7.1.2 | 7.1.2 | None |
+| 7.1.4 | 7.1 | TFL, TFR, TBL, TBR |
+
+Fixed objects carry each removed height channel once at its exact Cartesian
+speaker position, unity gain, and zero size. They count together with moving
+objects toward the 118-object and 128-track limits. Stereo remains ineligible
+for ADM delivery. The legal-bed list is distinct from this delivery mapping.
 
 ---
 

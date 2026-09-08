@@ -9,6 +9,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::ipc::Channel;
+use upmixer_dsp_core::movement::MovementSchedule;
 use upmixer_dsp_core::stream::engine::{PreviewEngine, StemSource};
 use upmixer_dsp_core::stream::measure::MeasurementPass;
 use upmixer_dsp_core::stream::params::{EngineParams, OutputMode};
@@ -44,6 +45,10 @@ pub struct OpenRequest {
     pub server_base: String,
     pub sources: Vec<NativeSource>,
     pub params: Value,
+    #[serde(default)]
+    pub movement_schedule: Option<Value>,
+    #[serde(default = "movement_ready")]
+    pub movement_ready: bool,
     pub assets: NativeAssets,
     pub renderer: NativeRenderer,
     pub apple_head_tracking: bool,
@@ -52,6 +57,8 @@ pub struct OpenRequest {
 pub enum Command {
     Update {
         params: Value,
+        movement_schedule: Option<Value>,
+        movement_ready: bool,
         assets: NativeAssets,
         renderer: NativeRenderer,
         apple_head_tracking: bool,
@@ -104,6 +111,9 @@ pub enum NativeEvent {
         dbtp: f64,
         monitor_lkfs: f64,
         monitor_dbtp: f64,
+    },
+    MovementInstalled {
+        revision: Option<u64>,
     },
     Ended,
     Error {
@@ -209,6 +219,7 @@ impl Session {
             .map_err(|error| format!("Could not create HTTP client: {error}"))?;
         let params = parse_params(request.params)?;
         let mut engine = PreviewEngine::new(SAMPLE_RATE as u32, params, Vec::new());
+        install_movement_schedule(&mut engine, request.movement_schedule)?;
         let total = request.sources.len().max(1);
         let mut loaded = 0;
         for sources in request.sources.chunks(STEM_LOAD_CONCURRENCY) {
@@ -257,7 +268,7 @@ impl Session {
             total_frames: engine.total_frames(),
             max_channels: 12,
         });
-        let route_scale = (engine.stem_count() > 0).then(|| ScaleState {
+        let route_scale = (request.movement_ready && engine.stem_count() > 0).then(|| ScaleState {
             pass: RouteScalePass::new_excerpts(&engine, 5, SAMPLE_RATE * 3, SAMPLE_RATE / 2),
             exact: false,
         });
@@ -311,13 +322,24 @@ impl Session {
         match command {
             Command::Update {
                 params,
+                movement_schedule,
+                movement_ready,
                 assets,
                 renderer,
                 apple_head_tracking,
             } => {
                 let params = parse_params(params)?;
+                let movement_schedule = parse_movement_schedule(
+                    movement_schedule,
+                    params.speakers.len(),
+                )?;
+                let movement_revision = movement_schedule.as_ref().map(|schedule| schedule.revision);
                 let old_layout = output_layout(self.engine.params(), self.renderer)?.to_string();
-                self.engine.update_params(params);
+                if !movement_ready {
+                    self.route_scale = None;
+                    self.measurement = None;
+                }
+                self.engine.update_params_with_movement(params, movement_schedule)?;
                 if assets != self.assets {
                     load_assets(
                         &self.client,
@@ -347,7 +369,7 @@ impl Session {
                 self.audio.set_head_tracking(apple_head_tracking);
                 self.renderer = renderer;
                 self.apple_head_tracking = apple_head_tracking;
-                if self.engine.stem_count() > 0 && !self.engine.has_route_scales() {
+                if movement_ready && self.engine.stem_count() > 0 && !self.engine.has_route_scales() {
                     self.route_scale = Some(ScaleState {
                         pass: RouteScalePass::new_excerpts(
                             &self.engine,
@@ -358,6 +380,9 @@ impl Session {
                         exact: false,
                     });
                 }
+                let _ = self.events.send(NativeEvent::MovementInstalled {
+                    revision: movement_revision,
+                });
             }
             Command::Transport {
                 playing,
@@ -610,7 +635,42 @@ fn load_stem(
 }
 
 fn parse_params(value: Value) -> Result<EngineParams, String> {
-    serde_json::from_value(value).map_err(|error| format!("Engine parameters rejected: {error}"))
+    let params: EngineParams = serde_json::from_value(value)
+        .map_err(|error| format!("Engine parameters rejected: {error}"))?;
+    for (index, stem) in params.stems.iter().enumerate() {
+        if let Some(movement) = &stem.movement {
+            movement
+                .validate()
+                .map_err(|error| format!("Engine parameters rejected: stem {index} movement: {error}"))?;
+        }
+    }
+    Ok(params)
+}
+
+fn movement_ready() -> bool {
+    true
+}
+
+fn parse_movement_schedule(
+    value: Option<Value>,
+    channels: usize,
+) -> Result<Option<MovementSchedule>, String> {
+    let schedule = value
+        .map(serde_json::from_value::<MovementSchedule>)
+        .transpose()
+        .map_err(|error| format!("Movement schedule rejected: {error}"))?;
+    if let Some(schedule) = &schedule {
+        schedule.validate(channels)?;
+    }
+    Ok(schedule)
+}
+
+fn install_movement_schedule(
+    engine: &mut PreviewEngine,
+    value: Option<Value>,
+) -> Result<(), String> {
+    let schedule = parse_movement_schedule(value, engine.params().speakers.len())?;
+    engine.update_params_with_movement(engine.params().clone(), schedule)
 }
 
 fn output_layout(params: &EngineParams, renderer: NativeRenderer) -> Result<&'static str, String> {
@@ -675,6 +735,96 @@ mod tests {
     fn output_reset_rewinds_into_the_current_loop() {
         assert_eq!(engine_frame_for_output_frame(1_250, true, 1_000), 250);
         assert_eq!(engine_frame_for_output_frame(1_250, false, 1_000), 1_000);
+    }
+
+    fn params_with_movement(movement: Value) -> Value {
+        serde_json::json!({
+            "speakers": [
+                {"name": "FL", "azimuth_rad": 0.0, "elevation_rad": 0.0, "group_gain": 1.0},
+                {"name": "FR", "azimuth_rad": 0.0, "elevation_rad": 0.0, "group_gain": 1.0}
+            ],
+            "shapes": ["left", "right"],
+            "sends": {
+                "surround_bass_cutoff_hz": 120.0,
+                "height_low_rolloff_hz": 120.0,
+                "height_low_rolloff_gain": 1.0,
+                "height_crossover_hz": 2000.0,
+                "height_high_shelf_gain": 1.0,
+                "height_directional_band_hz": 4000.0,
+                "height_directional_band_gain": 1.0,
+                "lfe_cutoff_hz": 120.0,
+                "lfe_filter_order": 2,
+                "lfe_gain": 1.0
+            },
+            "surround_downmix_coeff": 1.0,
+            "height_downmix_coeff": 1.0,
+            "stems": [{"movement": movement}],
+            "output_mode": "native"
+        })
+    }
+
+    #[test]
+    fn native_params_reject_invalid_movement_settings_at_the_boundary() {
+        let error = parse_params(params_with_movement(serde_json::json!({
+            "enabled": true,
+            "depth": 1.2,
+            "response": 1.0,
+            "sensitivity": 0.5,
+            "start_s": 0.0
+        })))
+        .unwrap_err();
+        assert!(error.to_string().contains("movement depth"));
+    }
+
+    #[test]
+    fn native_params_preserve_valid_movement_settings() {
+        let params = parse_params(params_with_movement(serde_json::json!({
+            "enabled": true,
+            "role": "featured",
+            "depth": 0.25,
+            "response": 1.5,
+            "sensitivity": 0.75,
+            "start_s": 0.02,
+            "end_s": 1.0
+        })))
+        .unwrap();
+        let movement = params.stems[0].movement.as_ref().unwrap();
+        assert!(movement.enabled);
+        assert_eq!(movement.start_s, 0.02);
+        assert_eq!(movement.end_s, Some(1.0));
+    }
+
+    #[test]
+    fn native_movement_schedule_round_trips_and_rejects_invalid_timing() {
+        let value = serde_json::json!({
+            "version": 1,
+            "revision": 9,
+            "sample_rate": 48000,
+            "duration_frames": 48000,
+            "grid_us": 20000,
+            "interpolation_us": 5208,
+            "stems": [{
+                "stem_key": "Guitar",
+                "stem_index": 0,
+                "events": [{
+                    "time_us": 0,
+                    "position": [0.0, 0.0, 0.0],
+                    "gains": [1.0, 0.0],
+                    "right_position": null,
+                    "right_gains": null,
+                    "interpolation_us": 5208
+                }]
+            }]
+        });
+        let schedule = parse_movement_schedule(Some(value.clone()), 2)
+            .unwrap()
+            .unwrap();
+        assert_eq!(serde_json::to_value(&schedule).unwrap(), value);
+
+        let mut invalid = value;
+        invalid["interpolation_us"] = serde_json::json!(10_000);
+        let error = parse_movement_schedule(Some(invalid), 2).unwrap_err();
+        assert!(error.contains("invalid movement schedule header"));
     }
 
     #[test]

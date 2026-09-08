@@ -143,6 +143,227 @@ mod engine {
     }
 }
 
+mod movement_transport {
+    //! Movement schedules are evaluated against absolute programme time by the
+    //! streaming engine, independent of render quantum and output sample rate.
+
+    use std::sync::Arc;
+
+    use upmixer_dsp_core::movement::{
+        MovementEvent, MovementSchedule, MovementStemSchedule, INTERPOLATION_US,
+    };
+    use upmixer_dsp_core::stream::engine::{PreviewEngine, StemSource};
+    use upmixer_dsp_core::stream::params::EngineParams;
+
+    const CANONICAL_RATE: u32 = 48_000;
+    const PROGRAMME_FRAMES: usize = CANONICAL_RATE as usize;
+
+    fn schedule() -> MovementSchedule {
+        let event = |time_us: i64, gains: Vec<f64>| MovementEvent {
+            time_us,
+            position: [0.0; 3],
+            gains,
+            right_position: None,
+            right_gains: None,
+            interpolation_us: INTERPOLATION_US,
+        };
+        MovementSchedule {
+            version: 1,
+            revision: 17,
+            sample_rate: CANONICAL_RATE,
+            duration_frames: PROGRAMME_FRAMES,
+            grid_us: 20_000,
+            interpolation_us: INTERPOLATION_US,
+            stems: vec![MovementStemSchedule {
+                stem_key: "moving-bed".to_string(),
+                stem_index: 0,
+                events: vec![event(0, vec![1.0, 0.0]), event(500_000, vec![0.0, 1.0])],
+            }],
+        }
+    }
+
+    fn params(schedule: MovementSchedule, compressor: bool) -> EngineParams {
+        let mut params: EngineParams = serde_json::from_str(
+            r#"{
+                "speakers": [
+                    {"name": "FL", "azimuth_rad": 0.5235987756, "elevation_rad": 0.0, "group_gain": 1.0},
+                    {"name": "FR", "azimuth_rad": -0.5235987756, "elevation_rad": 0.0, "group_gain": 1.0}
+                ],
+                "lfe_index": null,
+                "shapes": ["left", "right"],
+                "surround_downmix_coeff": 0.7071067811865476,
+                "height_downmix_coeff": 0.7071067811865476,
+                "sends": {
+                    "surround_bass_cutoff_hz": 250.0,
+                    "height_low_rolloff_hz": 150.0,
+                    "height_low_rolloff_gain": 0.15,
+                    "height_crossover_hz": 3000.0,
+                    "height_high_shelf_gain": 1.5,
+                    "height_directional_band_hz": 8000.0,
+                    "height_directional_band_gain": 1.0,
+                    "lfe_cutoff_hz": 120.0,
+                    "lfe_filter_order": 4,
+                    "lfe_gain": 1.0
+                },
+                "stems": [{
+                    "routing": [["FL", 1.0], ["FR", 1.0]],
+                    "enabled": true,
+                    "eq_fir": [],
+                    "route_scale": 1.0
+                }],
+                "master": {},
+                "output_mode": "native",
+                "bypass_mastering": true,
+                "soft_limit_threshold": 0.0
+            }"#,
+        )
+        .expect("engine parameters");
+        if compressor {
+            params.bypass_mastering = false;
+            params.master.compressor = Some(upmixer_dsp_core::mastering::compressor::CompParams {
+                threshold_db: -24.0,
+                ratio: 2.0,
+                attack_ms: 5.0,
+                release_ms: 80.0,
+                knee_db: 0.0,
+                makeup_db: 0.0,
+                sidechain_hpf_hz: None,
+            });
+        }
+        params.movement_schedule = Some(Arc::new(schedule));
+        params.validate_movement().expect("movement parameters");
+        params
+    }
+
+    fn engine(rate: u32, schedule: MovementSchedule, compressor: bool) -> PreviewEngine {
+        let frames = rate as usize;
+        PreviewEngine::new(
+            rate,
+            params(schedule, compressor),
+            vec![Arc::new(StemSource {
+                left: vec![1.0; frames],
+                right: vec![1.0; frames],
+            })],
+        )
+    }
+
+    fn render_pattern(rate: u32, schedule: MovementSchedule, pattern: &[usize]) -> [Vec<f64>; 2] {
+        let frames = rate as usize;
+        let mut engine = engine(rate, schedule, false);
+        let output_capacity = frames;
+        let mut output = [
+            Vec::with_capacity(output_capacity),
+            Vec::with_capacity(output_capacity),
+        ];
+        let mut rendered = 0;
+        let mut pattern_index = 0;
+        while rendered < frames {
+            let requested = pattern[pattern_index % pattern.len()].min(frames - rendered);
+            let mut block = vec![0.0; requested * 2];
+            assert_eq!(engine.render(&mut block, requested), requested);
+            output[0].extend_from_slice(&block[..requested]);
+            output[1].extend_from_slice(&block[requested..]);
+            rendered += requested;
+            pattern_index += 1;
+        }
+        output
+    }
+
+    #[test]
+    fn schedule_is_partition_invariant_and_absolute_across_output_rates() {
+        for rate in [44_100, CANONICAL_RATE, 96_000] {
+            let contiguous = render_pattern(rate, schedule(), &[rate as usize]);
+            let varied = render_pattern(rate, schedule(), &[127, 257, 64, 1024, 31]);
+            assert_eq!(contiguous[0].len(), rate as usize);
+            assert_eq!(contiguous[1].len(), rate as usize);
+            for channel in 0..2 {
+                for (frame, (one, many)) in
+                    contiguous[channel].iter().zip(&varied[channel]).enumerate()
+                {
+                    assert!(
+                        (one - many).abs() < 1e-12,
+                        "rate {rate} channel {channel} frame {frame}: {one} != {many}"
+                    );
+                }
+            }
+
+            let route = schedule().stems[0].clone();
+            for frame in 0..rate as usize {
+                let time_us = frame as f64 * 1_000_000.0 / rate as f64;
+                let mut expected = [0.0; 2];
+                route.sample_into_at(time_us, false, &mut expected);
+                assert!(
+                    (contiguous[0][frame] - expected[0]).abs() < 1e-12,
+                    "rate {rate} FL frame {frame}: {} != {}",
+                    contiguous[0][frame],
+                    expected[0]
+                );
+                assert!(
+                    (contiguous[1][frame] - expected[1]).abs() < 1e-12,
+                    "rate {rate} FR frame {frame}: {} != {}",
+                    contiguous[1][frame],
+                    expected[1]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn seek_preroll_matches_continuous_schedule_render() {
+        for rate in [44_100, CANONICAL_RATE, 96_000] {
+            let target = (rate as f64 * 0.82) as usize;
+            let span = (rate as f64 * 0.1) as usize;
+            let mut continuous = engine(rate, schedule(), true);
+            let mut prefix = vec![0.0; (target + span) * 2];
+            assert_eq!(continuous.render(&mut prefix, target + span), target + span);
+
+            let mut seeked = engine(rate, schedule(), true);
+            seeked.seek(target);
+            let mut actual = vec![0.0; span * 2];
+            assert_eq!(seeked.render(&mut actual, span), span);
+
+            for channel in 0..2 {
+                let expected = &prefix
+                    [channel * (target + span) + target..channel * (target + span) + target + span];
+                let got = &actual[channel * span..(channel + 1) * span];
+                for (frame, (want, have)) in expected.iter().zip(got).enumerate() {
+                    assert!(
+                        (want - have).abs() < 1e-7,
+                        "rate {rate} channel {channel} frame {frame}: {want} != {have}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_atomic_movement_update_leaves_the_live_pair_untouched() {
+        let mut live = engine(CANONICAL_RATE, schedule(), false);
+        let original_revision = live
+            .params()
+            .movement_schedule
+            .as_ref()
+            .map(|value| value.revision);
+        let mut replacement = params(schedule(), false);
+        replacement.master.output_gain = 0.25;
+        let mut invalid = schedule();
+        invalid.stems[0].stem_index = 1;
+
+        assert!(live
+            .update_params_with_movement(replacement, Some(invalid))
+            .is_err());
+        assert_eq!(live.position(), 0);
+        assert_eq!(
+            live.params()
+                .movement_schedule
+                .as_ref()
+                .map(|value| value.revision),
+            original_revision
+        );
+        assert_eq!(live.params().master.output_gain, 1.0);
+    }
+}
+
 mod master_meters {
     use std::sync::Arc;
     use upmixer_dsp_core::loudness::measure_loudness_stats;

@@ -12,11 +12,12 @@ import soundfile as sf
 
 from upmixer.config import UpmixConfig
 from upmixer.formats import FORMAT_MAP
-from upmixer.io.adm_writer import AdmObject, render_adm_programme
+from upmixer.io.adm_writer import AdmBwfWriter, AdmObject, render_adm_programme
 from upmixer.loudness import measure_integrated_loudness, measure_true_peak
 from upmixer.mastering import MasteringChain
 from upmixer.separation.stem_pipeline import StemUpmixPipeline
 from upmixer.separation.stem_router import StemRouter
+from upmixer.utils import itu_downmix_stereo
 
 _SR = 48_000
 _FMT = FORMAT_MAP["5.1"]
@@ -95,6 +96,44 @@ def test_object_metadata_gain_remains_after_automatic_route_normalization():
     assert quiet_lkfs - unity_lkfs == pytest.approx(expected, abs=0.05)
 
 
+@pytest.mark.parametrize("object_mode", ["mono", "linked-stereo"])
+def test_short_authored_object_is_padded_to_the_complete_programme(
+    tmp_path, object_mode: str,
+):
+    fmt = FORMAT_MAP["7.1.4"]
+    short = np.column_stack([
+        np.full(32, 0.1), np.full(32, 0.08),
+    ])
+    long = np.column_stack([
+        np.full(64, 0.02), np.full(64, 0.03),
+    ])
+    config = UpmixConfig(
+        output_format=fmt.name,
+        output_type="adm-bwf",
+        output_dither="off",
+        stem_placement={"Vocals": {
+            "azimuth_deg": 90.0,
+            "elevation_deg": 0.0,
+            "width_deg": 40.0,
+            "object_size": 0.0,
+        }},
+        stem_object_mode={"Vocals": object_mode},
+    )
+    programme = StemRouter(config, fmt, _SR).route(
+        {"Vocals": short, "Other": long}, len(long),
+    )
+    assert programme.objects
+    assert all(len(obj.audio) == len(long) for obj in programme.objects)
+    rendered = render_adm_programme(programme.bed, fmt, programme.objects, _SR)
+    assert all(len(audio) == len(long) for audio in rendered.values())
+
+    output = tmp_path / f"short-{object_mode}.wav"
+    AdmBwfWriter(str(output), _SR, config).write(
+        programme.bed, objects=programme.objects,
+    )
+    assert sf.info(output).frames == len(long)
+
+
 @pytest.mark.parametrize("stem", ["Other", "Crowd"])
 def test_bed_route_matches_dry_stereo_loudness(stem: str):
     audio = _stereo_programme()
@@ -167,6 +206,37 @@ def test_adm_reference_render_uses_object_gain_channel_lock_and_zones():
         not np.array_equal(plain[channel], rendered[channel])
         for channel in plain
     )
+
+
+def test_adm_downmix_lock_includes_authored_object_and_ambient_programme():
+    audio = _stereo_programme()
+    config = UpmixConfig(
+        output_format="7.1.4",
+        output_type="adm-bwf",
+        spatial_downmix_lock=True,
+        stem_placement={"Vocals": {
+            "azimuth_deg": 35.0,
+            "elevation_deg": 15.0,
+            "width_deg": 40.0,
+            "object_size": 0.0,
+        }},
+        stem_object_metadata={"Vocals": {"gain": 0.25}},
+        stem_ambient_rear={"Vocals": 0.4},
+        stem_ambient_height={"Vocals": 0.3},
+    )
+    programme = StemRouter(config, FORMAT_MAP["7.1.4"], _SR).route(
+        {"Vocals": audio}, len(audio),
+    )
+    rendered = render_adm_programme(
+        programme.bed, FORMAT_MAP["7.1.4"], programme.objects, _SR,
+    )
+    left, right = itu_downmix_stereo(
+        rendered, config.surround_downmix_coeff, config.height_downmix_coeff,
+    )
+
+    np.testing.assert_allclose(left, audio[:, 0], atol=1e-12)
+    np.testing.assert_allclose(right, audio[:, 1], atol=1e-12)
+    assert any(np.max(np.abs(programme.bed[name])) > 0.0 for name in ("SL", "TFL"))
 
 
 def test_adm_loudness_uses_the_rendered_bed_and_object_programme():

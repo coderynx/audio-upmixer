@@ -71,7 +71,19 @@ def engine_constants() -> dict[str, Any]:
     )
     from upmixer.binaural.geometry import speaker_azimuth_elevation
     from upmixer.formats import FORMAT_MAP
+    from upmixer.movement import (
+        MOVEMENT_FEATURE_VERSION,
+        MOVEMENT_FEATURE_WINDOW_US,
+        MOVEMENT_GRID_US,
+        MOVEMENT_INTERPOLATION_US,
+        MOVEMENT_PRESET_DEPTHS,
+        StemMovementSettings,
+        MOVEMENT_TUNING_DEFAULTS,
+        movement_settings_for_preset,
+    )
+    from upmixer.separation import resolve_placements
     cfg = UpmixConfig()
+    movement_stems = sorted(resolve_placements("balanced", "7.1.4"))
     return {
         "channel_group_gains": {
             "center": cfg.center_gain,
@@ -157,6 +169,19 @@ def engine_constants() -> dict[str, Any]:
         "stem_eq_settings": STEM_EQ_SETTINGS,
         "decode_filter_set": {p.value: name for p, name in DECODE_FILTER_SET.items()},
         "xtc_filter_set": {p.value: name for p, name in XTC_FILTER_SET.items()},
+        "movement": {
+            "feature_version": MOVEMENT_FEATURE_VERSION,
+            "feature_window_us": MOVEMENT_FEATURE_WINDOW_US,
+            "grid_us": MOVEMENT_GRID_US,
+            "interpolation_us": MOVEMENT_INTERPOLATION_US,
+            "defaults": StemMovementSettings().as_dict(),
+            "presets": {
+                preset: movement_settings_for_preset(preset, movement_stems)
+                for preset in MOVEMENT_PRESET_DEPTHS
+            },
+            "preset_depths": MOVEMENT_PRESET_DEPTHS,
+            "tuning": MOVEMENT_TUNING_DEFAULTS,
+        },
     }
 
 
@@ -164,6 +189,7 @@ def configuration_schema(capability: dict[str, Any]) -> dict[str, Any]:
     """Return defaults used by dynamic and advanced web controls."""
     from upmixer.crosstalk.profiles import CROSSTALK_PROFILES
     from upmixer.formats import (
+        ADM_DELIVERY_LAYOUTS,
         BINAURAL_BED_FORMATS,
         DOLBY_ADM_BED_FORMATS,
         FORMAT_MAP,
@@ -204,6 +230,7 @@ def configuration_schema(capability: dict[str, Any]) -> dict[str, Any]:
             "output_subtypes": list(WAV_SUBTYPES),
             "sample_rates": [44100, 48000, 88200, 96000, 192000],
             "adm_beds": list(DOLBY_ADM_BED_FORMATS),
+            "adm_delivery_layouts": list(ADM_DELIVERY_LAYOUTS),
             "binaural_profiles": ["studio", "listening", "flat"],
             "binaural_beds": list(BINAURAL_BED_FORMATS),
             "transaural_profiles": list(CROSSTALK_PROFILES),

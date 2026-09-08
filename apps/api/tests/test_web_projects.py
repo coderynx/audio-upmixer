@@ -542,6 +542,7 @@ def test_project_seeds_complete_balanced_preset(tmp_path, monkeypatch):
             "stem_height_texture",
             "stem_ambient_height_cutoff_hz",
             "stem_ambient_height_crossover_hz",
+            "stem_movement",
         ):
             assert set(created_mixing[field]) == {"Vocals", "Bass"}
         assert created_mixing["stem_placement"]["Vocals"] == {
@@ -552,12 +553,31 @@ def test_project_seeds_complete_balanced_preset(tmp_path, monkeypatch):
             "diversity": 0.0,
             "center_level_db": 0.6,
         }
-        assert created_mixing["stem_ambient_rear"]["Vocals"] == 0.0
-        assert created_mixing["stem_ambient_height"]["Vocals"] == 0.0
-        assert created_mixing["stem_ambient_trim_db"]["Vocals"] == 0.0
-        assert created_mixing["stem_height_texture"]["Vocals"] == 0.0
-        assert created_mixing["stem_ambient_height_cutoff_hz"]["Vocals"] == 3000.0
-        assert created_mixing["stem_ambient_height_crossover_hz"]["Vocals"] == 4000.0
+        from upmixer.movement import movement_settings_for_preset
+        from upmixer.separation import preset_treatments
+
+        vocals_treatment = preset_treatments("balanced", "7.1.4", ["Vocals"])["Vocals"]
+        assert created_mixing["stem_ambient_rear"]["Vocals"] == pytest.approx(
+            vocals_treatment.ambient_rear
+        )
+        assert created_mixing["stem_ambient_height"]["Vocals"] == pytest.approx(
+            vocals_treatment.ambient_height
+        )
+        assert created_mixing["stem_ambient_trim_db"]["Vocals"] == pytest.approx(
+            vocals_treatment.ambient_trim_db
+        )
+        assert created_mixing["stem_height_texture"]["Vocals"] == pytest.approx(
+            vocals_treatment.height_texture
+        )
+        assert created_mixing["stem_ambient_height_cutoff_hz"]["Vocals"] == pytest.approx(
+            vocals_treatment.ambient_height_cutoff_hz
+        )
+        assert created_mixing["stem_ambient_height_crossover_hz"]["Vocals"] == pytest.approx(
+            vocals_treatment.ambient_height_crossover_hz
+        )
+        assert created_mixing["stem_movement"]["Vocals"] == movement_settings_for_preset(
+            "balanced", ["Vocals"]
+        )["Vocals"]
         response = client.post(f"/api/v1/projects/{created.json()['id']}/assets", json={
             "import_id": imported["id"],
         })
@@ -575,6 +595,7 @@ def test_project_seeds_complete_balanced_preset(tmp_path, monkeypatch):
             "stem_height_texture",
             "stem_ambient_height_cutoff_hz",
             "stem_ambient_height_crossover_hz",
+            "stem_movement",
         ):
             assert set(track_mixing[field]) == {"Vocals", "Bass"}
 

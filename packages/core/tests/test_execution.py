@@ -70,7 +70,7 @@ def test_preflight_rejects_adm_delivery_of_a_stereo_layout(tmp_path):
     source = tmp_path / "source.wav"
     sf.write(source, np.zeros((480, 2)), 48_000)
     cfg = UpmixConfig(output_format="stereo", output_type="adm-bwf", output_subtype="PCM_24")
-    with pytest.raises(PreflightError, match="surround bed"):
+    with pytest.raises(PreflightError, match="surround layout"):
         preflight_job(str(source), str(tmp_path / "out.wav"), cfg)
 
 

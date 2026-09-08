@@ -128,7 +128,7 @@ def test_native_rate_project_prepares_delivers_and_exports(
     )
     assert (old_stem_dir / "peaks.bin").is_file()
     assert (old_stem_dir / "peaks.json").is_file()
-    assert old_stem_rate == 48_000
+    assert old_stem_rate == 44_100
     old_stem_peak = float(np.abs(old_stem_audio).max())
     assert separation_calls == [(44_100, 44_100)]
 
@@ -155,10 +155,10 @@ def test_native_rate_project_prepares_delivers_and_exports(
     assert prepared["stem_generation"] == first_generation + 1
     assert "stem_native_rate" not in prepared["manifest"]["engine"]
     stem = prepared["tracks"][0]["stems"][0]
-    assert stem["sample_rate"] == 48_000
+    assert stem["sample_rate"] == 44_100
     full = web_client.get(stem["audio_url"])
     assert full.status_code == 200
-    assert sf.info(io.BytesIO(full.content)).samplerate == 48_000
+    assert sf.info(io.BytesIO(full.content)).samplerate == 44_100
     preview = web_client.get(stem["preview_url"])
     assert preview.status_code == 200
     assert sf.info(io.BytesIO(preview.content)).samplerate == 48_000
@@ -170,7 +170,7 @@ def test_native_rate_project_prepares_delivers_and_exports(
     )
     assert (new_stem_dir / "peaks.bin").is_file()
     assert (new_stem_dir / "peaks.json").is_file()
-    assert new_stem_rate == 48_000
+    assert new_stem_rate == 44_100
     assert float(np.abs(new_stem_audio).max()) > old_stem_peak * 2
     assert separation_calls == [(44_100, 44_100), (44_100, 44_100)]
 
@@ -186,7 +186,7 @@ def test_native_rate_project_prepares_delivers_and_exports(
             str(Path(stem_input_dir) / "Vocals.wav"), always_2d=True
         )
         export_inputs.append((stem_input_dir, float(np.abs(audio).max())))
-        assert sample_rate == 48_000
+        assert sample_rate == 44_100
         return original_process_file(
             self, input_path, output_path, *args, **kwargs
         )

@@ -4,6 +4,8 @@
 // forwards parameter changes. All DSP lives in packages/dsp; see
 // docs/contracts/preview_export_parity.md.
 
+import type { MovementSchedule } from "./engineTypes";
+
 export type DspEngineParams = Record<string, unknown>;
 
 type FirUpdate = {
@@ -34,6 +36,8 @@ export type DspEngineCallbacks = {
    * result `measure()` already resolved with. See `DspEngineClient.measure`.
    */
   onMeasured?: (result: { lkfs: number; dbtp: number; monitorLkfs?: number; monitorDbtp?: number }, requestId: number) => void;
+  /** The worklet has installed the schedule carried by the matching params. */
+  onMovementInstalled?: (revision: number | null) => void;
   onError?: (message: string) => void;
 };
 
@@ -49,6 +53,10 @@ function encodeParams(params: DspEngineParams): Uint8Array {
   return PARAM_ENCODER.encode(JSON.stringify(params));
 }
 
+function movementRevision(schedule: MovementSchedule | null | undefined): number | null | undefined {
+  return schedule === undefined ? undefined : schedule?.revision ?? null;
+}
+
 /** Fetch a matching DSP binary whenever a new audio runtime is created. */
 export function loadDspModule(): Promise<WebAssembly.Module> {
   return fetch(WASM_URL, { cache: "no-store" }).then((response) => {
@@ -61,6 +69,8 @@ export function loadDspModule(): Promise<WebAssembly.Module> {
 
 export class DspEngineClient {
   readonly node: AudioWorkletNode;
+  /** The compiled module is shared with the movement worker. */
+  readonly wasmModule: WebAssembly.Module;
   private readonly callbacks: DspEngineCallbacks;
   /** Resolves once the processor has instantiated the wasm. */
   readonly ready: Promise<string>;
@@ -69,21 +79,24 @@ export class DspEngineClient {
   private nextSeekId = 0;
   private readonly pendingSeeks = new Map<number, () => void>();
   /** Latest params awaiting the next coalesced `updateParams` post. */
-  private pendingUpdate: DspEngineParams | null = null;
+  private pendingUpdate: { params: DspEngineParams; movementSchedule?: MovementSchedule | null; movementReady: boolean } | null = null;
   private updateScheduled = false;
   private disposed = false;
   private masterEqFir: ArrayLike<number> | null = null;
   private referenceFir: ArrayLike<number> | null = null;
   private stemEqFir: Array<ArrayLike<number> | null> = [];
+  private movementRevision: number | null | undefined;
 
   private constructor(
     node: AudioWorkletNode,
     callbacks: DspEngineCallbacks,
     ready: Promise<string>,
+    wasmModule: WebAssembly.Module,
   ) {
     this.node = node;
     this.callbacks = callbacks;
     this.ready = ready;
+    this.wasmModule = wasmModule;
   }
 
   static async create(
@@ -160,6 +173,11 @@ export class DspEngineClient {
         case "ended":
           callbacks.onEnded?.();
           break;
+        case "movementInstalled":
+          callbacks.onMovementInstalled?.(
+            message.revision == null ? null : Number(message.revision),
+          );
+          break;
         case "error": {
           const text = String(message.message);
           rejectReady(new Error(text));
@@ -171,19 +189,31 @@ export class DspEngineClient {
       }
     };
 
-    client = new DspEngineClient(node, callbacks, ready);
+    client = new DspEngineClient(node, callbacks, ready, module);
     return client;
   }
 
   /** Create the engine. Stems must be added afterwards. */
-  setParams(params: DspEngineParams): void {
+  setParams(
+    params: DspEngineParams,
+    movementSchedule?: MovementSchedule | null,
+    movementReady = true,
+  ): void {
     // Supersedes any coalesced update: this block builds a fresh engine.
     this.pendingUpdate = null;
     this.masterEqFir = null;
     this.referenceFir = null;
     this.stemEqFir = [];
+    this.movementRevision = movementRevision(movementSchedule);
     const { bytes, firs, transfer } = this.prepareParams(params, true);
-    this.node.port.postMessage({ type: "params", bytes, firs }, transfer);
+    const scheduleBytes = movementSchedule === undefined
+      ? undefined
+      : PARAM_ENCODER.encode(JSON.stringify(movementSchedule));
+    if (scheduleBytes) transfer.push(scheduleBytes.buffer);
+    this.node.port.postMessage({
+      type: "params", bytes, firs, movementSchedule: scheduleBytes,
+      movementRevision: this.movementRevision, movementReady,
+    }, transfer);
   }
 
   /**
@@ -196,8 +226,12 @@ export class DspEngineClient {
    * block, so only the latest one before a frame actually needs to reach the
    * worklet — the frames in between would just be immediately superseded.
    */
-  updateParams(params: DspEngineParams): void {
-    this.pendingUpdate = params;
+  updateParams(
+    params: DspEngineParams,
+    movementSchedule?: MovementSchedule | null,
+    movementReady = true,
+  ): void {
+    this.pendingUpdate = { params, movementSchedule, movementReady };
     if (this.updateScheduled || this.disposed) return;
     this.updateScheduled = true;
     requestAnimationFrame(() => {
@@ -210,8 +244,22 @@ export class DspEngineClient {
     const latest = this.pendingUpdate;
     this.pendingUpdate = null;
     if (!latest || this.disposed) return;
-    const { bytes, firs, transfer } = this.prepareParams(latest);
-    this.node.port.postMessage({ type: "update", bytes, firs }, transfer);
+    const { bytes, firs, transfer } = this.prepareParams(latest.params);
+    const revision = movementRevision(latest.movementSchedule);
+    const includeSchedule = latest.movementSchedule !== undefined && revision !== this.movementRevision;
+    let scheduleBytes: Uint8Array | null | undefined;
+    if (includeSchedule) {
+      scheduleBytes = latest.movementSchedule === null
+        ? null
+        : PARAM_ENCODER.encode(JSON.stringify(latest.movementSchedule));
+      if (scheduleBytes) transfer.push(scheduleBytes.buffer);
+      this.movementRevision = revision;
+    }
+    this.node.port.postMessage({
+      type: "update", bytes, firs, movementSchedule: scheduleBytes,
+      movementRevision: includeSchedule ? revision : undefined,
+      movementReady: latest.movementReady,
+    }, transfer);
   }
 
   private prepareParams(

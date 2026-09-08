@@ -141,6 +141,37 @@ MEASURED_HRIR_LAYOUTS: tuple[str, ...] = tuple(FORMAT_MAP)
 DOLBY_ADM_BED_FORMATS: tuple[str, ...] = ("5.1", "7.1", "7.1.2")
 """Bed configurations permitted by Dolby Atmos Master ADM Profile v1.1."""
 
+# The requested layout can be wider than the DirectSpeakers bed.  The ADM
+# writer realizes those extra finished height channels as fixed mono objects at
+# the final serialization boundary.  Keep this separate from the legal bed
+# list: callers that validate a requested delivery need both concepts.
+ADM_DELIVERY_LAYOUTS: dict[str, tuple[str, tuple[ChannelLabel, ...]]] = {
+    "5.1": ("5.1", ()),
+    "7.1": ("7.1", ()),
+    "5.1.2": ("5.1", (ChannelLabel.TFL, ChannelLabel.TFR)),
+    "5.1.4": (
+        "5.1",
+        (ChannelLabel.TFL, ChannelLabel.TFR, ChannelLabel.TBL, ChannelLabel.TBR),
+    ),
+    "7.1.2": ("7.1.2", ()),
+    "7.1.4": (
+        "7.1",
+        (ChannelLabel.TFL, ChannelLabel.TFR, ChannelLabel.TBL, ChannelLabel.TBR),
+    ),
+}
+
+
+def adm_delivery_layout(layout: str) -> tuple[OutputFormat, tuple[ChannelLabel, ...]]:
+    """Return the serialized ADM bed and fixed carrier labels for *layout*."""
+    try:
+        bed_name, carriers = ADM_DELIVERY_LAYOUTS[layout]
+        return FORMAT_MAP[bed_name], carriers
+    except KeyError:
+        raise ValueError(
+            f"Unknown ADM delivery layout '{layout}'. "
+            f"Supported: {tuple(ADM_DELIVERY_LAYOUTS)}"
+        ) from None
+
 BINAURAL_BED_FORMATS: tuple[str, ...] = ("5.1.4", "7.1.2", "7.1.4")
 """Valid speaker-layout beds for ``UpmixConfig.output_format`` when
 ``UpmixConfig.binaural`` is enabled."""
@@ -291,9 +322,9 @@ def validate_delivery(output_format: str, output_type: str) -> None:
             f"transaural output requires output_format one of {TRANSAURAL_BED_FORMATS}, "
             f"got '{output_format}'"
         )
-    if output_type == "adm-bwf" and output_format not in DOLBY_ADM_BED_FORMATS:
+    if output_type == "adm-bwf" and output_format not in ADM_DELIVERY_LAYOUTS:
         raise ValueError(
-            f"adm-bwf output requires a Dolby surround bed, one of "
-            f"{DOLBY_ADM_BED_FORMATS}; "
-            f"output_format '{output_format}' delivers WAV only"
+            f"adm-bwf output requires a supported surround layout, one of "
+            f"{tuple(ADM_DELIVERY_LAYOUTS)}; "
+            f"output_format '{output_format}' is not an ADM delivery"
         )

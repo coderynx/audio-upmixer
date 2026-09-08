@@ -349,6 +349,39 @@ def register_project_routes(
             raise HTTPException(status_code=404, detail="Waveform peaks are not available")
         return FileResponse(path, media_type="application/octet-stream")
 
+    @app.get("/api/v1/projects/{project_id}/tracks/{track_id}/movement-features", tags=["projects"])
+    def read_project_track_movement_features(
+        project_id: str,
+        track_id: str,
+        v: int | None = Query(default=None, ge=0),
+        session: Session = Depends(database_session),
+    ) -> FileResponse:
+        track = session.get(ProjectTrack, track_id)
+        if not track or track.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Project track not found")
+        generations = {stem.generation for stem in track.stems}
+        if len(generations) > 1:
+            raise HTTPException(status_code=409, detail="Track stems are from mixed generations")
+        generation = next(iter(generations), 0)
+        if v is not None and v != generation:
+            raise HTTPException(status_code=404, detail="Movement features are not available for this generation")
+        stem_by_id = {stem.id: stem for stem in track.stems}
+        relative_path = (
+            stem_by_id[next(iter(stem_by_id))].relative_path
+            if stem_by_id else None
+        )
+        path = app.state.project_stems.ensure_movement_features(
+            project_id, track_id, generation=generation,
+            relative_path=relative_path,
+        )
+        if not path:
+            raise HTTPException(status_code=404, detail="Movement features are not available")
+        headers = (
+            {"Cache-Control": "private, max-age=31536000, immutable"}
+            if v is not None else {}
+        )
+        return FileResponse(path, media_type="application/json", headers=headers)
+
     @app.get("/api/v1/projects/{project_id}/reference-match/{layout}/fir", tags=["projects"])
     def read_project_reference_match_fir(
         project_id: str,

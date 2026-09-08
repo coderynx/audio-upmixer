@@ -22,7 +22,14 @@ from pathlib import Path
 
 import numpy as np
 
+from upmixer.movement import (
+    extract_feature_sidecar,
+    validate_feature_sidecar,
+    validate_feature_sidecar_for_stems,
+)
+
 _MANIFEST_FILE = "stems.json"
+MOVEMENT_FEATURES_FILENAME = "movement-features.json"
 _SCHEMA = 1
 
 
@@ -63,6 +70,12 @@ class PlainStemStore:
         sample_rate = manifest.get("sample_rate")
         if not stem_keys or not sample_rate:
             return None
+        try:
+            sample_rate = int(sample_rate)
+        except (TypeError, ValueError):
+            return None
+        if sample_rate <= 0:
+            return None
 
         import soundfile as sf  # type: ignore[import-untyped]
 
@@ -71,11 +84,15 @@ class PlainStemStore:
             wav_path = self._root / _stem_filename(stem_key)
             if not wav_path.exists():
                 return None
-            data, _ = sf.read(str(wav_path), dtype="float32", always_2d=True)
+            data, file_sample_rate = sf.read(
+                str(wav_path), dtype="float32", always_2d=True,
+            )
+            if file_sample_rate != sample_rate:
+                return None
             stems[stem_key] = data
         if not stems:
             return None
-        return stems, int(sample_rate)
+        return stems, sample_rate
 
     def write(
         self,
@@ -83,10 +100,15 @@ class PlainStemStore:
         sample_rate: int,
         *,
         source_size: int | None = None,
+        movement_features: dict | None = None,
     ) -> None:
         """Write stems, replacing any previous contents of this directory."""
         import soundfile as sf  # type: ignore[import-untyped]
 
+        if movement_features is None and stems:
+            movement_features = extract_feature_sidecar(stems, sample_rate)
+        elif movement_features is not None:
+            validate_feature_sidecar_for_stems(movement_features, stems, sample_rate)
         self._root.mkdir(parents=True, exist_ok=True)
         previous_stem_files: set[str] = set()
         try:
@@ -125,3 +147,43 @@ class PlainStemStore:
         current_stem_files = {_stem_filename(stem_key) for stem_key in stems}
         for filename in previous_stem_files - current_stem_files:
             (self._root / filename).unlink(missing_ok=True)
+
+        # Empty stores have no analysis; remove any stale sidecar.
+        if movement_features is None:
+            (self._root / MOVEMENT_FEATURES_FILENAME).unlink(missing_ok=True)
+        else:
+            self.write_features(movement_features, stem_keys=list(stems))
+
+    def write_features(
+        self, features: dict, *, stem_keys: list[str] | tuple[str, ...] | None = None,
+    ) -> None:
+        """Atomically persist canonical features produced by the shared DSP."""
+        expected = list(stem_keys) if stem_keys is not None else self._manifest_stem_keys()
+        validate_feature_sidecar(features, expected)
+        self._root.mkdir(parents=True, exist_ok=True)
+        destination = self._root / MOVEMENT_FEATURES_FILENAME
+        temporary = self._root / f".{MOVEMENT_FEATURES_FILENAME}.tmp"
+        temporary.write_text(
+            json.dumps(features, indent=2, allow_nan=False), encoding="utf-8"
+        )
+        os.replace(temporary, destination)
+
+    def load_features(
+        self, stem_keys: list[str] | tuple[str, ...] | None = None,
+    ) -> dict | None:
+        """Load and shared-DSP-validate canonical features, or return ``None``."""
+        path = self._root / MOVEMENT_FEATURES_FILENAME
+        try:
+            features = json.loads(path.read_text(encoding="utf-8"))
+            expected = list(stem_keys) if stem_keys is not None else self._manifest_stem_keys()
+            return validate_feature_sidecar(features, expected)
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def _manifest_stem_keys(self) -> list[str]:
+        try:
+            manifest = json.loads((self._root / _MANIFEST_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return []
+        keys = manifest.get("stem_keys") if isinstance(manifest, dict) else None
+        return [str(key) for key in keys] if isinstance(keys, list) else []

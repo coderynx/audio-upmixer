@@ -1,6 +1,6 @@
 //! Live parameter edits and the rebuilds a topology change forces.
 
-use super::mix::build_stem_mix_routes;
+use super::mix::{build_stem_mix_routes, update_movement_route_flags};
 use super::{build_decorrelator, build_unifier, graph::EngineGraph, PreviewEngine, GAIN_RAMP_MS};
 use crate::mastering::dyneq::DynamicEq;
 use crate::stream::limiter::StreamingLimiter;
@@ -41,6 +41,7 @@ pub(crate) fn build_route(
 /// builds, the speakers it sends them to, or the gains on the way.
 fn routing_changed(old: &EngineParams, new: &EngineParams) -> bool {
     if old.stems.len() != new.stems.len()
+        || movement_schedule_key(old) != movement_schedule_key(new)
         || old.shapes != new.shapes
         || old
             .speakers
@@ -72,6 +73,42 @@ fn routing_changed(old: &EngineParams, new: &EngineParams) -> bool {
             || a.ambient_height_crossover_hz != b.ambient_height_crossover_hz
             || a.object_mode != b.object_mode
             || a.object_placement != b.object_placement
+    })
+}
+
+/// Whether the compact speaker/source route description itself changed. A
+/// per-stem ambient slider, filter, or texture edit is consumed by the live
+/// `StemRouteState`; rebuilding this table for those edits needlessly repans
+/// every static object. Movement revisions only alter the bed destination
+/// flags, refreshed separately below.
+fn mix_routes_changed(old: &EngineParams, new: &EngineParams) -> bool {
+    if old.stems.len() != new.stems.len()
+        || old.shapes != new.shapes
+        || old
+            .speakers
+            .iter()
+            .map(|speaker| (&speaker.name, speaker.group_gain))
+            .ne(new
+                .speakers
+                .iter()
+                .map(|speaker| (&speaker.name, speaker.group_gain)))
+    {
+        return true;
+    }
+    old.stems.iter().zip(&new.stems).any(|(a, b)| {
+        a.routing != b.routing
+            || a.object_mode != b.object_mode
+            || a.object_placement != b.object_placement
+    })
+}
+
+fn movement_schedule_key(params: &EngineParams) -> Option<(u64, u32, usize)> {
+    params.movement_schedule.as_ref().map(|schedule| {
+        (
+            schedule.revision,
+            schedule.sample_rate,
+            schedule.duration_frames,
+        )
     })
 }
 
@@ -187,7 +224,34 @@ impl PreviewEngine {
     /// the speakers once the look-ahead already rendered under the old
     /// params has drained — audible lag on the order of the LF unifier's
     /// horizon plus the limiter's lookahead, not audible silence.
-    pub fn update_params(&mut self, params: EngineParams) {
+    pub fn update_params(&mut self, mut params: EngineParams) {
+        // A monitor update can arrive before its replacement schedule. Keep
+        // the installed immutable schedule live until the atomic installer
+        // supplies a new one; otherwise one ordinary update needlessly
+        // rebuilds the render graph twice and briefly falls back to static
+        // routing.
+        if params.movement_schedule.is_none() {
+            params.movement_schedule = self.params.movement_schedule.clone();
+        }
+        self.update_params_with_schedule_policy(params)
+    }
+
+    /// Replace the ordinary parameters and their compiled movement schedule as
+    /// one validated update. A `None` schedule intentionally clears the
+    /// installed schedule; unlike [`Self::update_params`], this method never
+    /// carries the previous schedule forward.
+    pub fn update_params_with_movement(
+        &mut self,
+        mut params: EngineParams,
+        schedule: Option<crate::movement::MovementSchedule>,
+    ) -> Result<(), String> {
+        params.movement_schedule = schedule.map(std::sync::Arc::new);
+        params.validate_movement()?;
+        self.update_params_with_schedule_policy(params);
+        Ok(())
+    }
+
+    fn update_params_with_schedule_policy(&mut self, params: EngineParams) {
         let firs_changed = !params.transferred_firs;
         let mut old = std::mem::replace(&mut self.params, params);
         if !firs_changed {
@@ -197,7 +261,6 @@ impl PreviewEngine {
             self.params.master.reference_fir = std::mem::take(&mut old.master.reference_fir);
             self.params.master.eq_fir = std::mem::take(&mut old.master.eq_fir);
         }
-
         let topology_changed = old.speakers.len() != self.params.speakers.len()
             || old.lfe_index != self.params.lfe_index
             || old.speakers.iter().map(|speaker| &speaker.name).ne(self
@@ -229,12 +292,16 @@ impl PreviewEngine {
         // block, so a fader or a mastering edit — which change neither the
         // routed signals nor their weights — keeps the measurement.
         let routes_changed = routing_changed(&old, &self.params);
+        let mix_table_changed = mix_routes_changed(&old, &self.params);
+        let movement_changed = movement_schedule_key(&old) != movement_schedule_key(&self.params);
         if sends_changed || routes_changed {
             self.clear_route_scales();
         }
-        if routes_changed {
+        if mix_table_changed {
             self.graph.stem_mix_routes =
                 build_stem_mix_routes(&self.params, &self.graph.panner_layout);
+        } else if movement_changed {
+            update_movement_route_flags(&self.params, &mut self.graph.stem_mix_routes);
         }
         for (i, route) in self.graph.routes.iter_mut().enumerate() {
             let new_eq = self.params.stems.get(i).and_then(|s| s.eq.clone());
@@ -412,6 +479,31 @@ impl PreviewEngine {
         }
     }
 
+    /// Install a compiled schedule atomically with its stem settings. The
+    /// schedule is validated at the FFI boundary before this method is called.
+    pub fn set_movement_schedule(&mut self, schedule: Option<crate::movement::MovementSchedule>) {
+        if schedule.as_ref().is_some_and(|value| {
+            value.validate(self.params.speakers.len()).is_err()
+                || value
+                    .stems
+                    .iter()
+                    .any(|stem| stem.stem_index >= self.params.stems.len())
+        }) {
+            return;
+        }
+        let schedule = schedule.map(std::sync::Arc::new);
+        if movement_schedule_key(&self.params)
+            == schedule
+                .as_ref()
+                .map(|value| (value.revision, value.sample_rate, value.duration_frames))
+        {
+            return;
+        }
+        self.params.movement_schedule = schedule;
+        self.clear_route_scales();
+        update_movement_route_flags(&self.params, &mut self.graph.stem_mix_routes);
+    }
+
     /// Rebuild every topology-dependent stage through the same constructor
     /// as a new engine, then let the caller seek and warm its transport.
     fn rebuild_for_new_topology(&mut self) {
@@ -448,12 +540,18 @@ impl PreviewEngine {
             .iter()
             .map(|s| {
                 let target = if s.enabled {
-                    10.0_f64.powf(s.rebalance_db / 20.0) * s.route_scale
+                    10.0_f64.powf(s.rebalance_db / 20.0)
                 } else {
                     0.0
                 };
                 OnePole::new_at(GAIN_RAMP_MS, self.sample_rate as f64, target)
             })
+            .collect();
+        self.stem_route_scale = self
+            .params
+            .stems
+            .iter()
+            .map(|s| OnePole::new_at(GAIN_RAMP_MS, self.sample_rate as f64, s.route_scale))
             .collect();
         self.graph.stem_mix_routes = build_stem_mix_routes(&self.params, &self.graph.panner_layout);
     }

@@ -14,6 +14,7 @@ from upmixer.codecs import DEFAULT_CODEC, validate_codec
 from upmixer.config import UpmixConfig
 from upmixer.formats import FORMAT_MAP, validate_delivery
 from upmixer.separation import preset_treatments, resolve_placements
+from upmixer.movement import movement_settings_for_preset
 from upmixer.separation.stem_router import (
     DEFAULT_ROUTING_PRESET,
     build_stem_routing,
@@ -137,8 +138,15 @@ def seed_balanced_mix(block: dict[str, Any], layout: str, stems: list[str]) -> d
     texture_map = mixing.setdefault("stem_height_texture", {})
     cutoff_map = mixing.setdefault("stem_ambient_height_cutoff_hz", {})
     crossover_map = mixing.setdefault("stem_ambient_height_crossover_hz", {})
+    movement_map = mixing.setdefault("stem_movement", {})
+    movement_defaults = movement_settings_for_preset(DEFAULT_ROUTING_PRESET, stems)
     for stem in stems:
         base = stem.split("@", 1)[0]
+        # A base entry applies to every zone unless a producer supplied an
+        # exact per-zone override.  Do not seed an exact disabled entry that
+        # would shadow an existing base configuration.
+        if stem not in movement_map and base not in movement_map:
+            movement_map[stem] = movement_defaults[stem]
         placement = placements.get(base)
         if placement is None:
             continue

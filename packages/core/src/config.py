@@ -167,6 +167,14 @@ class UpmixConfig:
     stem_routing: dict | None = None
     stem_placement: dict | None = None
 
+    # Per-stem generated movement controls.  Values are keyed by stem name or
+    # ``Stem@zone`` and contain the small public movement contract documented
+    # in ``upmixer.movement``.
+    stem_movement: dict | None = None
+    # Core-owned acoustic tuning passed through to the shared movement
+    # compiler. ``None`` uses movement.MOVEMENT_TUNING_DEFAULTS.
+    stem_movement_tuning: dict | None = None
+
     # Explicit per-stem on/off state.  Missing stems remain enabled.
     stem_enabled: dict | None = None
 

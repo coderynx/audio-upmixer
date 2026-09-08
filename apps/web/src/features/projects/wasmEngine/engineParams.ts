@@ -15,7 +15,12 @@ import type {
 } from "../masteringProfiles";
 import { resolveLfTargets } from "../masteringProfiles";
 import type { DynamicEqBand } from "@/lib/manifest";
-import type { StemDynamicEqSettings, StemDynamicsSettings, StemEqSettings } from "@/lib/manifest";
+import type {
+  StemDynamicEqSettings,
+  StemDynamicsSettings,
+  StemEqSettings,
+  StemMovementSettings,
+} from "@/lib/manifest";
 
 export type OutputMode = "binaural" | "transaural" | "stereo" | "native";
 
@@ -71,6 +76,10 @@ export type StemMix = {
   eq?: StemEqSettings;
   dynamics?: StemDynamicsSettings;
   dynamicEq?: StemDynamicEqSettings;
+  /** Persistent movement controls; monitoring state is kept separately. */
+  movement?: StemMovementSettings;
+  persistentGainDb?: number;
+  persistentEnabled?: boolean;
   /** Whole-stem route-energy normalization, as `StemRouter.route` computes. */
   routeScale?: number;
   /** How much of the stem's ambient half reaches the surrounds, and the
@@ -210,6 +219,9 @@ export function buildEngineParams(input: BuildEngineParamsInput): Record<string,
       eq: stem.eq ? { ...stem.eq, mix: stem.eq.mix / 100 } : null,
       dynamics: stem.dynamics ? { ...stem.dynamics, mix: stem.dynamics.mix / 100 } : null,
       dynamic_eq: stem.dynamicEq ? { ...stem.dynamicEq, mix: stem.dynamicEq.mix / 100 } : null,
+      movement: stem.movement ?? null,
+      persistent_enabled: stem.persistentEnabled ?? true,
+      persistent_gain_db: stem.persistentGainDb ?? 0,
       route_scale: stem.routeScale ?? 1,
       ambient_rear: stem.ambientRear ?? 0,
       ambient_height: stem.ambientHeight ?? 0,

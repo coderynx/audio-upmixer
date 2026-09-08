@@ -7,6 +7,8 @@ import { getStemColor, getStemIcon } from "@/lib/stems";
 import { speakerCoordinates, speakerDisplayLabel } from "@/lib/spatial";
 import { FloatingWindow } from "./FloatingWindow";
 import type { StemPlacement } from "./wasmEngine/panner";
+import type { StemMovementSettings } from "@/lib/manifest";
+import { StemMovementControls, type StemMovementDefaults } from "./StemMovementControls";
 
 type PannerMode = "planar" | "spherical";
 type Point = { x: number; y: number };
@@ -71,6 +73,9 @@ export function BedPannerWindow({
   onPlacement,
   onRoute,
   onAmbient = () => undefined,
+  movement,
+  movementDefaults,
+  onMovement = () => undefined,
 }: {
   stemName: string;
   placement: StemPlacement;
@@ -88,6 +93,9 @@ export function BedPannerWindow({
   onPlacement: (next: StemPlacement) => void;
   onRoute: (patch: Record<string, number>) => void;
   onAmbient?: (patch: { rear?: number; height?: number; ambientTrimDb?: number; heightTexture?: number; heightCrossoverHz?: number; heightCutoffHz?: number }) => void;
+  movement?: StemMovementSettings;
+  movementDefaults?: StemMovementDefaults;
+  onMovement?: (value: StemMovementSettings) => void;
 }) {
   const [mode, setMode] = React.useState<PannerMode>("planar");
   const ringInsets = [12.5, 25, 37.5];
@@ -232,6 +240,7 @@ export function BedPannerWindow({
             value={[heightTexture]} onValueChange={([texture]) => onAmbient({ heightTexture: texture })} />
         </label>}
       </div>}
+      <StemMovementControls stemName={stemName} value={movement} channels={channels} defaults={movementDefaults} onChange={onMovement} />
     </div>
   </FloatingWindow>;
 }

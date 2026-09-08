@@ -11,6 +11,7 @@ mod binaural;
 mod dither;
 mod loudness;
 mod mastering;
+mod movement;
 mod panner;
 mod reference;
 mod spatial;
@@ -38,6 +39,7 @@ fn upmixer_dsp(m: &Bound<'_, PyModule>) -> PyResult<()> {
     dither::register(m)?;
     loudness::register(m)?;
     mastering::register(m)?;
+    movement::register(m)?;
     panner::register(m)?;
     reference::register(m)?;
     spatial::register(m)?;

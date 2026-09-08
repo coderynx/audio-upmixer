@@ -5,16 +5,19 @@
 //! `GET /api/v1/configuration`; nothing in this module has a default of its
 //! own beyond "stage absent means stage off".
 
+use std::sync::Arc;
+
 use serde::Deserialize;
 
 use crate::mastering::{
     bass::BassParams, clip::ClipParams, compressor::CompParams, dyneq::BandParams,
     head::HeadParams, limiter::LimiterParams,
 };
+use crate::movement::{MovementSchedule, MovementSettings};
 use crate::routing::ambient::AMBIENT_HEIGHT_CROSSOVER_HZ;
 use crate::spatial::voicing::VoicingParams;
-use crate::stem_dynamics::StemDynamicsParams;
 use crate::stem_dynamic_eq::StemDynamicEqParams;
+use crate::stem_dynamics::StemDynamicsParams;
 use crate::stem_eq::StemEqParams;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -142,6 +145,10 @@ pub struct StemParams {
     pub object_mode: Option<ObjectMode>,
     #[serde(default)]
     pub object_placement: Option<ObjectPlacement>,
+    /// Per-stem movement settings. The compiled schedule below is the only
+    /// runtime source of movement decisions.
+    #[serde(default)]
+    pub movement: Option<MovementSettings>,
 }
 
 fn ambient_height_crossover_default() -> f64 {
@@ -258,9 +265,38 @@ pub struct EngineParams {
     /// its 5.1 re-render, whose weights are fixed and ignore these.
     #[serde(default)]
     pub meter_weights: Vec<f64>,
+    /// One immutable schedule shared by preview, measurement, and offline
+    /// callers. It is optional while movement is disabled.
+    #[serde(default)]
+    pub movement_schedule: Option<Arc<MovementSchedule>>,
 }
 
 impl EngineParams {
+    /// Validate movement state at every native/WASM parameter boundary. The
+    /// schedule and its per-stem controls are installed as one revision, so
+    /// malformed live JSON cannot enter the renderer through a path that
+    /// bypasses the compiler.
+    pub fn validate_movement(&self) -> Result<(), String> {
+        for (index, stem) in self.stems.iter().enumerate() {
+            if let Some(settings) = &stem.movement {
+                settings.validate().map_err(|error| {
+                    format!("invalid movement settings for stem {index}: {error}")
+                })?;
+            }
+        }
+        if let Some(schedule) = &self.movement_schedule {
+            schedule.validate(self.speakers.len())?;
+            if schedule
+                .stems
+                .iter()
+                .any(|stem| stem.stem_index >= self.stems.len())
+            {
+                return Err("movement schedule stem index is outside the parameter block".into());
+            }
+        }
+        Ok(())
+    }
+
     pub fn speaker_index(&self, name: &str) -> Option<usize> {
         self.speakers.iter().position(|s| s.name == name)
     }
@@ -292,7 +328,11 @@ impl EngineParams {
     /// Per-speaker share. Each source side keeps
     /// its own pair energy when the layout has asymmetric left/right counts.
     pub fn ambient_side_share(&self, shape: SendShape) -> f64 {
-        let count = self.shapes.iter().filter(|candidate| **candidate == shape).count();
+        let count = self
+            .shapes
+            .iter()
+            .filter(|candidate| **candidate == shape)
+            .count();
         if count == 0 {
             0.0
         } else {

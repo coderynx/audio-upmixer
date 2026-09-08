@@ -73,6 +73,16 @@ def add_stem_args(parser: argparse.ArgumentParser) -> None:
         help="Object feed mode per stem: linked-stereo or mono.",
     )
     parser.add_argument(
+        "--stem-movement",
+        action="append",
+        default=None,
+        metavar="STEM=JSON",
+        help=(
+            "Per-stem movement settings as a JSON object. Repeat for multiple stems; "
+            "for example 'Guitar={\"enabled\":true,\"depth\":0.3}'."
+        ),
+    )
+    parser.add_argument(
         "--stem-ambient-rear",
         default=None,
         metavar="STEM=AMOUNT[,...]",

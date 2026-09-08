@@ -14,6 +14,7 @@ export type PreviewProgramme = {
   mastering: MasterPreview | undefined;
   routing: { height_directional_band_gain?: number } | undefined;
   layoutChannels: string[];
+  movementFeaturesUrl: string | null;
 };
 
 export type PreviewMonitor = {
@@ -26,7 +27,7 @@ export type PreviewMonitor = {
   matchBypassed: boolean;
 };
 
-type PreviewProgrammeInput = Pick<PreviewProgramme, "stems" | "mix" | "layoutChannels"> & Partial<Pick<PreviewProgramme, "scene" | "sourcePreviewUrl" | "mastering" | "routing">>;
+type PreviewProgrammeInput = Pick<PreviewProgramme, "stems" | "mix" | "layoutChannels"> & Partial<Pick<PreviewProgramme, "scene" | "sourcePreviewUrl" | "mastering" | "routing" | "movementFeaturesUrl">>;
 
 export function createPreviewProgramme({
   stems,
@@ -36,11 +37,19 @@ export function createPreviewProgramme({
   mastering,
   routing,
   layoutChannels,
+  movementFeaturesUrl = null,
 }: PreviewProgrammeInput): PreviewProgramme {
   const sourceKey = `${stems.map((stem) => `${stem.id}:${stem.preview_url || stem.audio_url}`).join("|")}|${sourcePreviewUrl || ""}`;
   return {
     sourceKey,
-    key: JSON.stringify({ layoutChannels, scene: scene.stems ?? null, mix, mastering, routing }),
+    key: JSON.stringify({
+      layoutChannels,
+      scene: scene.stems ?? null,
+      mix,
+      mastering,
+      routing,
+      movementFeaturesUrl,
+    }),
     stems,
     scene,
     mix,
@@ -48,6 +57,7 @@ export function createPreviewProgramme({
     mastering,
     routing,
     layoutChannels,
+    movementFeaturesUrl,
   };
 }
 

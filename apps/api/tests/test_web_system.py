@@ -80,6 +80,8 @@ def test_configuration_serves_engine_constants(web_client):
     from upmixer.config import UpmixConfig
     from upmixer.mastering.bass import DEFAULT_UNIFY_HZ
     from upmixer.mastering.compressor import COMP_PROFILES
+    from upmixer.movement import MOVEMENT_PRESET_DEPTHS, StemMovementSettings, movement_settings_for_preset
+    from upmixer.separation.stem_placement import STEM_ROUTING_PRESET_TREATMENTS
 
     response = web_client.get("/api/v1/configuration")
     assert response.status_code == 200
@@ -104,6 +106,7 @@ def test_configuration_serves_engine_constants(web_client):
         "binaural_loudness_max_gain_db",
         "crosstalk_loudness_max_gain_db", "voicing_params", "transaural_voicing_params",
         "eq_fir_assets", "stem_eq_fir_assets", "stem_eq_settings", "decode_filter_set", "xtc_filter_set",
+        "movement",
     }
     assert set(constants) == expected_keys
 
@@ -113,6 +116,12 @@ def test_configuration_serves_engine_constants(web_client):
     assert constants["lfe_gain"] == cfg.lfe_gain
     assert constants["channel_group_gains"]["center"] == cfg.center_gain
     assert constants["bass_unify_default_hz"] == DEFAULT_UNIFY_HZ
+    assert constants["movement"]["defaults"] == StemMovementSettings().as_dict()
+    movement_stems = sorted(STEM_ROUTING_PRESET_TREATMENTS["balanced"])
+    assert constants["movement"]["presets"] == {
+        preset: movement_settings_for_preset(preset, movement_stems)
+        for preset in MOVEMENT_PRESET_DEPTHS
+    }
     assert constants["comp_profiles"]["transparent"]["threshold_db"] == (
         COMP_PROFILES["transparent"]["threshold_db"]
     )

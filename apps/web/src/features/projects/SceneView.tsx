@@ -17,6 +17,8 @@ import {
 } from "@/lib/spatial";
 import { cn } from "@/lib/utils";
 import type { MeterLevel, StemSpectrum } from "./audioEngine";
+import type { MovementSchedule } from "./wasmEngine/engineTypes";
+import { movementAt, scenePositionFromMovement } from "./wasmEngine/movementSchedule";
 import { IntensitySlider } from "./IntensitySlider";
 import { drawSpeakerPoint } from "./speakerMarker";
 import { startSpatialCanvas } from "./spatialCanvas";
@@ -44,6 +46,7 @@ type Voice = {
   kind: "object" | "bed";
   position: Vec3;
   lobes?: { channel: string; position: Vec3; weight: number }[];
+  linked?: { other: Vec3; center: Vec3; primary: boolean };
 };
 type SpeakerHitTarget = {
   channel: string;
@@ -151,6 +154,14 @@ function scenePosition(position: Vec3): Vec3 {
   };
 }
 
+function midpoint(left: Vec3, right: Vec3): Vec3 {
+  return {
+    x: (left.x + right.x) * 0.5,
+    y: (left.y + right.y) * 0.5,
+    z: (left.z + right.z) * 0.5,
+  };
+}
+
 export function isObjectStem(stem: string, objectStems: ReadonlySet<string>) {
   return (
     !isBedStem(stem) &&
@@ -171,6 +182,9 @@ export type SceneViewProps = {
   channelCounts?: Record<string, number>;
   stemSpectrum: React.MutableRefObject<Map<string, StemSpectrum>>;
   channelLevels: React.MutableRefObject<Map<string, MeterLevel>>;
+  movementSchedule?: MovementSchedule | null;
+  playhead?: React.MutableRefObject<number>;
+  playheadTime?: number;
   speakerEnabled: Record<string, boolean>;
   speakerSolo: ReadonlySet<string>;
   onToggleSpeaker: (channel: string) => void;
@@ -190,6 +204,9 @@ function SceneViewImpl({
   channelCounts,
   stemSpectrum,
   channelLevels,
+  movementSchedule,
+  playhead,
+  playheadTime,
   speakerEnabled,
   speakerSolo,
   onToggleSpeaker,
@@ -217,6 +234,9 @@ function SceneViewImpl({
     selectedStem,
     colors,
     channelCounts,
+    movementSchedule,
+    playhead,
+    playheadTime,
     speakerEnabled,
     speakerSolo,
     intensity,
@@ -228,6 +248,9 @@ function SceneViewImpl({
     selectedStem,
     colors,
     channelCounts,
+    movementSchedule,
+    playhead,
+    playheadTime,
     speakerEnabled,
     speakerSolo,
     intensity,
@@ -343,27 +366,56 @@ function SceneViewImpl({
         drawLine(corners[from], corners[to], width, height);
 
       const voices: Voice[] = [];
+      // The ref tracks the renderer's audible frame continuously; the React
+      // value is only a fallback for callers that do not expose that ref.
+      const movementTime = propsRef.current.playhead?.current
+        ?? propsRef.current.playheadTime
+        ?? 0;
       for (const stem of Object.keys(currentRouting)) {
         const route = currentRouting[stem] || {};
         const base = stem.split("@", 1)[0];
+        const movement = movementAt(
+          propsRef.current.movementSchedule,
+          stem,
+          movementTime,
+        );
+        const movementRight = movementAt(
+          propsRef.current.movementSchedule,
+          stem,
+          movementTime,
+          true,
+        );
         if (
           isObjectStem(stem, currentObjectStems) &&
           (currentCounts?.[stem] ?? 2) >= 2
         ) {
           const { left, right } = stemPositionStereo(route);
+          const leftPosition = scenePosition(
+            movement
+              ? scenePositionFromMovement(movement.position)
+              : left,
+          );
+          const rightPosition = scenePosition(
+            movementRight
+              ? scenePositionFromMovement(movementRight.position)
+              : right,
+          );
+          const centerPosition = midpoint(leftPosition, rightPosition);
           voices.push({
             key: `${stem}:L`,
             stem,
             base,
             kind: "object",
-            position: scenePosition(left),
+            position: leftPosition,
+            linked: { other: rightPosition, center: centerPosition, primary: true },
           });
           voices.push({
             key: `${stem}:R`,
             stem,
             base,
             kind: "object",
-            position: scenePosition(right),
+            position: rightPosition,
+            linked: { other: leftPosition, center: centerPosition, primary: false },
           });
         } else if (isObjectStem(stem, currentObjectStems)) {
           voices.push({
@@ -371,10 +423,20 @@ function SceneViewImpl({
             stem,
             base,
             kind: "object",
-            position: scenePosition(stemPosition(route)),
+            position: scenePosition(
+              movement
+                ? scenePositionFromMovement(movement.position)
+                : stemPosition(route),
+            ),
           });
         } else {
-          const lobes = Object.entries(route).flatMap(([channel, weight]) => {
+          const scheduledRoute = movement
+            ? Object.fromEntries(currentChannels.map((channel, index) => [
+              channel,
+              movement.gains[index] ?? 0,
+            ]))
+            : route;
+          const lobes = Object.entries(scheduledRoute).flatMap(([channel, weight]) => {
             const position = speakerCoordinates[channel];
             return position && weight > 0
               ? [{ channel, position: scenePosition(position), weight }]
@@ -385,7 +447,11 @@ function SceneViewImpl({
             stem,
             base,
             kind: "bed",
-            position: scenePosition(stemPosition(route)),
+            position: scenePosition(
+              movement
+                ? scenePositionFromMovement(movement.position)
+                : stemPosition(route),
+            ),
             lobes,
           });
         }
@@ -567,6 +633,32 @@ function SceneViewImpl({
         const [r, g, b] = hexToRgb(
           currentColors[voice.stem] || canvasTheme.stemFallback,
         );
+        if (voice.linked?.primary) {
+          const other = projectScenePoint(
+            voice.linked.other,
+            width,
+            height,
+            camera.current,
+          );
+          const center = projectScenePoint(
+            voice.linked.center,
+            width,
+            height,
+            camera.current,
+          );
+          ctx.save();
+          ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${opacity * 0.45 * emphasis * alphaScale})`;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(point.x, point.y);
+          ctx.lineTo(other.x, other.y);
+          ctx.stroke();
+          ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${opacity * emphasis * alphaScale})`;
+          ctx.beginPath();
+          ctx.arc(center.x, center.y, Math.max(2, radius * 0.55), 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
         const glow = ctx.createRadialGradient(
           point.x,
           point.y,
@@ -626,6 +718,8 @@ function SceneViewImpl({
     speakerEnabled,
     speakerSolo,
     intensity,
+    movementSchedule,
+    playheadTime,
   ]);
 
   const toggleSpeakerAt = (event: React.PointerEvent<HTMLCanvasElement>) => {

@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { getServerUrl } from "@/runtime";
 import type { DspEngineCallbacks, DspEngineParams, DspMeterFrame } from "./wasmEngine/engineClient";
+import type { MovementSchedule } from "./wasmEngine/engineTypes";
 
 export type NativePreviewAssets = {
   decodeAsset?: string;
@@ -23,6 +24,7 @@ type NativeEvent = {
   underruns?: number;
   stage?: "fast" | "exact";
   requestId?: number;
+  revision?: number | null;
   lkfs?: number;
   dbtp?: number;
   monitorLkfs?: number;
@@ -33,6 +35,8 @@ type NativeEvent = {
 export type NativeOpenOptions = {
   sources: { key: string; url: string; channels: number }[];
   params: DspEngineParams;
+  movementSchedule?: MovementSchedule | null;
+  movementReady?: boolean;
   assets: NativePreviewAssets;
   renderer: NativeRenderer;
   appleHeadTracking: boolean;
@@ -44,7 +48,7 @@ export class NativePreviewClient {
   readonly ready: Promise<string>;
   private sessionId = 0;
   private disposed = false;
-  private pendingUpdate: { params: DspEngineParams; assets: NativePreviewAssets; renderer: NativeRenderer; appleHeadTracking: boolean } | null = null;
+  private pendingUpdate: { params: DspEngineParams; movementSchedule: MovementSchedule | null; movementReady: boolean; assets: NativePreviewAssets; renderer: NativeRenderer; appleHeadTracking: boolean } | null = null;
   private updateScheduled = false;
   private queue = Promise.resolve<unknown>(undefined);
   private pendingMeasure: ((value: { lkfs: number; dbtp: number; monitorLkfs?: number; monitorDbtp?: number } | null) => void) | null = null;
@@ -82,6 +86,9 @@ export class NativePreviewClient {
         } satisfies DspMeterFrame); break;
         case "measuring": callbacks.onMeasureProgress?.(event.progress ?? 0); break;
         case "measured": client.onMeasured(event); break;
+        case "movementInstalled": callbacks.onMovementInstalled?.(
+          event.revision == null ? null : Number(event.revision),
+        ); break;
         case "ended": callbacks.onEnded?.(); break;
         case "error": {
           const error = new Error(event.message || "Native preview failed");
@@ -97,6 +104,8 @@ export class NativePreviewClient {
         serverBase: getServerUrl(),
         sources: options.sources,
         params: options.params,
+        movementSchedule: options.movementSchedule ?? null,
+        movementReady: options.movementReady ?? true,
         assets: options.assets,
         renderer: options.renderer,
         appleHeadTracking: options.appleHeadTracking,
@@ -106,8 +115,15 @@ export class NativePreviewClient {
     return client;
   }
 
-  updateParams(params: DspEngineParams, assets: NativePreviewAssets, renderer: NativeRenderer, appleHeadTracking: boolean) {
-    this.pendingUpdate = { params, assets, renderer, appleHeadTracking };
+  updateParams(
+    params: DspEngineParams,
+    assets: NativePreviewAssets,
+    renderer: NativeRenderer,
+    appleHeadTracking: boolean,
+    movementSchedule: MovementSchedule | null = null,
+    movementReady = true,
+  ) {
+    this.pendingUpdate = { params, movementSchedule, assets, renderer, appleHeadTracking, movementReady };
     if (this.updateScheduled || this.disposed) return;
     this.updateScheduled = true;
     requestAnimationFrame(() => {

@@ -11,9 +11,11 @@ type PortMessage = { type: string; [key: string]: unknown };
 
 class FakePort {
   messages: PortMessage[] = [];
+  transfers: Transferable[][] = [];
   onmessage: ((event: MessageEvent) => void) | null = null;
-  postMessage(message: PortMessage) {
+  postMessage(message: PortMessage, transfer: Transferable[] = []) {
     this.messages.push(message);
+    this.transfers.push(transfer);
   }
 }
 
@@ -127,5 +129,27 @@ describe("DspEngineClient message ordering", () => {
     client.updateParams({ stems: [{ eq_fir: stem }], master: { eq_fir: master } });
     await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     expect(port.messages.at(-1)?.firs).toEqual({});
+  });
+
+  it("installs matching movement bytes with the parameter update", async () => {
+    const { client, port } = await makeClient();
+    const schedule = {
+      version: 1,
+      revision: 4,
+      sample_rate: 44100,
+      duration_frames: 44100,
+      grid_us: 20000,
+      interpolation_us: 5208,
+      stems: [],
+    };
+
+    client.updateParams({ marker: "movement" }, schedule);
+    void client.measure([1, 1]);
+
+    const update = port.messages[0];
+    expect(update.type).toBe("update");
+    expect(JSON.parse(new TextDecoder().decode(update.movementSchedule as Uint8Array))).toEqual(schedule);
+    expect(port.transfers[0]).toContain((update.movementSchedule as Uint8Array).buffer);
+    expect(port.messages.map((message) => message.type)).toEqual(["update", "measure"]);
   });
 });

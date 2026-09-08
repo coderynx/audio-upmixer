@@ -7,6 +7,7 @@
 
 mod engine;
 mod measure;
+mod movement;
 mod offline;
 mod panner;
 mod params;

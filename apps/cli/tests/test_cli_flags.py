@@ -229,6 +229,30 @@ def test_ambient_flags_merge_into_other_manifest_stem_values():
     assert config.stem_ambient_rear == {"Bass": 0.2, "Vocals": 0.8}
 
 
+def test_stem_movement_cli_merges_a_zone_override_over_the_base_entry():
+    config = UpmixConfig(stem_movement={
+        "Guitar": {"enabled": True, "depth": 0.2, "response": 1.7},
+    })
+    args = _parsed(["--stem-movement", 'Guitar@front={"depth":0.4}'])
+
+    _apply_cli_flags(config, args, sample_rate_set=False)
+
+    assert config.stem_movement["Guitar@front"] == {
+        "enabled": True, "role": "auto", "depth": 0.4,
+        "response": 1.7, "sensitivity": 0.5, "start_s": 0.0, "end_s": None,
+    }
+
+
+def test_stem_movement_cli_validates_after_inherited_fields_are_merged():
+    config = UpmixConfig(stem_movement={
+        "Guitar": {"start_s": 2.0, "end_s": 3.0},
+    })
+    args = _parsed(["--stem-movement", 'Guitar={"end_s":1.0}'])
+
+    with pytest.raises(SystemExit, match="start_s"):
+        _apply_cli_flags(config, args, sample_rate_set=False)
+
+
 def test_format_accepts_the_stereo_layout():
     config = UpmixConfig()
     args = _parsed(["--format", "stereo"])

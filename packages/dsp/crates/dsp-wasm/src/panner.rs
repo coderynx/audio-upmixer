@@ -243,6 +243,51 @@ pub unsafe extern "C" fn dsp_object_routes(
     0
 }
 
+/// Pan one already-serialized ADM Cartesian object endpoint. This is the
+/// shared route used by movement preview; keeping the position Cartesian
+/// preserves radius and height instead of round-tripping through azimuth and
+/// elevation. Zone metadata is carried by the ADM/PyO3 APIs; this compact C
+/// ABI is for layouts addressed by the indexed channel table.
+///
+/// # Safety
+/// `channels` must address `n_channels` readable u32 values and `out` must
+/// address that many writable f64 values.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_adm_cartesian_object_route(
+    x: f64,
+    y: f64,
+    z: f64,
+    object_size: f64,
+    channel_lock: bool,
+    channels: *const u32,
+    n_channels: usize,
+    out: *mut f64,
+) -> i32 {
+    let Some(names) = channel_names(channels, n_channels) else {
+        return -1;
+    };
+    if out.is_null()
+        || !x.is_finite()
+        || !y.is_finite()
+        || !z.is_finite()
+        || !(-1.0..=1.0).contains(&x)
+        || !(-1.0..=1.0).contains(&y)
+        || !(-1.0..=1.0).contains(&z)
+        || !object_size.is_finite()
+        || !(0.0..=1.0).contains(&object_size)
+    {
+        return -1;
+    }
+    let route = panner::PannerLayout::new(&names).cartesian_object_route(
+        [x, y, z],
+        object_size,
+        channel_lock,
+        &[],
+    );
+    std::slice::from_raw_parts_mut(out, n_channels).copy_from_slice(&route);
+    0
+}
+
 /// Restate a placement as what `channels` can reproduce, writing the five
 /// fields into `out`. Returns 0 on success, -1 on a bad channel index.
 ///

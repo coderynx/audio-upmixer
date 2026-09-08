@@ -44,6 +44,7 @@ class ProjectTrackView(ApiModel):
     peaks_bins: int = 0
     peaks_stem_keys: list[str] = Field(default_factory=list)
     peaks_duration_seconds: float | None = None
+    movement_features_url: str | None = None
     error: str | None
     asset: AssetView
     stems: list[StemView] = Field(default_factory=list)

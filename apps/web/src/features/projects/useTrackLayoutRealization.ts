@@ -1,12 +1,26 @@
 import * as React from "react";
 import type { ProjectTrack, StemRouting } from "@/api";
-import { normalizeManifest, type Manifest } from "@/lib/manifest";
+import { normalizeManifest, type Manifest, type StemMovementSettings } from "@/lib/manifest";
 import { useEditHistory } from "./useEditHistory";
 import { loadPanner, NEUTRAL_PLACEMENT, type Panner, type StemPlacement } from "./wasmEngine/panner";
 
 const COMMIT_DEBOUNCE_MS = 350;
 
 type Draft = { track: ProjectTrack; layout: string; value: Manifest; failed: boolean };
+
+function movementPresetSettings(
+  stem: string,
+  preset: Record<string, StemMovementSettings> | undefined,
+): StemMovementSettings | undefined {
+  const source = preset?.[stem.split("@", 1)[0]];
+  if (!source) return undefined;
+  const zoneTagged = stem.includes("@");
+  return {
+    ...source,
+    enabled: source.enabled && !zoneTagged,
+    depth: zoneTagged ? 0 : source.depth,
+  };
+}
 
 export function resolveTrackLayoutManifest(
   projectManifest: Manifest | null,
@@ -33,6 +47,7 @@ export function useTrackLayoutRealization({
   track,
   layout,
   channels,
+  movementPresets,
   save,
   onError,
 }: {
@@ -41,6 +56,7 @@ export function useTrackLayoutRealization({
   track: ProjectTrack | null;
   layout: string;
   channels: string[];
+  movementPresets?: Record<string, Record<string, StemMovementSettings>>;
   save: (track: ProjectTrack, layout: string, manifest: Manifest) => Promise<void>;
   onError: (message: string | null) => void;
 }) {
@@ -146,7 +162,10 @@ export function useTrackLayoutRealization({
     const texture = { ...manifest.mixing.stem_height_texture };
     const cutoff = { ...manifest.mixing.stem_ambient_height_cutoff_hz };
     const crossover = { ...manifest.mixing.stem_ambient_height_crossover_hz };
+    const movement = { ...manifest.mixing.stem_movement };
     for (const stem of stems) {
+      const nextMovement = movementPresetSettings(stem, movementPresets?.[preset]);
+      if (nextMovement) movement[stem] = nextMovement;
       const treatment = treatments[stem.split("@", 1)[0]];
       if (!treatment) continue;
       placements[stem] = treatment.placement;
@@ -158,8 +177,8 @@ export function useTrackLayoutRealization({
       cutoff[stem] = treatment.sends.heightCutoffHz;
       crossover[stem] = treatment.sends.heightCrossoverHz;
     }
-    update({ ...manifest, mixing: { ...manifest.mixing, stem_placement: placements, stem_routing: routing, stem_ambient_rear: rear, stem_ambient_height: height, stem_ambient_trim_db: trim, stem_height_texture: texture, stem_ambient_height_cutoff_hz: cutoff, stem_ambient_height_crossover_hz: crossover } });
-  }, [channels, manifest, panner, update]);
+    update({ ...manifest, mixing: { ...manifest.mixing, stem_placement: placements, stem_routing: routing, stem_ambient_rear: rear, stem_ambient_height: height, stem_ambient_trim_db: trim, stem_height_texture: texture, stem_ambient_height_cutoff_hz: cutoff, stem_ambient_height_crossover_hz: crossover, stem_movement: movement } });
+  }, [channels, manifest, movementPresets, panner, update]);
 
   const retry = React.useCallback(() => { if (key) void commit(key); }, [commit, key]);
   const discard = React.useCallback(() => {

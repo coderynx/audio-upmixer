@@ -35,6 +35,7 @@ Channel assignment within each zone:
 """
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass
 
@@ -43,13 +44,17 @@ import upmixer_dsp
 
 from upmixer.config import UpmixConfig
 from upmixer.formats import FORMAT_MAP, ChannelLabel, OutputFormat
-from upmixer.io.adm_writer import AdmObject
+from upmixer.io.adm_writer import AdmObject, AdmObjectEvent
 from upmixer.loudness import CHANNEL_WEIGHT, k_weighted_power
+from upmixer.movement import (
+    compile_movement_schedule,
+    movement_tuning,
+    resolve_stem_movement,
+)
 from upmixer.separation.stem_placement import (
     STEM_ROUTING_PRESET_NAMES,
     STEM_ROUTING_PRESET_TREATMENTS,
     StemPlacement,
-    preset_routing,
 )
 from upmixer.utils import (
     HEIGHT_VELVET_SEED,
@@ -348,6 +353,200 @@ class StemRouter:
         self._lfe_gain = config.lfe_gain
         self._bed_trim = 10.0 ** (config.bed_trim_db / 20.0)
 
+    def _movement_placement_for(
+        self, stem_key: str, routing: dict[str, float], object_size: float = 0.0,
+    ) -> StemPlacement:
+        """Resolve the geometric home used by the shared movement compiler."""
+        stem_name = stem_key.rsplit("@", 1)[0]
+        table = self._config.stem_placement or {}
+        raw = table.get(stem_key, table.get(stem_name, {}))
+        treatment = STEM_ROUTING_PRESET_TREATMENTS[DEFAULT_ROUTING_PRESET].get(stem_name)
+        default = treatment.placement if treatment else None
+        return StemPlacement(
+            float(raw.get("azimuth_deg", default.azimuth_deg if default else 0.0)),
+            float(raw.get("elevation_deg", default.elevation_deg if default else 0.0)),
+            float(raw.get("width_deg", default.width_deg if default else 0.0)),
+            float(raw.get("object_size", default.object_size if default else object_size)),
+            lfe=float(routing.get("LFE", default.lfe if default else 0.0)),
+            diversity=float(raw.get("diversity", default.diversity if default else 0.0)),
+            center_level_db=float(raw.get("center_level_db", default.center_level_db if default else 0.0)),
+        )
+
+    def _movement_gain_db(self, stem_key: str, object_mode: str | None) -> float:
+        stem_name = stem_key.rsplit("@", 1)[0]
+        rebalance = (self._config.stem_rebalance or {}).get(
+            stem_key, (self._config.stem_rebalance or {}).get(stem_name, 0.0)
+        )
+        gain = float(rebalance)
+        if stem_name in _BED_STEM_NAMES:
+            gain += self._config.bed_trim_db
+        if object_mode is not None:
+            metadata = self._object_metadata_for(stem_key)
+            gain += 20.0 * math.log10(max(metadata[0], 1e-12))
+        return gain
+
+    def _movement_schedule_map(
+        self,
+        stems: dict[str, np.ndarray],
+        n_samples: int,
+        movement_features: dict | None,
+    ) -> dict[str, tuple[str, int]]:
+        """Compile one shared schedule and index it by the caller's stem key."""
+        if movement_features is None:
+            if not any(
+                resolve_stem_movement(self._config.stem_movement, stem_key).enabled
+                and resolve_stem_movement(self._config.stem_movement, stem_key).depth > 0.0
+                for stem_key in stems
+            ):
+                return {}
+            from upmixer.movement import extract_feature_sidecar
+
+            movement_features = extract_feature_sidecar(stems, self._sr)
+        from upmixer.movement import validate_feature_sidecar
+
+        if not isinstance(movement_features, dict):
+            raise ValueError("movement feature sidecar must be a mapping")
+        sidecar_stems = movement_features.get("stems")
+        if not isinstance(sidecar_stems, list):
+            raise ValueError("movement feature sidecar stems must be a list")
+        sidecar_keys = [
+            item.get("stem_key")
+            for item in sidecar_stems
+            if isinstance(item, dict) and isinstance(item.get("stem_key"), str)
+        ]
+        if len(sidecar_keys) != len(sidecar_stems):
+            raise ValueError("movement feature sidecar stem entries are invalid")
+        # Validate the complete persisted sidecar before selecting the stems
+        # included in this route.  A prepared store may contain more stems than
+        # the current mix, but it must never silently hide a malformed entry.
+        movement_features = validate_feature_sidecar(movement_features, sidecar_keys)
+        missing = set(stems) - set(sidecar_keys)
+        if missing:
+            raise ValueError(
+                "movement feature sidecar is missing routed stem(s): "
+                + ", ".join(sorted(missing))
+            )
+        feature_by_key = {
+            item.get("stem_key"): item.get("features")
+            for item in sidecar_stems
+            if isinstance(item, dict) and isinstance(item.get("stem_key"), str)
+        }
+        sample_rate = movement_features.get("sample_rate")
+        duration_frames = movement_features.get("frame_count")
+        if (
+            isinstance(sample_rate, bool) or not isinstance(sample_rate, int)
+            or isinstance(duration_frames, bool) or not isinstance(duration_frames, int)
+            or sample_rate <= 0 or duration_frames <= 0
+        ):
+            raise ValueError("movement feature sidecar rate and frame count are invalid")
+        if abs(duration_frames / sample_rate - n_samples / self._sr) > (
+            2.0 / min(sample_rate, self._sr)
+        ):
+            raise ValueError("movement feature sidecar duration does not match routed PCM")
+        channels = [label.value for label in self._fmt.channels]
+        request_stems: list[dict] = []
+        index_by_key: dict[str, int] = {}
+        moving_keys: set[str] = set()
+        for stem_key, audio in stems.items():
+            raw_features = feature_by_key.get(stem_key)
+            if not isinstance(raw_features, dict):
+                raise ValueError(f"movement feature sidecar entry is invalid for '{stem_key}'")
+            routing = self._routing_for(stem_key)
+            if not routing:
+                continue
+            object_placement = self._object_placement_for(stem_key)
+            object_mode = None
+            if object_placement is not None:
+                object_mode = (self._config.stem_object_mode or {}).get(
+                    stem_key,
+                    (self._config.stem_object_mode or {}).get(stem_key.rsplit("@", 1)[0], "linked-stereo"),
+                )
+            placement = self._movement_placement_for(
+                stem_key, routing,
+                object_placement.object_size if object_placement else 0.0,
+            )
+            home = [float(routing.get(channel, 0.0)) for channel in channels]
+            home_right: list[float] = []
+            if object_placement is not None:
+                object_routes = self._object_routes_for(stem_key) or []
+                if object_routes:
+                    home = [float(object_routes[0].get(channel, 0.0)) for channel in channels]
+                    if len(object_routes) > 1:
+                        home_right = [float(object_routes[1].get(channel, 0.0)) for channel in channels]
+            settings = resolve_stem_movement(self._config.stem_movement, stem_key)
+            stem_name = stem_key.rsplit("@", 1)[0]
+            persistent_enabled = bool(
+                self._stem_enabled[stem_key]
+                if stem_key in self._stem_enabled
+                else self._stem_enabled.get(stem_name, True)
+            )
+            metadata = self._object_metadata_for(stem_key) if object_mode else (1.0, 10, False, ())
+            persistent_enabled = persistent_enabled and metadata[0] > 0.0
+            if settings.enabled and settings.depth > 0.0 and persistent_enabled:
+                moving_keys.add(stem_key)
+            request_stems.append({
+                "stem_key": stem_key,
+                "stem_name": stem_name,
+                "features": raw_features,
+                "gain_db": self._movement_gain_db(stem_key, object_mode),
+                "enabled": persistent_enabled,
+                "included": True,
+                "placement": {
+                    "azimuth_deg": placement.azimuth_deg,
+                    "elevation_deg": placement.elevation_deg,
+                    "width_deg": placement.width_deg,
+                    "object_size": placement.object_size,
+                    "lfe": placement.lfe,
+                    "diversity": placement.diversity,
+                    "center_level_db": placement.center_level_db,
+                },
+                "home_gains": home,
+                "home_right_gains": home_right,
+                "settings": settings.as_dict(),
+                "object_mode": object_mode,
+                "channel_lock": metadata[2] if object_mode else False,
+                "zone_exclusion": list(metadata[3]) if object_mode else [],
+            })
+            index_by_key[stem_key] = len(request_stems) - 1
+        if not request_stems:
+            return {}
+        schedule = compile_movement_schedule({
+            "sample_rate": sample_rate,
+            "duration_frames": duration_frames,
+            "revision": 0,
+            "channels": channels,
+            "stems": request_stems,
+            "tuning": movement_tuning(self._config.stem_movement_tuning),
+        })
+        encoded = json.dumps(schedule, separators=(",", ":"))
+        # Compile all persistent stems so Rust can apply vocal-priority and
+        # winner context.  Only stems with movement enabled reach the route.
+        return {
+            key: (encoded, index)
+            for key, index in index_by_key.items()
+            if key in moving_keys
+        }
+
+    def _apply_movement(
+        self,
+        schedule: tuple[str, int],
+        signals: list[np.ndarray],
+        source_map: list[int],
+        n: int,
+        *,
+        right: bool = False,
+    ) -> dict[str, np.ndarray]:
+        channels = [label.value for label in self._fmt.channels]
+        arrays = upmixer_dsp.apply_movement_schedule(
+            schedule[0], schedule[1],
+            [np.ascontiguousarray(signal[:n], dtype=np.float64) for signal in signals],
+            source_map, 0, self._sr, right, channels,
+        )
+        return {
+            channel: np.asarray(array, dtype=np.float64)
+            for channel, array in zip(channels, arrays, strict=True)
+        }
+
     def _object_placement_for(self, stem_key: str) -> StemPlacement | None:
         stem_name = stem_key.rsplit("@", 1)[0]
         if stem_name in _BED_STEM_NAMES:
@@ -413,6 +612,7 @@ class StemRouter:
         left: np.ndarray,
         right: np.ndarray,
         gain: float,
+        movement: tuple[str, int] | None = None,
     ) -> list[AdmObject]:
         placement = self._object_placement_for(stem_key)
         if placement is None:
@@ -422,6 +622,25 @@ class StemRouter:
             stem_key, (self._config.stem_object_mode or {}).get(stem_name, "linked-stereo")
         )
         metadata = self._object_metadata_for(stem_key)
+
+        def events(endpoint: int) -> tuple[AdmObjectEvent, ...]:
+            if movement is None:
+                return ()
+            schedule = json.loads(movement[0])
+            entry = next(
+                item for item in schedule["stems"]
+                if item["stem_index"] == movement[1]
+            )
+            values = []
+            for event in entry["events"]:
+                position = event.get("position")
+                if endpoint and event.get("right_position") is not None:
+                    position = event["right_position"]
+                values.append(AdmObjectEvent(
+                    int(event["time_us"]), tuple(float(value) for value in position),
+                    int(event["interpolation_us"]),
+                ))
+            return tuple(values)
 
         def position(azimuth_deg: float) -> tuple[float, float, float]:
             x, y, z = upmixer_dsp.direction(azimuth_deg, placement.elevation_deg)
@@ -434,6 +653,7 @@ class StemRouter:
                     position(placement.azimuth_deg), placement.object_size,
                     gain=metadata[0], importance=metadata[1],
                     channel_lock=metadata[2], zone_exclusion=metadata[3],
+                    events=events(0),
                 )
             ]
         half_width = placement.width_deg * 0.5
@@ -443,12 +663,14 @@ class StemRouter:
                 position(placement.azimuth_deg + half_width), placement.object_size,
                 gain=metadata[0], importance=metadata[1],
                 channel_lock=metadata[2], zone_exclusion=metadata[3],
+                events=events(0),
             ),
             AdmObject(
                 f"{stem_key} Right", gain * right,
                 position(placement.azimuth_deg - half_width), placement.object_size,
                 gain=metadata[0], importance=metadata[1],
                 channel_lock=metadata[2], zone_exclusion=metadata[3],
+                events=events(1),
             ),
         ]
 
@@ -642,6 +864,7 @@ class StemRouter:
         stems: dict[str, np.ndarray],
         n_samples: int,
         passthrough_channels: set[str] | None = None,
+        movement_features: dict | None = None,
     ) -> RoutedProgramme:
         """Mix stems into output channels.
 
@@ -649,10 +872,20 @@ class StemRouter:
             stems: Dict "StemName[@zone]" → ndarray (n_samples, 2) stereo float.
             n_samples: Expected output length.
             passthrough_channels: Channel names to skip (injected directly by caller).
+            movement_features: Canonical prepared-stem sidecar. The shared DSP
+                compiler/evaluator owns all movement decisions and transitions.
         Returns the rendered bed and any authored ADM objects.
         """
         skip = passthrough_channels or set()
         self._layout_routing = build_stem_routing(list(stems), self._fmt)
+        ordinary_stereo = self._fmt.n_channels == 2 and [
+            label.value for label in self._fmt.channels
+        ] == ["FL", "FR"]
+        movement_schedules = (
+            {}
+            if ordinary_stereo
+            else self._movement_schedule_map(stems, n_samples, movement_features)
+        )
         channels: dict[str, np.ndarray] = {
             label.value: np.zeros(n_samples, dtype=np.float64)
             for label in self._fmt.channels
@@ -771,6 +1004,13 @@ class StemRouter:
             if object_routes is not None:
                 needs_surround = False
                 needs_height = False
+            movement = movement_schedules.get(stem_key)
+            if movement is not None and not ordinary_stereo and object_routes is None:
+                # A moved target can reach a destination absent from the
+                # static home route; prepare both shaped send families before
+                # the shared evaluator chooses a target channel.
+                needs_surround = True
+                needs_height = True
             surround_L = (
                 velvet_send(self._surround_send(stem_L), self._sr, "left", SURROUND_VELVET_SEED)
                 if needs_surround else stem_L
@@ -797,7 +1037,54 @@ class StemRouter:
                 if object_routes is None and label.value not in skip and label == ChannelLabel.LFE:
                     lfe_bus[:n] += stem_routing.get("LFE", 0.0) * stem_mono
 
-            if object_routes is None:
+            if movement is not None and not ordinary_stereo:
+                if object_routes is None:
+                    signals = [stem_L, stem_R, stem_mono, surround_L, surround_R, height_L, height_R]
+                    source_map = []
+                    for label in self._fmt.channels:
+                        if label == ChannelLabel.LFE or label == ChannelLabel.C:
+                            source_map.append(2)
+                        elif label in _HEIGHT_CHANNELS:
+                            source_map.append(5 if label in _LEFT_CHANNELS else 6)
+                        elif label in _SURROUND_CHANNELS:
+                            source_map.append(3 if label in _LEFT_CHANNELS else 4)
+                        elif label in _LEFT_CHANNELS:
+                            source_map.append(0)
+                        else:
+                            source_map.append(1)
+                    dynamic = self._apply_movement(
+                        movement, signals, source_map, n,
+                    )
+                    for label in self._fmt.channels:
+                        if label.value in skip or label == ChannelLabel.LFE:
+                            continue
+                        direct_items.append((label, self._channel_gain(label), dynamic[label.value]))
+                else:
+                    # An object endpoint is one source across every speaker;
+                    # channel-shaped send maps are only for bed routes.
+                    dynamic = self._apply_movement(
+                        movement, [stem_mono if len(object_routes) == 1 else stem_L],
+                        [0] * len(self._fmt.channels), n,
+                    )
+                    dynamic_right = (
+                        self._apply_movement(
+                            movement, [stem_R], [0] * len(self._fmt.channels), n, right=True,
+                        )
+                        if len(object_routes) > 1 else None
+                    )
+                    for label in self._fmt.channels:
+                        if label.value in skip or label == ChannelLabel.LFE:
+                            continue
+                        signal = dynamic[label.value]
+                        if dynamic_right is not None:
+                            # Linked objects carry separate source endpoints;
+                            # direct_items retains the two contributions for
+                            # the existing route-scale calculation.
+                            direct_items.append((label, 1.0, signal))
+                            direct_items.append((label, 1.0, dynamic_right[label.value]))
+                        else:
+                            direct_items.append((label, 1.0, signal))
+            elif object_routes is None:
                 for label in self._fmt.channels:
                     ch = label.value
                     if ch in skip or ch not in stem_routing or label == ChannelLabel.LFE:
@@ -867,15 +1154,53 @@ class StemRouter:
                     route_items.append((label, gain, signal))
 
             route_scale = self._route_scale(route_items, input_L, input_R)
+            object_output_gain = 1.0
+            if object_routes is not None and not author_objects:
+                object_output_gain = self._object_metadata_for(stem_key)[0]
             if author_objects and object_routes is not None:
-                objects.extend(self._adm_objects_for(stem_key, stem_L, stem_R, route_scale))
+                # Authored object tracks are part of the complete programme,
+                # so a short source must carry silence through the remaining
+                # bed frames.  The compiler already describes the full
+                # programme duration; keep the PCM and timed events aligned.
+                object_left = (
+                    stem_L
+                    if n == n_samples
+                    else np.pad(stem_L, (0, n_samples - n))
+                )
+                object_right = (
+                    stem_R
+                    if n == n_samples
+                    else np.pad(stem_R, (0, n_samples - n))
+                )
+                objects.extend(self._adm_objects_for(
+                    stem_key, object_left, object_right, route_scale, movement,
+                ))
                 route_items = route_items[len(direct_items):]
-            if self._config.spatial_downmix_lock and not author_objects:
+            if self._config.spatial_downmix_lock:
+                # ADM keeps authored object PCM separate.  For the lock
+                # calculation, temporarily project those objects through the
+                # same dynamic gains as the eventual reference render, then
+                # add only the correction back to the bed.  This preserves the
+                # authored object signal while making the complete programme
+                # fold to the source pair.
+                lock_items = route_items
+                lock_object_gain = object_output_gain
+                if author_objects and object_routes is not None:
+                    lock_items = direct_items + route_items
+                    lock_object_gain = self._object_metadata_for(stem_key)[0]
                 routed = {
                     label.value: np.zeros(n, dtype=np.float64) for label in self._fmt.channels
                 }
-                for label, gain, signal in route_items:
-                    routed[label.value] += route_scale * gain * signal
+                direct_routed = {
+                    label.value: np.zeros(n, dtype=np.float64) for label in self._fmt.channels
+                }
+                for item_index, (label, gain, signal) in enumerate(lock_items):
+                    if lock_object_gain != 1.0 and item_index < len(direct_items):
+                        gain *= lock_object_gain
+                    contribution = route_scale * gain * signal
+                    routed[label.value] += contribution
+                    if item_index < len(direct_items):
+                        direct_routed[label.value] += contribution
                 corrected = upmixer_dsp.apply_stereo_downmix_lock(
                     [label.value for label in self._fmt.channels],
                     [routed[label.value] for label in self._fmt.channels],
@@ -884,10 +1209,16 @@ class StemRouter:
                     self._config.surround_downmix_coeff,
                     self._config.height_downmix_coeff,
                 )
+                correction_only = author_objects and object_routes is not None
                 for label, signal in zip(self._fmt.channels, corrected):
-                    channels[label.value][:n] += signal
+                    if correction_only:
+                        channels[label.value][:n] += signal - direct_routed[label.value]
+                    else:
+                        channels[label.value][:n] += signal
             else:
-                for label, gain, signal in route_items:
+                for item_index, (label, gain, signal) in enumerate(route_items):
+                    if object_output_gain != 1.0 and item_index < len(direct_items):
+                        gain *= object_output_gain
                     channels[label.value][:n] += route_scale * gain * signal
 
         if "LFE" in channels:

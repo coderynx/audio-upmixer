@@ -35,6 +35,8 @@ const SHAPES = [
 ];
 const DECODE_TAPS = 6128;
 const STEMS = 13;
+const STEM_KEYS = ["Lead Vocals", "Backing Vocals", "Bass", "Guitar", "Piano", "Kick", "Snare", "Toms", "Hi-Hat", "Ride", "Crash", "Other", "Crowd"];
+const BED_STEMS = new Set(["Backing Vocals", "Bass", "Kick", "Snare", "Other", "Crowd"]);
 const PRODUCTION_FIR_TAPS = 8700;
 
 // A render must stay well inside the deadline on average; the mono-maker's
@@ -69,6 +71,10 @@ const FAST_EXCERPT_SECONDS = 1;
 const FAST_EXCERPT_PREROLL_SECONDS = 0.25;
 
 const CASES = {
+  movementNative: { mode: "native", decode: false, ambient: true, movement: true, label: "movement + 13 stems native" },
+  movementBinaural: { mode: "binaural", decode: true, ambient: true, movement: true, label: "movement + 13 stems binaural" },
+  movementEdit: { mode: "native", decode: false, movement: true, kind: "playing-update", label: "movement + live schedule edits" },
+  movementSeek: { mode: "native", decode: false, ambient: true, movement: true, kind: "seek", budget: SEEK_BUDGET, label: "movement + seek preroll" },
   binaural: { mode: "binaural", decode: true, label: "binaural (order-3 decode)" },
   transaural: { mode: "transaural", decode: true, label: "transaural" },
   native: { mode: "native", decode: false, label: "native 7.1.4 + limiter" },
@@ -155,7 +161,7 @@ function instantiate() {
 }
 
 function params(mode, decodeTaps, options = {}) {
-  const { ambient = false, objectMode = false, downmixLock = false, productionFirs = false } = options;
+  const { ambient = false, objectMode = false, downmixLock = false, productionFirs = false, movement = false } = options;
   const fir = Array.from(
     { length: productionFirs ? PRODUCTION_FIR_TAPS / 2 : 1023 },
     (_, i) => (i === 511 ? 1 : Math.sin(i * 0.01) * 1e-3),
@@ -179,7 +185,7 @@ function params(mode, decodeTaps, options = {}) {
       height_directional_band_hz: 8000, height_directional_band_gain: 1,
       lfe_cutoff_hz: 120, lfe_filter_order: 4, lfe_gain: 0.316,
     },
-    stems: Array.from({ length: STEMS }, () => ({
+    stems: Array.from({ length: STEMS }, (_, index) => ({
       routing: CHANNELS.map((name) => [name, 0.3]),
       rebalance_db: 0, enabled: true, eq_fir: [], route_scale: 1,
       ambient_rear: ambient ? 0.8 : 0, ambient_height: ambient ? 0.8 : 0,
@@ -188,8 +194,8 @@ function params(mode, decodeTaps, options = {}) {
         ambient_trim_db: AMBIENT_TRIM_DB,
         height_texture: HEIGHT_TEXTURE,
       } : {}),
-      object_mode: objectMode ? "linked-stereo" : null,
-      object_placement: objectMode
+      object_mode: (objectMode || (movement && !BED_STEMS.has(STEM_KEYS[index]))) ? "linked-stereo" : null,
+      object_placement: (objectMode || (movement && !BED_STEMS.has(STEM_KEYS[index])))
         ? { azimuth_deg: 45, elevation_deg: 20, width_deg: 60, object_size: 0.4 }
         : null,
     })),
@@ -262,22 +268,82 @@ function xtcBank() {
   return taps;
 }
 
-function run({ label, mode, decode, kind, ambient, objectMode, downmixLock, productionFirs, silenceTail }) {
+function movementSchedules(wasm, tone, engineParams) {
+  // Extract once from the actual benchmark PCM. Control edits reuse these
+  // features and compile outside the timed audio-thread calls.
+  const prepared = JSON.parse(execFileSync("uv", ["run", "python", "-c", `
+import json, sys, numpy as np
+from dataclasses import asdict
+from upmixer.movement import extract_feature_sidecar, movement_settings_for_preset, MOVEMENT_TUNING_DEFAULTS
+from upmixer.separation import preset_treatments
+keys = json.loads(sys.argv[1])
+pcm = np.frombuffer(sys.stdin.buffer.read(), dtype=np.float32)
+treatments = preset_treatments('balanced', '7.1.4', keys)
+ambience = [{key: value for key, value in asdict(treatments[stem]).items()
+    if key.startswith('ambient_') or key == 'height_texture'}
+    for stem in keys]
+print(json.dumps(dict(sidecar=extract_feature_sidecar({key: pcm for key in keys}, ${SR}),
+    settings=movement_settings_for_preset('balanced', keys), tuning=MOVEMENT_TUNING_DEFAULTS,
+    ambience=ambience)))
+`, JSON.stringify(STEM_KEYS)], {
+    cwd: path.resolve(webRoot, "../.."), input: Buffer.from(tone.buffer), maxBuffer: 8 * 1024 * 1024,
+  }).toString());
+  // Exercise the full prepared-stem preset; the separate all-stem ambience
+  // cases below retain their maximum-send stress workload.
+  engineParams.stems.forEach((stem, index) => Object.assign(stem, prepared.ambience[index]));
+  return [1, 2].map((revision) => {
+    const settings = STEM_KEYS.map((key) => ({
+      ...prepared.settings[key],
+      ...(key === "Guitar" || key === "Piano" ? { role: "featured" } : {}),
+      depth: prepared.settings[key].enabled ? (revision === 1 ? 0.4 : 0.2) : 0,
+    }));
+    const request = {
+      revision, sample_rate: SR, duration_frames: tone.length, channels: CHANNELS,
+      tuning: prepared.tuning, feature_sidecar: prepared.sidecar,
+      stems: engineParams.stems.map((stem, index) => ({
+        stem_key: STEM_KEYS[index], features: prepared.sidecar.stems[index].features,
+        enabled: true, included: true, gain_db: 0, settings: settings[index],
+        placement: { azimuth_deg: 45, elevation_deg: 20, width_deg: 60, object_size: 0.4,
+          lfe: 0.3, diversity: 0, center_level_db: 0 },
+        home_gains: stem.object_mode ? [] : CHANNELS.map(() => 0.3),
+        object_mode: stem.object_mode,
+      })),
+    };
+    const input = new TextEncoder().encode(JSON.stringify(request));
+    const ptr = wasm.dsp_alloc(input.length);
+    new Uint8Array(wasm.memory.buffer, ptr, input.length).set(input);
+    const handle = wasm.dsp_movement_compile_json(ptr, input.length);
+    wasm.dsp_free(ptr, input.length);
+    if (!handle) throw new Error("movement benchmark compilation failed");
+    const bytes = new Uint8Array(wasm.memory.buffer,
+      wasm.dsp_movement_result_ptr(handle), wasm.dsp_movement_result_len(handle)).slice();
+    wasm.dsp_movement_result_free(handle);
+    const schedule = JSON.parse(new TextDecoder().decode(bytes));
+    if (schedule.error) throw new Error(schedule.error);
+    if (!schedule.stems.some((stem) => stem.events.length > 1)) throw new Error("movement fixture stayed static");
+    return { bytes, settings, ambience: prepared.ambience };
+  });
+}
+
+function run({ label, mode, decode, kind, ambient, objectMode, downmixLock, productionFirs, silenceTail, movement }) {
   const wasm = instantiate();
   const decodeTaps = decode ? decodeBank() : [];
-  const options = { ambient, objectMode, downmixLock, productionFirs };
-  const encoded = new TextEncoder().encode(JSON.stringify(params(mode, decodeTaps, options)));
+  const options = { ambient, objectMode, downmixLock, productionFirs, movement };
+  const frames = SR * SECONDS;
+  const tone = new Float32Array(frames);
+  for (let i = 0; i < frames; i += 1) {
+    tone[i] = silenceTail && i >= SR ? 0 : 0.3 * Math.sin((2 * Math.PI * 220 * i) / SR);
+  }
+  const initialParams = params(mode, decodeTaps, options);
+  const schedules = movement ? movementSchedules(wasm, tone, initialParams) : [];
+  if (movement) initialParams.stems.forEach((stem, index) => { stem.movement = schedules[0].settings[index]; });
+  const encoded = new TextEncoder().encode(JSON.stringify(initialParams));
   const ptr = wasm.dsp_alloc(encoded.length);
   new Uint8Array(wasm.memory.buffer, ptr, encoded.length).set(encoded);
   const engine = wasm.dsp_engine_new(SR, ptr, encoded.length);
   wasm.dsp_free(ptr, encoded.length);
   if (!engine) throw new Error(`${label}: engine rejected its parameters`);
 
-  const frames = SR * SECONDS;
-  const tone = new Float32Array(frames);
-  for (let i = 0; i < frames; i += 1) {
-    tone[i] = silenceTail && i >= SR ? 0 : 0.3 * Math.sin((2 * Math.PI * 220 * i) / SR);
-  }
   for (let s = 0; s < STEMS; s += 1) {
     const left = wasm.dsp_alloc(frames * 4);
     new Float32Array(wasm.memory.buffer, left, frames).set(tone);
@@ -286,6 +352,14 @@ function run({ label, mode, decode, kind, ambient, objectMode, downmixLock, prod
     wasm.dsp_engine_add_stem(engine, left, right, frames);
     wasm.dsp_free(left, frames * 4);
     wasm.dsp_free(right, frames * 4);
+  }
+  const schedulePointers = schedules.map(({ bytes }) => {
+    const ptr = wasm.dsp_alloc(bytes.length);
+    new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
+    return { ptr, length: bytes.length };
+  });
+  if (movement && !wasm.dsp_engine_set_movement_schedule(engine, schedulePointers[0].ptr, schedulePointers[0].length)) {
+    throw new Error("movement benchmark schedule installation failed");
   }
 
   let pass = 0;
@@ -324,11 +398,24 @@ function run({ label, mode, decode, kind, ambient, objectMode, downmixLock, prod
     // `dsp_engine_set_params` itself has to fit the deadline, since that's
     // the call the worklet's `port.onmessage` makes on the audio thread.
     let toggle = false;
+    let renderedFrames = 0;
+    let nextMovementEdit = 0;
     for (;;) {
+      while (wasm.dsp_engine_is_seeking(engine)) {
+        wasm.dsp_engine_advance_seek(engine, SEEK_FRAMES);
+      }
       const written = wasm.dsp_engine_render(engine, out, CHANNELS.length, QUANTUM);
       if (written === 0) break;
+      renderedFrames += written;
+      if (movement && renderedFrames < nextMovementEdit) continue;
+      nextMovementEdit = renderedFrames + SR / 4;
       toggle = !toggle;
       const edited = params(mode, decodeTaps, options);
+      const scheduleIndex = Number(toggle);
+      if (movement) edited.stems.forEach((stem, index) => {
+        Object.assign(stem, schedules[scheduleIndex].ambience[index]);
+        stem.movement = schedules[scheduleIndex].settings[index];
+      });
       edited.stems[0].enabled = toggle;
       edited.stems[0].ambient_rear = toggle ? 0.8 : 0.2;
       edited.stems[0].ambient_height = toggle ? 0.8 : 0.2;
@@ -337,7 +424,14 @@ function run({ label, mode, decode, kind, ambient, objectMode, downmixLock, prod
       const editPtr = wasm.dsp_alloc(encodedEdit.length);
       new Uint8Array(wasm.memory.buffer, editPtr, encodedEdit.length).set(encodedEdit);
       const started = performance.now();
-      wasm.dsp_engine_set_params(engine, editPtr, encodedEdit.length);
+      if (movement) {
+        const schedule = schedulePointers[scheduleIndex];
+        if (!wasm.dsp_engine_set_params_and_movement(engine, editPtr, encodedEdit.length, schedule.ptr, schedule.length)) {
+          throw new Error("movement edit schedule rejected");
+        }
+      } else if (!wasm.dsp_engine_set_params(engine, editPtr, encodedEdit.length)) {
+        throw new Error("parameter edit rejected");
+      }
       times.push(performance.now() - started);
       wasm.dsp_free(editPtr, encodedEdit.length);
     }
@@ -363,8 +457,12 @@ function run({ label, mode, decode, kind, ambient, objectMode, downmixLock, prod
   if (weightPtr) wasm.dsp_free(weightPtr, 16);
   if (resultPtr) wasm.dsp_free(resultPtr, 32);
   wasm.dsp_free(out, CHANNELS.length * QUANTUM * 4);
+  for (const schedule of schedulePointers) wasm.dsp_free(schedule.ptr, schedule.length);
   wasm.dsp_engine_free(engine);
 
+  if (times.length < 2 || !times.every(Number.isFinite)) {
+    throw new Error(`${label}: benchmark did not exercise steady-state processing`);
+  }
   const cold = times[0];
   const steady = times.slice(1);
   const mean = steady.reduce((a, b) => a + b, 0) / steady.length;

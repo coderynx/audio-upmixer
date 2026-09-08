@@ -93,7 +93,7 @@ def test_prepare_opt_in_writes_private_terminals_without_public_summary_change(t
     pipeline.close()
 
     loaded, stored_sr = PlainStemStore(str(output_dir)).load()
-    assert stored_sr == SR
+    assert stored_sr == 44_100
     assert set(loaded) == {"Vocals", "_deux_inst"}
     assert result.stems == ["Vocals"]
 
