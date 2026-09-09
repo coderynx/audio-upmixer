@@ -683,7 +683,27 @@ fn update_engine_params(
         engine.update_params(params);
         Ok(())
     } else {
-        let schedule = parse_movement_schedule(movement_schedule, params.speakers.len())?;
+        let base_revision = movement_schedule.as_ref().and_then(|value| value.get("base_revision"));
+        let schedule = if let Some(base_revision) = base_revision {
+            let base = engine.params().movement_schedule.as_ref().ok_or("movement delta has no base")?;
+            if base_revision.as_u64() != Some(base.revision) {
+                return Err("movement delta base revision mismatch".into());
+            }
+            let mut delta = parse_movement_schedule(movement_schedule, params.speakers.len())?.unwrap();
+            if delta.sample_rate != base.sample_rate || delta.duration_frames != base.duration_frames {
+                return Err("movement delta header mismatch".into());
+            }
+            let mut stems = base.stems.clone();
+            for changed in delta.stems {
+                let target = stems.iter_mut().find(|stem| stem.stem_index == changed.stem_index && stem.stem_key == changed.stem_key)
+                    .ok_or("movement delta stem mismatch")?;
+                *target = changed;
+            }
+            delta.stems = stems;
+            Some(delta)
+        } else {
+            parse_movement_schedule(movement_schedule, params.speakers.len())?
+        };
         engine.update_params_with_movement(params, schedule)
     }
 }
@@ -859,6 +879,19 @@ mod tests {
         let mut expected_pcm = vec![0.0; 48000 * 2];
         assert_eq!(engine.render_f32(&mut actual_pcm, 48000), reference.render_f32(&mut expected_pcm, 48000));
         assert!(actual_pcm.iter().any(|sample| sample.abs() > 1e-6));
+        assert_eq!(actual_pcm, expected_pcm);
+        let mut changed = value.clone();
+        changed["revision"] = serde_json::json!(10);
+        changed["stems"][0]["events"][0]["gains"] = serde_json::json!([0.0, 1.0]);
+        let mut delta = changed.clone();
+        delta["base_revision"] = serde_json::json!(8);
+        assert!(update_engine_params(&mut engine, params.clone(), Some(delta.clone()), false).is_err());
+        assert_eq!(engine.params().movement_schedule.as_ref().unwrap().revision, 9);
+        delta["base_revision"] = serde_json::json!(9);
+        update_engine_params(&mut engine, params.clone(), Some(delta), false).unwrap();
+        update_engine_params(&mut reference, params.clone(), Some(changed), false).unwrap();
+        assert_eq!(engine.params().movement_schedule, reference.params().movement_schedule);
+        assert_eq!(engine.render_f32(&mut actual_pcm, 48000), reference.render_f32(&mut expected_pcm, 48000));
         assert_eq!(actual_pcm, expected_pcm);
         update_engine_params(&mut engine, params, None, false).unwrap();
         assert!(engine.params().movement_schedule.is_none());

@@ -1,5 +1,8 @@
 use serde_json::{json, Value};
-use upmixer_dsp_core::movement::{compile_movement, MovementCompileRequest, MovementSchedule};
+use upmixer_dsp_core::movement::{
+    compile_movement, MovementCompileRequest, MovementPlacementUpdate, MovementSchedule,
+    PreparedMovement,
+};
 use upmixer_dsp_core::spatial::panner::PannerLayout;
 
 fn stem(key: &str, energies: Vec<f64>, role: &str) -> Value {
@@ -51,6 +54,94 @@ fn x_at(schedule: &MovementSchedule, stem_index: usize, time_us: i64) -> f64 {
         .find(|event| event.time_us <= time_us)
         .unwrap()
         .position[0]
+}
+
+#[test]
+fn live_placement_updates_match_full_compilation_and_reject_invalid_batches() {
+    for role in ["auto", "supporting", "featured"] {
+        let mut energies = vec![0.0; 800];
+        energies[100..400].fill(0.01);
+        let mut guitar = stem("Guitar", energies.clone(), role);
+        guitar["object_mode"] = json!("linked-stereo");
+        let mut request: MovementCompileRequest = serde_json::from_value(request(
+            vec![
+                guitar,
+                stem("Lead Vocals", energies.clone(), "auto"),
+                stem("Crowd", energies, "supporting"),
+            ],
+            800,
+        ))
+        .unwrap();
+        let mut prepared = PreparedMovement::new(request.clone()).unwrap();
+        for azimuth in [-120.0, 90.0, 0.0] {
+            request.revision += 1;
+            request.stems[0].placement.azimuth_deg = azimuth;
+            request.stems[0].placement.elevation_deg = 30.0;
+            request.stems[0].placement.width_deg = 56.0;
+            request.stems[0].placement.object_size = 0.2;
+            let update = || MovementPlacementUpdate {
+                stem_key: "Guitar".into(),
+                placement: request.stems[0].placement.clone(),
+                home_gains: vec![],
+                home_right_gains: vec![],
+            };
+            let before = prepared.schedule.clone();
+            assert!(prepared
+                .update_placements(request.revision, vec![update(), update()])
+                .is_err());
+            assert_eq!(prepared.schedule, before);
+            let mut invalid = update();
+            invalid.placement.elevation_deg = f64::NAN;
+            assert!(prepared
+                .update_placements(request.revision, vec![invalid])
+                .is_err());
+            assert_eq!(prepared.schedule, before);
+            assert_eq!(
+                *prepared
+                    .update_placements(request.revision, vec![update()])
+                    .unwrap(),
+                compile_movement(&request).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn editing_resting_placement_preserves_the_featured_destination() {
+    for role in ["auto", "featured"] {
+        let mut energies = vec![0.0; 800];
+        energies[100..400].fill(0.01);
+        let mut original = stem("Guitar", energies, role);
+        original["object_mode"] = json!("linked-stereo");
+        original["placement"]["width_deg"] = json!(32.0);
+        let mut edited = original.clone();
+        edited["placement"]["azimuth_deg"] = json!(-120.0);
+        edited["placement"]["elevation_deg"] = json!(30.0);
+        let before = compile(request(vec![original], 800));
+        let after = compile(request(vec![edited], 800));
+
+        assert_ne!(x_at(&before, 0, 0), x_at(&after, 0, 0));
+        for schedule in [&before, &after] {
+            assert_eq!(x_at(schedule, 0, 7_000_000), x_at(schedule, 0, 0));
+        }
+        let featured: Vec<_> = [&before, &after]
+            .iter()
+            .map(|schedule| {
+                schedule
+                    .stem(0)
+                    .unwrap()
+                    .events
+                    .iter()
+                    .rev()
+                    .find(|event| event.time_us <= 3_000_000)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(featured[0].position, featured[1].position);
+        assert_eq!(featured[0].right_position, featured[1].right_position);
+        assert_eq!(featured[0].gains, featured[1].gains);
+        assert_eq!(featured[0].right_gains, featured[1].right_gains);
+    }
 }
 
 #[test]

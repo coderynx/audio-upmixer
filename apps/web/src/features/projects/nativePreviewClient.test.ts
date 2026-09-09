@@ -11,6 +11,26 @@ vi.mock("@tauri-apps/api/core", () => ({
 beforeEach(() => { vi.mocked(invoke).mockReset().mockResolvedValue(1); });
 afterEach(() => { vi.unstubAllGlobals(); });
 
+it("sends the latest panner schedule without waiting for an animation frame or transport", async () => {
+  vi.stubGlobal("requestAnimationFrame", vi.fn(() => 1));
+  const client = await NativePreviewClient.create({
+    sources: [], params: {}, assets: {}, renderer: "direct", appleHeadTracking: false,
+    onMaxChannels: () => {}, onLoadProgress: () => {},
+  }, {});
+  vi.mocked(invoke).mockClear();
+  const schedule: MovementSchedule = {
+    version: 1, revision: 9, sample_rate: 48000, duration_frames: 48000,
+    grid_us: 20000, interpolation_us: 5208, stems: [],
+  };
+  client.updateParams({ gain: 1 }, {}, "direct", false, schedule);
+  client.updateParams({ gain: 2 }, {}, "direct", false, schedule);
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1), { timeout: 100 });
+  expect(invoke).toHaveBeenCalledWith("native_preview_update", {
+    request: expect.objectContaining({ params: { gain: 2 }, movementSchedule: schedule }),
+  });
+  client.dispose();
+});
+
 it("does not serialize the installed movement schedule on each parameter adjustment", async () => {
   let frame = () => {};
   vi.stubGlobal("requestAnimationFrame", (callback: () => void) => { frame = callback; return 1; });
@@ -67,5 +87,24 @@ it("retries failed schedule transfers and orders replacements and clearing befor
   expect(vi.mocked(invoke).mock.calls.at(-2)).toEqual([
     "native_preview_update", { request: expect.objectContaining({ movementSchedule: null, movementUnchanged: false }) },
   ]);
+  client.dispose();
+});
+
+it("transfers only changed stems against the last successfully queued schedule", async () => {
+  const stem = (stem_key: string, stem_index: number) => ({ stem_key, stem_index, events: [{
+    time_us: 0, position: [0, 1, 0] as [number, number, number], gains: [1, 0], interpolation_us: 5208,
+  }] });
+  const schedule: MovementSchedule = { version: 1, revision: 1, sample_rate: 48000,
+    duration_frames: 48000, grid_us: 20000, interpolation_us: 5208,
+    stems: [stem("Guitar", 0), stem("Vocals", 1)] };
+  const client = await NativePreviewClient.create({ sources: [], params: {}, movementSchedule: schedule,
+    assets: {}, renderer: "direct", appleHeadTracking: false, onMaxChannels: () => {}, onLoadProgress: () => {} }, {});
+  const changed = { ...schedule.stems[0], events: [{ ...schedule.stems[0].events[0], gains: [0, 1] }] };
+  const next = { ...schedule, revision: 2, stems: [changed, schedule.stems[1]] };
+  client.updateParams({}, {}, "direct", false, next);
+  await client.seek(0);
+  expect(vi.mocked(invoke).mock.calls.at(-2)?.[1]).toMatchObject({ request: {
+    movementSchedule: { base_revision: 1, revision: 2, stems: [changed] },
+  } });
   client.dispose();
 });

@@ -1,11 +1,18 @@
-//! One-shot movement compiler ABI for the browser worker.
+//! Movement compiler ABI for the browser worker.
 //!
-//! The host copies one JSON request into linear memory, compiles it once, and
-//! reads one owned result buffer. A result is always returned so parse and
+//! A full request prepares analysis; subsequent placement edits reuse it for
+//! this worker's lifetime. Each call returns one owned result buffer, so parse and
 //! validation failures can cross the C ABI as `{"error":"..."}` without a
 //! second shape or an allocation owned by JavaScript.
 
-use upmixer_dsp_core::movement::{compile_movement, MovementCompileRequest};
+use std::cell::RefCell;
+use upmixer_dsp_core::movement::{
+    MovementCompileRequest, MovementPlacementUpdate, PreparedMovement,
+};
+
+thread_local! {
+    static PREPARED: RefCell<Option<PreparedMovement>> = const { RefCell::new(None) };
+}
 
 fn result_bytes(result: Result<String, String>) -> *mut Vec<u8> {
     let bytes = match result {
@@ -40,10 +47,58 @@ pub unsafe extern "C" fn dsp_movement_compile_json(
         Ok(request) => request,
         Err(error) => return result_bytes(Err(format!("invalid movement request: {error}"))),
     };
-    result_bytes(compile_movement(&request).and_then(|schedule| {
-        serde_json::to_string(&schedule)
-            .map_err(|error| format!("movement result encoding failed: {error}"))
+    result_bytes(PreparedMovement::new(request).and_then(|prepared| {
+        let json = serde_json::to_string(&prepared.schedule)
+            .map_err(|error| format!("movement result encoding failed: {error}"))?;
+        PREPARED.with(|state| *state.borrow_mut() = Some(prepared));
+        Ok(json)
     }))
+}
+
+/// Update Supporting geometry without repeating immutable feature analysis.
+/// # Safety
+/// Same readable UTF-8 pointer contract as `dsp_movement_compile_json`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_movement_update_placements_json(
+    ptr: *const u8,
+    len: usize,
+) -> *mut Vec<u8> {
+    #[derive(serde::Deserialize)]
+    struct Update {
+        revision: u64,
+        stems: Vec<MovementPlacementUpdate>,
+    }
+    if ptr.is_null() && len != 0 {
+        return result_bytes(Err("movement request pointer is null".into()));
+    }
+    let input = if len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(ptr, len)
+    };
+    result_bytes((|| {
+        let update: Update = serde_json::from_slice(input).map_err(|error| error.to_string())?;
+        PREPARED.with(|state| {
+            let mut state = state.borrow_mut();
+            let prepared = state.as_mut().ok_or("movement is not prepared")?;
+            let keys: Vec<_> = update
+                .stems
+                .iter()
+                .map(|stem| stem.stem_key.clone())
+                .collect();
+            let schedule = prepared.update_placements(update.revision, update.stems)?;
+            // Only changed stems cross WASM memory; the worker owns the complete schedule.
+            let changed: Vec<_> = schedule
+                .stems
+                .iter()
+                .filter(|stem| keys.contains(&stem.stem_key))
+                .collect();
+            serde_json::to_string(
+                &serde_json::json!({ "revision": schedule.revision, "stems": changed }),
+            )
+            .map_err(|error| error.to_string())
+        })
+    })())
 }
 
 /// Pointer to the result bytes. The pointer remains valid until the result is

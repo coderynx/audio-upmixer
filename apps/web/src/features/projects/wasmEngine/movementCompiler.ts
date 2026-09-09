@@ -69,6 +69,7 @@ type WorkerResult = {
   type: "compiled";
   id: number;
   schedule: MovementSchedule;
+  baseRevision?: number;
 } | {
   type: "error";
   id: number;
@@ -94,6 +95,9 @@ export class MovementCompilerClient {
   private readonly worker: WorkerLike;
   private nextId = 0;
   private disposed = false;
+  private inFlightId: number | null = null;
+  private queued: CompileMessage | null = null;
+  private compiledSchedule: MovementSchedule | null = null;
   private pending = new Map<number, {
     revision: number;
     resolve: (schedule: MovementSchedule) => void;
@@ -110,6 +114,8 @@ export class MovementCompilerClient {
       const error = new Error(event.message || "Movement compiler worker failed");
       for (const pending of this.pending.values()) pending.reject(error);
       this.pending.clear();
+      this.inFlightId = null;
+      this.queued = null;
     };
   }
 
@@ -138,7 +144,18 @@ export class MovementCompilerClient {
         request,
         wasmModule: this.wasmModule,
       };
-      this.worker.postMessage(message);
+      if (this.inFlightId === null) {
+        this.inFlightId = id;
+        this.worker.postMessage(message);
+      } else {
+        // A synchronous WASM job cannot be interrupted. Keep only the latest
+        // edit outside the worker so obsolete jobs never build up behind it.
+        if (this.queued) {
+          this.pending.get(this.queued.id)?.reject(new Error("stale movement compilation"));
+          this.pending.delete(this.queued.id);
+        }
+        this.queued = message;
+      }
     });
   }
 
@@ -148,10 +165,32 @@ export class MovementCompilerClient {
     const error = new Error("Movement compiler disposed");
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
+    this.queued = null;
+    this.inFlightId = null;
     this.worker.terminate();
   }
 
   private onMessage(message: WorkerResult) {
+    if (this.disposed || message.id !== this.inFlightId) return;
+    if (message.type === "compiled") {
+      if (message.baseRevision !== undefined) {
+        if (this.compiledSchedule?.revision !== message.baseRevision) {
+          message = { type: "error", id: message.id, message: "movement delta base mismatch" };
+        } else {
+          const changed = message.schedule.stems;
+          message.schedule = { ...message.schedule, stems: this.compiledSchedule.stems.map((stem) =>
+            changed.find((next) => next.stem_key === stem.stem_key) ?? stem) };
+        }
+      }
+      if (message.type === "compiled") this.compiledSchedule = message.schedule;
+    }
+    this.inFlightId = null;
+    if (this.queued) {
+      const next = this.queued;
+      this.queued = null;
+      this.inFlightId = next.id;
+      this.worker.postMessage(next);
+    }
     const pending = this.pending.get(message.id);
     if (!pending) return;
     this.pending.delete(message.id);

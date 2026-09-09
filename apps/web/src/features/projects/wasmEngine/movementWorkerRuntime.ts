@@ -13,6 +13,7 @@ type WasmExports = {
   dsp_alloc(bytes: number): number;
   dsp_free(ptr: number, bytes: number): void;
   dsp_movement_compile_json(ptr: number, length: number): number;
+  dsp_movement_update_placements_json(ptr: number, length: number): number;
   dsp_movement_result_ptr(handle: number): number;
   dsp_movement_result_len(handle: number): number;
   dsp_movement_result_free(handle: number): void;
@@ -21,6 +22,9 @@ type WasmExports = {
 let wasmPromise: Promise<WasmExports> | null = null;
 let sidecarUrl = "";
 let sidecarPromise: Promise<MovementFeatureSidecar> | null = null;
+let preparedKey = "";
+let preparedPlacements: string[] = [];
+let preparedSchedule: MovementSchedule | null = null;
 
 function loadWasm(module: WebAssembly.Module | undefined): Promise<WasmExports> {
   if (!wasmPromise) {
@@ -140,12 +144,14 @@ function readBytes(wasm: WasmExports, ptr: number, length: number): Uint8Array {
 /** Call the control-rate WASM entry point. It is deliberately separate from
  * the render engine ABI: schedule compilation never runs in an audio
  * callback. The result handle owns the serialized bytes until it is freed. */
-function compileWithWasm(wasm: WasmExports, request: MovementCompileRequest): MovementSchedule {
+function compileWithWasm(wasm: WasmExports, request: unknown, placementUpdate = false): MovementSchedule {
   const input = encoder.encode(JSON.stringify(request));
   const inputPtr = wasm.dsp_alloc(input.byteLength);
   new Uint8Array(wasm.memory.buffer, inputPtr, input.byteLength).set(input);
   try {
-    const handle = wasm.dsp_movement_compile_json(inputPtr, input.byteLength);
+    const handle = placementUpdate
+      ? wasm.dsp_movement_update_placements_json(inputPtr, input.byteLength)
+      : wasm.dsp_movement_compile_json(inputPtr, input.byteLength);
     if (!handle) throw new Error("movement compilation failed");
     try {
       const outputPtr = wasm.dsp_movement_result_ptr(handle);
@@ -169,10 +175,32 @@ export async function compileMovement(message: {
   request: MovementCompileRequest;
   wasmModule?: WebAssembly.Module;
 }) {
+  const { revision, stems, ...header } = message.request;
+  const placements = stems.map(({ stem_key, placement, home_gains, home_right_gains }) =>
+    ({ stem_key, placement, home_gains, home_right_gains }));
+  const placementKeys = placements.map((placement) => JSON.stringify(placement));
+  const key = JSON.stringify([message.featuresUrl, header, stems.map((stem) => {
+    const { placement, home_gains, home_right_gains, ...analysis } = stem;
+    return analysis;
+  })]);
+  if (key === preparedKey && preparedSchedule) {
+    const changed = compileWithWasm(await loadWasm(message.wasmModule), {
+      revision, stems: placements.filter((_, index) => placementKeys[index] !== preparedPlacements[index]),
+    }, true);
+    const schedule: MovementSchedule = { ...preparedSchedule, revision,
+      stems: preparedSchedule.stems.map((stem) => changed.stems.find((next) => next.stem_key === stem.stem_key) ?? stem) };
+    preparedSchedule = schedule;
+    preparedPlacements = placementKeys;
+    return schedule;
+  }
   const sidecar = await loadCanonicalFeatures(message.featuresUrl, message.proxyUrl);
   validateSidecar(sidecar, message.request.stems.map((stem) => stem.stem_key));
   const request = withCanonicalFeatures(message.request, sidecar);
-  return compileWithWasm(await loadWasm(message.wasmModule), request);
+  const schedule = compileWithWasm(await loadWasm(message.wasmModule), request);
+  preparedKey = key;
+  preparedPlacements = placementKeys;
+  preparedSchedule = schedule;
+  return schedule;
 }
 
 type WorkerScope = {
@@ -180,10 +208,18 @@ type WorkerScope = {
   postMessage(value: unknown): void;
 };
 const worker = self as unknown as WorkerScope;
+let sentSchedule: MovementSchedule | null = null;
 worker.onmessage = (event: MessageEvent<{ type: string; id: number; featuresUrl: string; proxyUrl?: string; request: MovementCompileRequest; wasmModule?: WebAssembly.Module }>) => {
   if (event.data.type !== "compile") return;
   void compileMovement(event.data).then(
-    (schedule) => worker.postMessage({ type: "compiled", id: event.data.id, schedule }),
+    (schedule) => {
+      const base = sentSchedule;
+      const unchanged = base && schedule.stems.some((stem, index) => stem === base.stems[index]);
+      worker.postMessage({ type: "compiled", id: event.data.id,
+        baseRevision: unchanged ? base.revision : undefined,
+        schedule: unchanged ? { ...schedule, stems: schedule.stems.filter((stem, index) => stem !== base.stems[index]) } : schedule });
+      sentSchedule = schedule;
+    },
     (error: unknown) => worker.postMessage({
       type: "error",
       id: event.data.id,

@@ -169,7 +169,7 @@ afterEach(() => {
 });
 
 describe("useStemPreview parameter binding", () => {
-  it("defers preview synchronization after a panner update", async () => {
+  it("synchronizes every panner edit without waiting for the drag to stop", async () => {
     const sync = vi.spyOn(PreviewHost.prototype, "syncProgram").mockResolvedValue();
     const initialize = vi.spyOn(PreviewHost.prototype, "initialize").mockResolvedValue();
     try {
@@ -180,9 +180,9 @@ describe("useStemPreview parameter binding", () => {
       rerender(<Harness mix={{ stem_placement: { Vocals: { azimuth_deg: 20, elevation_deg: 0, width_deg: 0, object_size: 0 } } }} />);
       await act(async () => { await Promise.resolve(); });
 
-      expect(sync).not.toHaveBeenCalled();
-      await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 60)); });
       expect(sync).toHaveBeenCalledOnce();
+      rerender(<Harness mix={{ stem_placement: { Vocals: { azimuth_deg: 40, elevation_deg: 0, width_deg: 0, object_size: 0 } } }} />);
+      expect(sync).toHaveBeenCalledTimes(2);
     } finally {
       sync.mockRestore();
       initialize.mockRestore();

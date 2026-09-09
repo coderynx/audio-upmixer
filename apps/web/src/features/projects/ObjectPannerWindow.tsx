@@ -244,6 +244,10 @@ export function ObjectPannerWindow({
           ><X className="h-3.5 w-3.5" /></button>
         </div>
         <div className="flex flex-col items-center gap-6 px-6 py-5">
+          <div className="w-full text-[11px] text-muted-foreground">
+            <p className="font-semibold text-foreground">Resting position</p>
+            <p>Edits change the Supporting placement, not the front-center attention destination.</p>
+          </div>
           <section className="w-full" aria-label="Left/right and back/front position">
             <div className="mb-1 grid grid-cols-[44px_minmax(0,1fr)_44px] text-[12px] text-muted-foreground"><span className="col-start-2 text-center">Front</span></div>
             <div className="grid grid-cols-[44px_minmax(0,1fr)_44px] items-center text-[12px] text-muted-foreground">

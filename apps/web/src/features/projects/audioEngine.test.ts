@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { withReferenceMatchParams } from "./audioEngine";
 import { PreviewHost, type MovementSchedule } from "./audioEngine";
@@ -8,6 +8,7 @@ import { resolveDeliveryTarget } from "./masteringProfiles";
 import { TEST_ENGINE_CONSTANTS } from "./engineConstants.fixture";
 import { createPreviewProgramme } from "./previewProgramme";
 import type { ProjectStem } from "@/api";
+import { movementAt } from "./wasmEngine/movementSchedule";
 
 const TARGETS = TEST_ENGINE_CONSTANTS.deliveryTargets;
 const FALLBACK = TEST_ENGINE_CONSTANTS.deliveryDefault;
@@ -105,6 +106,56 @@ describe("withReferenceMatchParams", () => {
 });
 
 describe("programme updates during movement compilation", () => {
+  it("retries a position schedule invalidated by a later ordinary mix edit", async () => {
+    const host = new PreviewHost({
+      onReady: () => {}, onLoadProgress: () => {}, onError: () => {}, onPlaying: () => {},
+      onCurrentTime: () => {}, onDuration: () => {}, onMeasuring: () => {},
+      onMeasureProgress: () => {}, onLoudness: () => {}, onMaxChannels: () => {},
+      onVolume: () => {}, onMuted: () => {}, onLoop: () => {}, onEngineStatus: () => {},
+    });
+    host.setConstants(TEST_ENGINE_CONSTANTS);
+    const programme = (azimuth_deg: number, ceiling = 0) => createPreviewProgramme({
+      stems: [{ id: "guitar", stem_key: "Guitar", audio_url: "/guitar.wav", channels: 2 } as ProjectStem],
+      mix: { stem_placement: { Guitar: { azimuth_deg, elevation_deg: 0, width_deg: 0, object_size: 0 } } },
+      mastering: { loudness: { max_tp: ceiling } },
+      layoutChannels: ["FL", "FR", "C", "LFE", "SL", "SR"],
+      movementFeaturesUrl: "/movement-features",
+    });
+    host.setProgramme(programme(0));
+    let finish!: (schedule: MovementSchedule) => void;
+    const compile = vi.fn(() => new Promise<MovementSchedule>((resolve) => { finish = resolve; }));
+    const schedule = (revision: number, x: number): MovementSchedule => ({
+      version: 1, revision, sample_rate: 48000, duration_frames: 48000,
+      grid_us: 20000, interpolation_us: 5208,
+      stems: [{ stem_key: "Guitar", stem_index: 0, events: [{
+        time_us: 0, position: [x, 1, 0], gains: x ? [1, 0] : [0, 1], interpolation_us: 5208,
+      }] }],
+    });
+    const updates: MovementSchedule[] = [];
+    Object.assign(host, {
+      duration: 1, movementSchedule: schedule(1, 0),
+      movementWasmModule: Promise.resolve({}), movementCompiler: { compile },
+      nativeClient: { updateParams: (_params: unknown, _assets: unknown, _renderer: unknown, _tracking: unknown, next: MovementSchedule) => {
+        updates.push(next);
+        (host as unknown as { commitMovementSchedule(revision: number): void }).commitMovementSchedule(next.revision);
+      } },
+    });
+    host.setProgramme(programme(75));
+    expect(updates).toHaveLength(0);
+    const pending = host.syncProgram();
+    await Promise.resolve();
+    host.setProgramme(programme(75, -1));
+    finish(schedule(3, -1));
+    await pending;
+    expect(host.installedMovementSchedule?.revision).toBe(1);
+    const retry = host.syncProgram();
+    await Promise.resolve();
+    expect(compile).toHaveBeenCalledTimes(2);
+    finish(schedule(5, -1));
+    await retry;
+    expect(updates.at(-1)?.stems[0].events[0].gains).toEqual([1, 0]);
+    expect(movementAt(host.installedMovementSchedule, "Guitar", 0)?.position).toEqual([-1, 1, 0]);
+  });
   it("keeps movement while panner parameters update", () => {
     const updates: { params: Record<string, unknown>; schedule: MovementSchedule | null; ready: boolean }[] = [];
     const host = new PreviewHost({

@@ -16,6 +16,8 @@ pub const INTERPOLATION_US: i64 = 5_208;
 
 const DB_FLOOR: f64 = -240.0;
 
+type ObjectRouteCache = std::collections::HashMap<(u64, u64), Vec<f64>>;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CanonicalFeatures {
     pub version: u32,
@@ -667,82 +669,171 @@ struct Analysis {
 }
 
 pub fn compile_movement(request: &MovementCompileRequest) -> Result<MovementSchedule, String> {
-    if request.sample_rate == 0 || request.channels.is_empty() || request.duration_frames == 0 {
-        return Err("movement compilation needs a sample rate and channels".into());
-    }
-    request.tuning.validate()?;
-    let mut keys = request
-        .stems
-        .iter()
-        .map(|stem| stem.stem_key.trim())
-        .collect::<Vec<_>>();
-    if keys.iter().any(|key| key.is_empty()) {
-        return Err("movement stems need non-empty identities".into());
-    }
-    keys.sort_unstable();
-    if keys.windows(2).any(|pair| pair[0] == pair[1]) {
-        return Err("movement stems contain duplicate identities".into());
-    }
-    let names: Vec<&str> = request.channels.iter().map(String::as_str).collect();
-    let layout = PannerLayout::new(&names);
-    let duration_us =
-        ((request.duration_frames as u128 * 1_000_000) / request.sample_rate as u128) as i64;
+    Ok(PreparedMovement::new(request.clone())?.schedule)
+}
 
-    let mut analyses = Vec::with_capacity(request.stems.len());
-    for stem in &request.stems {
-        stem.features.validate()?;
-        stem.settings.validate()?;
-        if !stem.gain_db.is_finite() {
-            return Err(format!("movement gain is not finite for {}", stem.stem_key));
+/// Control-thread state: placement edits cannot change activity or focus winners.
+pub struct PreparedMovement {
+    request: MovementCompileRequest,
+    analyses: Vec<Analysis>,
+    winners: Vec<Option<usize>>,
+    pub schedule: MovementSchedule,
+}
+
+#[derive(Deserialize)]
+pub struct MovementPlacementUpdate {
+    pub stem_key: String,
+    pub placement: StemPlacement,
+    pub home_gains: Vec<f64>,
+    pub home_right_gains: Vec<f64>,
+}
+
+impl PreparedMovement {
+    pub fn new(request: MovementCompileRequest) -> Result<Self, String> {
+        if request.sample_rate == 0 || request.channels.is_empty() || request.duration_frames == 0 {
+            return Err("movement compilation needs a sample rate and channels".into());
         }
-        validate_placement(&stem.placement)?;
-        validate_gains(&stem.home_gains, request.channels.len(), "home_gains")?;
-        validate_gains(
-            &stem.home_right_gains,
-            request.channels.len(),
-            "home_right_gains",
-        )?;
-        if stem.features.sample_rate != request.sample_rate {
-            return Err(format!("movement rate mismatch for {}", stem.stem_key));
+        request.tuning.validate()?;
+        let mut keys = request
+            .stems
+            .iter()
+            .map(|stem| stem.stem_key.trim())
+            .collect::<Vec<_>>();
+        if keys.iter().any(|key| key.is_empty()) {
+            return Err("movement stems need non-empty identities".into());
         }
-        if stem.features.frame_count > request.duration_frames {
-            return Err(format!(
-                "movement features exceed programme duration for {}",
-                stem.stem_key
-            ));
+        keys.sort_unstable();
+        if keys.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err("movement stems contain duplicate identities".into());
         }
-        analyses.push(analyse(stem, &request.tuning));
+        let names: Vec<&str> = request.channels.iter().map(String::as_str).collect();
+        let layout = PannerLayout::new(&names);
+        let duration_us =
+            ((request.duration_frames as u128 * 1_000_000) / request.sample_rate as u128) as i64;
+
+        let mut analyses = Vec::with_capacity(request.stems.len());
+        for stem in &request.stems {
+            stem.features.validate()?;
+            stem.settings.validate()?;
+            if !stem.gain_db.is_finite() {
+                return Err(format!("movement gain is not finite for {}", stem.stem_key));
+            }
+            validate_placement(&stem.placement)?;
+            validate_gains(&stem.home_gains, request.channels.len(), "home_gains")?;
+            validate_gains(
+                &stem.home_right_gains,
+                request.channels.len(),
+                "home_right_gains",
+            )?;
+            if stem.features.sample_rate != request.sample_rate {
+                return Err(format!("movement rate mismatch for {}", stem.stem_key));
+            }
+            if stem.features.frame_count > request.duration_frames {
+                return Err(format!(
+                    "movement features exceed programme duration for {}",
+                    stem.stem_key
+                ));
+            }
+            analyses.push(analyse(stem, &request.tuning));
+        }
+        let winners = winners(&request, &analyses, &request.tuning);
+        let mut schedules = Vec::with_capacity(request.stems.len());
+        for (index, stem) in request.stems.iter().enumerate() {
+            if !stem.included {
+                continue;
+            }
+            schedules.push(compile_stem(
+                index,
+                stem,
+                &analyses[index],
+                &winners,
+                &layout,
+                &names,
+                request.duration_frames,
+                duration_us,
+                request.sample_rate,
+                &request.tuning,
+            )?);
+        }
+        let schedule = MovementSchedule {
+            version: FEATURE_VERSION,
+            revision: request.revision,
+            sample_rate: request.sample_rate,
+            duration_frames: request.duration_frames,
+            grid_us: EVENT_GRID_US,
+            interpolation_us: INTERPOLATION_US,
+            stems: schedules,
+        };
+        schedule.validate(request.channels.len())?;
+        Ok(Self {
+            request,
+            analyses,
+            winners,
+            schedule,
+        })
     }
-    let winners = winners(request, &analyses, &request.tuning);
-    let mut schedules = Vec::with_capacity(request.stems.len());
-    for (index, stem) in request.stems.iter().enumerate() {
-        if !stem.included {
-            continue;
+
+    pub fn update_placements(
+        &mut self,
+        revision: u64,
+        updates: Vec<MovementPlacementUpdate>,
+    ) -> Result<&MovementSchedule, String> {
+        let names: Vec<&str> = self.request.channels.iter().map(String::as_str).collect();
+        let layout = PannerLayout::new(&names);
+        let mut replacements = Vec::new();
+        for update in updates {
+            let index = self
+                .request
+                .stems
+                .iter()
+                .position(|stem| stem.stem_key == update.stem_key)
+                .ok_or("unknown movement stem")?;
+            if replacements
+                .iter()
+                .any(|(previous, _, _)| *previous == index)
+            {
+                return Err("duplicate movement placement update".into());
+            }
+            validate_placement(&update.placement)?;
+            validate_gains(&update.home_gains, names.len(), "home_gains")?;
+            validate_gains(&update.home_right_gains, names.len(), "home_right_gains")?;
+            let mut stem = self.request.stems[index].clone();
+            stem.placement = update.placement;
+            stem.home_gains = update.home_gains;
+            stem.home_right_gains = update.home_right_gains;
+            let schedule = if stem.included {
+                Some(compile_stem(
+                    index,
+                    &stem,
+                    &self.analyses[index],
+                    &self.winners,
+                    &layout,
+                    &names,
+                    self.request.duration_frames,
+                    self.schedule.duration_us(),
+                    self.request.sample_rate,
+                    &self.request.tuning,
+                )?)
+            } else {
+                None
+            };
+            replacements.push((index, stem, schedule));
         }
-        schedules.push(compile_stem(
-            index,
-            stem,
-            &analyses[index],
-            &winners,
-            &layout,
-            &names,
-            request.duration_frames,
-            duration_us,
-            request.sample_rate,
-            &request.tuning,
-        )?);
+        // Commit only after every update passed validation and compilation.
+        for (index, stem, schedule) in replacements {
+            self.request.stems[index] = stem;
+            if let Some(schedule) = schedule {
+                *self
+                    .schedule
+                    .stems
+                    .iter_mut()
+                    .find(|stem| stem.stem_index == index)
+                    .unwrap() = schedule;
+            }
+        }
+        self.schedule.revision = revision;
+        Ok(&self.schedule)
     }
-    let schedule = MovementSchedule {
-        version: FEATURE_VERSION,
-        revision: request.revision,
-        sample_rate: request.sample_rate,
-        duration_frames: request.duration_frames,
-        grid_us: EVENT_GRID_US,
-        interpolation_us: INTERPOLATION_US,
-        stems: schedules,
-    };
-    schedule.validate(request.channels.len())?;
-    Ok(schedule)
 }
 
 fn validate_gains(gains: &[f64], channels: usize, label: &str) -> Result<(), String> {
@@ -1049,12 +1140,14 @@ fn compile_stem(
     sample_rate: u32,
     tuning: &MovementTuning,
 ) -> Result<MovementStemSchedule, String> {
+    let mut route_cache = ObjectRouteCache::new();
     let home = if stem.object_mode.is_some() {
         object_route_at(
             layout,
             stem,
             object_endpoint_azimuth(stem, true),
             stem.placement.elevation_deg,
+            &mut route_cache,
         )
     } else if stem.home_gains.is_empty() {
         layout.placement_route(&stem.placement)
@@ -1067,6 +1160,7 @@ fn compile_stem(
             stem,
             object_endpoint_azimuth(stem, false),
             stem.placement.elevation_deg,
+            &mut route_cache,
         )
     } else if stem.home_right_gains.is_empty() {
         Vec::new()
@@ -1084,6 +1178,7 @@ fn compile_stem(
     let movable = is_movable(&stem.stem_name, &stem.stem_key);
     let mut events = Vec::new();
     let mut last: Option<MovementEvent> = None;
+    let mut last_target = None;
     let mut last_hit: Option<(i64, i8)> = None;
     let mut focus_level = 0.0;
     let mut lift_level = 0.0;
@@ -1299,6 +1394,17 @@ fn compile_stem(
             // state return smoothly to Supporting for subsequent events.
             lift_level = move_toward(lift_level, 0.0, dt_ms / 2_000.0);
         }
+        let can_emit = time_us == 0
+            || (time_us >= start
+                && time_us <= end
+                && end.saturating_sub(time_us) >= INTERPOLATION_US);
+        let target_inputs = (placement, target_placement, movement_fraction, moved);
+        // Policy still advances every grid tick; held geometry needs no rerouting.
+        if !can_emit || last_target.as_ref() == Some(&target_inputs) {
+            previous_time = time_us;
+            continue;
+        }
+        last_target = Some(target_inputs);
         let (position, gains, right_position, right_gains) = target(
             layout,
             stem,
@@ -1309,6 +1415,7 @@ fn compile_stem(
             target_placement,
             movement_fraction,
             moved,
+            &mut route_cache,
         );
         let event = MovementEvent {
             time_us,
@@ -1318,14 +1425,9 @@ fn compile_stem(
             right_gains,
             interpolation_us: INTERPOLATION_US,
         };
-        let can_emit = time_us == 0
-            || (time_us >= start
-                && time_us <= end
-                && end.saturating_sub(time_us) >= INTERPOLATION_US);
-        if can_emit
-            && last
-                .as_ref()
-                .is_none_or(|previous| !same_event_target(previous, &event))
+        if last
+            .as_ref()
+            .is_none_or(|previous| !same_event_target(previous, &event))
         {
             last = Some(event.clone());
             events.push(event);
@@ -1343,6 +1445,7 @@ fn compile_stem(
             stem.placement,
             0.0,
             false,
+            &mut route_cache,
         );
         events.push(MovementEvent {
             time_us: 0,
@@ -1381,6 +1484,7 @@ fn target(
     target_placement: StemPlacement,
     movement_fraction: f64,
     moved: bool,
+    route_cache: &mut ObjectRouteCache,
 ) -> ([f64; 3], Vec<f64>, Option<[f64; 3]>, Option<Vec<f64>>) {
     if stem.object_mode.is_none() {
         let mut gains = if movement_fraction > 1e-12 {
@@ -1418,7 +1522,13 @@ fn target(
     let left_azimuth = placement.azimuth_deg + half_width;
     let right_azimuth = placement.azimuth_deg - half_width;
     let mut gains = if moved {
-        object_route_at(layout, stem, left_azimuth, placement.elevation_deg)
+        object_route_at(
+            layout,
+            stem,
+            left_azimuth,
+            placement.elevation_deg,
+            route_cache,
+        )
     } else {
         home.to_vec()
     };
@@ -1434,7 +1544,13 @@ fn target(
         );
     }
     let mut right = if moved {
-        object_route_at(layout, stem, right_azimuth, placement.elevation_deg)
+        object_route_at(
+            layout,
+            stem,
+            right_azimuth,
+            placement.elevation_deg,
+            route_cache,
+        )
     } else {
         home_right.to_vec()
     };
@@ -1463,17 +1579,25 @@ fn object_route_at(
     stem: &MovementStemInput,
     azimuth: f64,
     elevation: f64,
+    cache: &mut ObjectRouteCache,
 ) -> Vec<f64> {
-    layout.cartesian_object_route(
-        placement_position(azimuth, elevation),
-        stem.placement.object_size,
-        stem.channel_lock,
-        &stem
-            .zone_exclusion
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-    )
+    // Layout and object metadata are fixed for this stem compilation. Reuse
+    // exact endpoints across repeated hits without rounding movement positions.
+    cache
+        .entry((azimuth.to_bits(), elevation.to_bits()))
+        .or_insert_with(|| {
+            layout.cartesian_object_route(
+                placement_position(azimuth, elevation),
+                stem.placement.object_size,
+                stem.channel_lock,
+                &stem
+                    .zone_exclusion
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .clone()
 }
 
 fn same_event_target(left: &MovementEvent, right: &MovementEvent) -> bool {
@@ -1619,10 +1743,9 @@ fn percentile(values: &[f64], fraction: f64) -> f64 {
     if values.is_empty() {
         return DB_FLOOR;
     }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let index = ((sorted.len() - 1) as f64 * fraction.clamp(0.0, 1.0)).round() as usize;
-    sorted[index]
+    let mut scratch = values.to_vec();
+    let index = ((scratch.len() - 1) as f64 * fraction.clamp(0.0, 1.0)).round() as usize;
+    *scratch.select_nth_unstable_by(index, f64::total_cmp).1
 }
 
 fn rolling_median(values: &[f64], width: usize) -> Vec<f64> {
@@ -1683,6 +1806,23 @@ mod tests {
     }
 
     #[test]
+    fn percentile_selection_matches_full_sort() {
+        for len in [0, 1, 2, 5, 301, 1000] {
+            let values: Vec<_> = (0..len).map(|i| ((i * 37) % 101) as f64 - 50.0).collect();
+            let mut sorted = values.clone();
+            sorted.sort_by(f64::total_cmp);
+            for fraction in [-0.2_f64, 0.0, 0.5, 0.95, 1.0, 1.2] {
+                let expected = if sorted.is_empty() {
+                    DB_FLOOR
+                } else {
+                    sorted[((len - 1) as f64 * fraction.clamp(0.0, 1.0)).round() as usize]
+                };
+                assert_eq!(percentile(&values, fraction), expected);
+            }
+        }
+    }
+
+    #[test]
     fn extracts_ragged_stereo_without_cancellation() {
         let left = vec![1.0f32; 481];
         let right = vec![-1.0f32; 481];
@@ -1722,6 +1862,20 @@ mod tests {
             }],
             tuning: tuning(),
         };
+        let layout = PannerLayout::new(&["FL", "FR", "C"]);
+        let mut cache = ObjectRouteCache::new();
+        let stem = &request.stems[0];
+        for azimuth in [60.0, -60.0, 60.0] {
+            let cached = object_route_at(&layout, stem, azimuth, 0.0, &mut cache);
+            let direct = layout.cartesian_object_route(
+                placement_position(azimuth, 0.0),
+                stem.placement.object_size,
+                false,
+                &[],
+            );
+            assert_eq!(cached, direct);
+        }
+        assert_eq!(cache.len(), 2);
         let schedule = compile_movement(&request).unwrap();
         assert_eq!(schedule.revision, 7);
         assert!(schedule.stems[0]

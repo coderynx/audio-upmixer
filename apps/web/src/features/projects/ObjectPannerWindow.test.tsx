@@ -15,6 +15,8 @@ describe("ObjectPannerWindow", () => {
 
     await user.click(screen.getByRole("button", { name: "Object panner" }));
     expect(screen.getByRole("dialog", { name: "Object panner" })).toHaveAttribute("aria-modal", "false");
+    expect(screen.getByText("Resting position")).toBeVisible();
+    expect(screen.getByText("Edits change the Supporting placement, not the front-center attention destination.")).toBeVisible();
     const title = screen.getByText("Vocals Panner");
     expect(title.previousElementSibling).toHaveStyle({ color: getStemColor("Vocals") });
     expect(screen.getByRole("dialog", { name: "Object panner" })).toHaveStyle({ borderColor: `${getStemColor("Vocals")}40` });

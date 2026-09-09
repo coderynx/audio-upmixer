@@ -159,12 +159,16 @@ export class PreviewHost {
   constructor(private readonly callbacks: EngineCallbacks) {}
 
   setProgramme(programme: PreviewProgramme | null) {
+    const placementChanged = JSON.stringify(programme?.mix.stem_placement) !== JSON.stringify(this.programme?.mix.stem_placement);
     const changed = programme?.key !== this.programme?.key;
     this.programme = programme;
     if (!changed) return;
-    // Parameters land immediately; movement preparation stays off the slider
+    // Ordinary parameters land immediately; movement preparation stays off the slider
     // path. The revision rejects a stale asynchronous replacement.
     this.movementRevision += 1;
+    // Install native geometry with its matching schedule once, not first with
+    // the old schedule (which also starts an obsolete route calibration).
+    if (placementChanged && this.nativeClient && this.movementSchedule) return;
     this.apply();
   }
 
@@ -565,21 +569,22 @@ export class PreviewHost {
       this.callbacks.onMovementSchedule?.(this.movementSchedule);
       return true;
     }
-    this.movementRequestKey = requestKey;
     const revision = ++this.movementRevision;
     try {
       const wasmModule = this.client?.wasmModule
         ?? await (this.movementWasmModule ??= loadDspModule());
       const compiler = this.movementCompiler ??= new MovementCompilerClient(undefined, wasmModule);
       const schedule = await compiler.compile(this.movementFeaturesUrl, { ...request, revision });
-      if (revision !== this.movementRevision || requestKey !== this.movementRequestKey) return false;
+      if (revision !== this.movementRevision) return false;
+      // A canceled compile must not cache the new key against the old schedule.
+      this.movementRequestKey = requestKey;
       // Keep the old audible schedule visible while the matching parameter
       // block is still pending. `apply` commits this pair together.
       this.pendingMovement = { schedule, revision: schedule.revision };
       this.movementReady = true;
       return true;
     } catch (error) {
-      if (revision === this.movementRevision && requestKey === this.movementRequestKey) {
+      if (revision === this.movementRevision) {
         this.callbacks.onError(error instanceof Error ? error.message : "Movement compilation failed");
       }
       return false;
@@ -1161,3 +1166,7 @@ export class PreviewHost {
     this.reset();
   }
 }
+
+// React keeps the ref-backed host alive during Fast Refresh, including its old
+// methods and renderer callbacks. Reload engine changes into a fresh session.
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload());

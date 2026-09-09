@@ -52,6 +52,7 @@ export class NativePreviewClient {
   private updateScheduled = false;
   private queue = Promise.resolve<unknown>(undefined);
   private movementRevision: number | null = null;
+  private movementSchedule: MovementSchedule | null = null;
   private pendingMeasure: ((value: { lkfs: number; dbtp: number; monitorLkfs?: number; monitorDbtp?: number } | null) => void) | null = null;
 
   private constructor(
@@ -92,6 +93,8 @@ export class NativePreviewClient {
         ); break;
         case "ended": callbacks.onEnded?.(); break;
         case "error": {
+          client.movementSchedule = null;
+          client.movementRevision = null;
           const error = new Error(event.message || "Native preview failed");
           rejectReady(error);
           callbacks.onError?.(error.message);
@@ -114,6 +117,7 @@ export class NativePreviewClient {
       onEvent: channel,
     });
     client.movementRevision = options.movementSchedule?.revision ?? null;
+    client.movementSchedule = options.movementSchedule ?? null;
     return client;
   }
 
@@ -128,7 +132,8 @@ export class NativePreviewClient {
     this.pendingUpdate = { params, movementSchedule, assets, renderer, appleHeadTracking, movementReady };
     if (this.updateScheduled || this.disposed) return;
     this.updateScheduled = true;
-    requestAnimationFrame(() => {
+    // Native audio must receive edits even when WebKit suspends visual frames.
+    queueMicrotask(() => {
       this.updateScheduled = false;
       this.flush();
     });
@@ -194,12 +199,19 @@ export class NativePreviewClient {
     const revision = update.movementSchedule?.revision ?? null;
     this.enqueue("native_preview_update", () => {
       const movementUnchanged = revision === this.movementRevision;
+      const next = update.movementSchedule;
+      const base = this.movementSchedule;
+      const delta = !movementUnchanged && base && next
+        && next.stems.length === base.stems.length
+        && next.stems.some((stem, index) => stem === base.stems[index]);
       return { request: {
         sessionId: this.sessionId, ...update,
-        movementSchedule: movementUnchanged ? undefined : update.movementSchedule,
+        movementSchedule: movementUnchanged ? undefined : delta
+          ? { ...next, base_revision: base.revision, stems: next.stems.filter((stem, index) => stem !== base.stems[index]) }
+          : next,
         movementUnchanged,
       } };
-    }).then(() => { this.movementRevision = revision; }, () => {});
+    }).then(() => { this.movementRevision = revision; this.movementSchedule = update.movementSchedule; }, () => {});
   }
 
   private enqueue(command: string, args: Record<string, unknown> | (() => Record<string, unknown>)): Promise<unknown> {
