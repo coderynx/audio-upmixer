@@ -174,6 +174,16 @@ fn realtime_object_render_uses_the_canonical_anchor() {
 }
 
 #[test]
+fn realtime_object_boundary_rejects_a_partial_canonical_anchor() {
+    let engine = engine_at(true, "native", false, 0.0, 1.0);
+    let mut params = engine.params().clone();
+    let placement = params.stems[0].object_placement.as_mut().unwrap();
+    placement.left_right = Some(0.25);
+
+    assert!(params.validate_movement().is_err());
+}
+
+#[test]
 fn object_meters_follow_delivered_speakers() {
     let mut engine = engine(false, "native", false);
     let mut out = vec![0.0; 4 * N];

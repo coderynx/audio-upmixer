@@ -506,6 +506,10 @@ def validate_manifest(data: dict) -> None:
                         raise ManifestError(
                             f"Placement '{stem_key}.{field}' must be non-negative."
                         )
+                    if field == "width_deg" and abs(float(value)) > 360.0:
+                        raise ManifestError(
+                            f"Placement '{stem_key}.width_deg' must be in -360..360."
+                        )
                     if field == "object_size" and float(value) > 1.0:
                         raise ManifestError(
                             f"Placement '{stem_key}.object_size' must not exceed 1."
@@ -522,6 +526,10 @@ def validate_manifest(data: dict) -> None:
                         raise ManifestError(
                             f"Placement '{stem_key}.center_level_db' must be in -83..6."
                         )
+                if ("left_right" in fields) != ("back_front" in fields):
+                    raise ManifestError(
+                        f"Placement '{stem_key}' must set left_right and back_front together."
+                    )
         for field in ("stem_ambient_rear", "stem_ambient_height"):
             sends = mixing.get(field)
             if sends is None:

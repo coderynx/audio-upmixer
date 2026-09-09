@@ -51,6 +51,13 @@ _MOVEMENT_GRID_US = 20_000
 _MOVEMENT_INTERPOLATION_US = 5_208
 
 
+def _direct_speaker_object_position(
+    position: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Convert room-centric direct-speaker X to ADM Object Cartesian X."""
+    return (-position[0], position[1], position[2])
+
+
 def _valid_zone_exclusion(zones: tuple[str, ...]) -> bool:
     return (
         len(zones) == len(set(zones))
@@ -293,7 +300,9 @@ class AdmBwfWriter:
             AdmObject(
                 label.value,
                 np.asarray(channels[label.value]),
-                carriers_by_label[label].cartesian_position,
+                _direct_speaker_object_position(
+                    carriers_by_label[label].cartesian_position
+                ),
             )
             for label in carrier_labels
         ]

@@ -109,6 +109,11 @@ type PannerDrag = {
   target: "anchor" | "left" | "right";
   offset: PannerCoordinates;
   anchorDirection: number;
+  anchorScale: number;
+  startAnchor: PannerCoordinates;
+  startTargetRadius: number;
+  startSpread: number;
+  spreadSeam: boolean;
   spread: number;
   lastAngle: number;
   lastPlacement: StemPlacement;
@@ -215,7 +220,13 @@ export function ObjectPannerWindow({
     const width_deg = normalizeSpread(localPlacement.width_deg
       + (channel === "left" ? -2 : 2) * angleDelta * 180 / Math.PI);
     const anchor = pannerCoordinatesFromPlacement(localPlacement);
-    const radius = Math.hypot(canonical.leftRight, canonical.backFront);
+    const currentRadius = Math.hypot(current.leftRight, current.backFront);
+    const anchorScale = Math.hypot(anchor.leftRight, anchor.backFront) / Math.max(
+      1e-6,
+      currentRadius * Math.abs(Math.cos(localPlacement.width_deg * Math.PI / 360)),
+    );
+    const radius = Math.hypot(canonical.leftRight, canonical.backFront) * anchorScale
+      * Math.abs(Math.cos(width_deg * Math.PI / 360));
     const direction = Math.atan2(anchor.leftRight, anchor.backFront);
     commitPlacement({
       ...placementFromPannerCoordinates(localPlacement, {
@@ -341,6 +352,9 @@ export function ObjectPannerWindow({
                   pannerDraggingRef.current = true;
                   event.currentTarget.setPointerCapture(event.pointerId);
                   event.preventDefault();
+                  const anchor = pannerCoordinatesFromPlacement(localPlacement);
+                  const targetRadius = Math.hypot(targetPosition.leftRight, targetPosition.backFront);
+                  const spreadCosine = Math.abs(Math.cos(localPlacement.width_deg * Math.PI / 360));
                   pannerDragRef.current = {
                     pointerId: event.pointerId,
                     target,
@@ -350,9 +364,15 @@ export function ObjectPannerWindow({
                       elevation: 0,
                     },
                     anchorDirection: Math.atan2(
-                      pannerCoordinatesFromPlacement(localPlacement).leftRight,
-                      pannerCoordinatesFromPlacement(localPlacement).backFront,
+                      anchor.leftRight,
+                      anchor.backFront,
                     ),
+                    anchorScale: spreadCosine < 1e-6 ? 1 : Math.hypot(anchor.leftRight, anchor.backFront)
+                      / Math.max(1e-6, targetRadius * spreadCosine),
+                    startAnchor: anchor,
+                    startTargetRadius: targetRadius,
+                    startSpread: localPlacement.width_deg,
+                    spreadSeam: spreadCosine < 1e-6,
                     spread: localPlacement.width_deg,
                     lastAngle: Math.atan2(targetPosition.leftRight, targetPosition.backFront) * 180 / Math.PI,
                     lastPlacement: localPlacement,
@@ -377,15 +397,45 @@ export function ObjectPannerWindow({
                   let angle = Math.atan2(target.leftRight, target.backFront) * 180 / Math.PI;
                   while (angle - drag.lastAngle > 180) angle -= 360;
                   while (angle - drag.lastAngle < -180) angle += 360;
-                  drag.spread += (drag.target === "left" ? -2 : 2) * (angle - drag.lastAngle);
                   drag.lastAngle = angle;
                   const radius = Math.hypot(target.leftRight, target.backFront);
-                  const width_deg = normalizeSpread(drag.spread);
-                  const turns = Math.round((drag.spread - width_deg) / 360);
-                  const anchorDirection = drag.anchorDirection + turns * Math.PI;
+                  const radialDelta = radius - drag.startTargetRadius;
+                  const provisionalAnchor = radius > 1e-6 ? {
+                    leftRight: drag.startAnchor.leftRight + radialDelta * target.leftRight / radius,
+                    backFront: drag.startAnchor.backFront + radialDelta * target.backFront / radius,
+                  } : drag.startAnchor;
+                  const provisionalDirection = Math.hypot(
+                    provisionalAnchor.leftRight,
+                    provisionalAnchor.backFront,
+                  ) > 1e-6
+                    ? Math.atan2(provisionalAnchor.leftRight, provisionalAnchor.backFront)
+                    : drag.anchorDirection;
+                  let spread = (drag.target === "left" ? -2 : 2)
+                    * (angle - provisionalDirection * 180 / Math.PI);
+                  while (spread - drag.spread > 360) spread -= 720;
+                  while (spread - drag.spread < -360) spread += 720;
+                  drag.spread = spread;
+                  if (drag.spreadSeam && Math.abs(drag.spread - drag.startSpread) >= 180) {
+                    drag.spreadSeam = false;
+                  }
+                  const normalizedSpread = normalizeSpread(drag.spread);
+                  const width_deg = drag.spreadSeam ? drag.spread : normalizedSpread;
+                  const turns = Math.round((drag.spread - normalizedSpread) / 360);
+                  const anchorDirection = provisionalDirection + turns * Math.PI;
+                  // Collapse through the listener before switching the signed
+                  // spread representation, preserving the same channel points.
+                  const anchorRadius = radius * drag.anchorScale
+                    * Math.abs(Math.cos(width_deg * Math.PI / 360));
+                  const geometricAnchor = {
+                    leftRight: anchorRadius * Math.sin(anchorDirection),
+                    backFront: anchorRadius * Math.cos(anchorDirection),
+                  };
+                  const seamProgress = drag.spreadSeam
+                    ? Math.min(1, Math.abs(drag.spread - drag.startSpread) / 180 + Math.abs(radialDelta))
+                    : 1;
                   const anchor = {
-                    leftRight: radius * Math.sin(anchorDirection),
-                    backFront: radius * Math.cos(anchorDirection),
+                    leftRight: drag.startAnchor.leftRight * (1 - seamProgress) + geometricAnchor.leftRight * seamProgress,
+                    backFront: drag.startAnchor.backFront * (1 - seamProgress) + geometricAnchor.backFront * seamProgress,
                     elevation: target.elevation,
                   };
                   const next = { ...placementFromPannerCoordinates(drag.lastPlacement, anchor), width_deg };
@@ -395,7 +445,10 @@ export function ObjectPannerWindow({
                 onPointerUp={(event) => {
                   const drag = pannerDragRef.current;
                   if (!drag || drag.pointerId !== event.pointerId) return;
-                  if (drag.target !== "anchor") commitPlacement({ ...drag.lastPlacement, width_deg: normalizeSpread(drag.spread) });
+                  if (drag.target !== "anchor") commitPlacement({
+                    ...drag.lastPlacement,
+                    width_deg: drag.spreadSeam ? drag.spread : normalizeSpread(drag.spread),
+                  });
                   pannerDragRef.current = null;
                   pannerDraggingRef.current = false;
                   event.currentTarget.releasePointerCapture(event.pointerId);

@@ -310,8 +310,8 @@ def test_adm_lead_vocal_stereo_objects_are_panned_left_and_right(tmp_path):
         if channel.attrib["audioChannelFormatName"].startswith("Lead Vocals")
     }
 
-    assert positions["Lead Vocals Left"]["X"] < 0.0
-    assert positions["Lead Vocals Right"]["X"] > 0.0
+    assert positions["Lead Vocals Left"]["X"] > 0.0
+    assert positions["Lead Vocals Right"]["X"] < 0.0
     assert all(obj.object_size == 0.1 for obj in objects)
 
 

@@ -43,7 +43,7 @@ describe("movement schedule reader", () => {
 
   it("maps the Rust Cartesian convention to the scene axes", () => {
     expect(scenePositionFromMovement([0.25, -0.5, 0.75])).toEqual({
-      x: 0.25,
+      x: -0.25,
       y: 0.75,
       z: 0.5,
     });

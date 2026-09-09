@@ -282,6 +282,27 @@ impl EngineParams {
     /// bypasses the compiler.
     pub fn validate_movement(&self) -> Result<(), String> {
         for (index, stem) in self.stems.iter().enumerate() {
+            if let Some(placement) = &stem.object_placement {
+                if !placement.azimuth_deg.is_finite()
+                    || !(-180.0..=180.0).contains(&placement.azimuth_deg)
+                    || !placement.elevation_deg.is_finite()
+                    || !(-90.0..=90.0).contains(&placement.elevation_deg)
+                    || !placement.width_deg.is_finite()
+                    || placement.width_deg.abs() > 360.0
+                    || placement.left_right.is_some() != placement.back_front.is_some()
+                    || placement
+                        .left_right
+                        .is_some_and(|value| !value.is_finite() || !(-1.0..=1.0).contains(&value))
+                    || placement
+                        .back_front
+                        .is_some_and(|value| !value.is_finite() || !(-1.0..=1.0).contains(&value))
+                    || !placement.object_size.is_finite()
+                    || !(0.0..=1.0).contains(&placement.object_size)
+                    || !placement.gain.is_finite()
+                {
+                    return Err(format!("invalid object placement for stem {index}"));
+                }
+            }
             if let Some(settings) = &stem.movement {
                 settings.validate().map_err(|error| {
                     format!("invalid movement settings for stem {index}: {error}")

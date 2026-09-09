@@ -20,10 +20,18 @@ fn with_anchor(
     mut placement: StemPlacement,
     left_right: Option<f64>,
     back_front: Option<f64>,
-) -> StemPlacement {
+) -> PyResult<StemPlacement> {
+    if left_right.is_some() != back_front.is_some()
+        || left_right.is_some_and(|value| !value.is_finite() || !(-1.0..=1.0).contains(&value))
+        || back_front.is_some_and(|value| !value.is_finite() || !(-1.0..=1.0).contains(&value))
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "left_right and back_front must both be finite values in -1..1",
+        ));
+    }
     placement.left_right = left_right;
     placement.back_front = back_front;
-    placement
+    Ok(placement)
 }
 
 fn unpack(value: &StemPlacement) -> PlacementTuple {
@@ -120,14 +128,14 @@ fn object_routes(
     channels: Vec<String>,
     left_right: Option<f64>,
     back_front: Option<f64>,
-) -> (Vec<f64>, Vec<f64>) {
+) -> PyResult<(Vec<f64>, Vec<f64>)> {
     let value = with_anchor(
         placement((azimuth_deg, elevation_deg, width_deg, object_size, 0.0)),
         left_right,
         back_front,
-    );
+    )?;
     let [left, right] = panner::object_routes(&value, &as_refs(&channels));
-    (left, right)
+    Ok((left, right))
 }
 
 #[pyfunction(signature = (
@@ -144,16 +152,16 @@ fn adm_object_routes(
     channels: Vec<String>,
     left_right: Option<f64>,
     back_front: Option<f64>,
-) -> (Vec<f64>, Vec<f64>) {
+) -> PyResult<(Vec<f64>, Vec<f64>)> {
     let value = with_anchor(
         placement((azimuth_deg, elevation_deg, width_deg, object_size, 0.0)),
         left_right,
         back_front,
-    );
+    )?;
     let zones = as_refs(&zone_exclusion);
     let [left, right] =
         panner::object_routes_with_metadata(&value, &as_refs(&channels), channel_lock, &zones);
-    (left, right)
+    Ok((left, right))
 }
 
 #[pyfunction(signature = (
@@ -165,14 +173,14 @@ fn object_positions(
     width_deg: f64,
     left_right: Option<f64>,
     back_front: Option<f64>,
-) -> ((f64, f64, f64), (f64, f64, f64)) {
+) -> PyResult<((f64, f64, f64), (f64, f64, f64))> {
     let value = with_anchor(
         StemPlacement::new(azimuth_deg, elevation_deg, width_deg, 0.0, 0.0),
         left_right,
         back_front,
-    );
-    let [left, right] = panner::object_positions(&value);
-    ((left[0], left[1], left[2]), (right[0], right[1], right[2]))
+    )?;
+    let [left, right] = panner::object_positions(&value).map(panner::panner_to_adm);
+    Ok(((left[0], left[1], left[2]), (right[0], right[1], right[2])))
 }
 
 /// Route one already-serialized ADM Cartesian endpoint through the shared
@@ -202,7 +210,7 @@ fn adm_cartesian_object_route(
     let zones = as_refs(&zone_exclusion);
     Ok(
         panner::PannerLayout::new(&as_refs(&channels)).cartesian_object_route(
-            [position.0, position.1, position.2],
+            panner::panner_to_adm([position.0, position.1, position.2]),
             object_size,
             channel_lock,
             &zones,

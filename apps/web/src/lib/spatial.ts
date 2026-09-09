@@ -51,9 +51,15 @@ export function objectChannelCoordinates(placement: PannerPlacement) {
   const radius = Math.hypot(anchor.leftRight, anchor.backFront);
   const direction = Math.atan2(anchor.leftRight, anchor.backFront);
   const halfSpread = placement.width_deg * Math.PI / 360;
+  const cosine = Math.abs(Math.cos(halfSpread));
+  // The anchor is the stereo midpoint, so handles can orbit through the
+  // listener while spread wraps without making the anchor teleport.
+  const channelRadius = cosine < 1e-6
+    ? Math.max(1, radius)
+    : Math.min(Math.SQRT2, radius / cosine);
   const channel = (angle: number): PannerCoordinates => ({
-    leftRight: clampSigned(radius * Math.sin(angle)),
-    backFront: clampSigned(radius * Math.cos(angle)),
+    leftRight: clampSigned(channelRadius * Math.sin(angle)),
+    backFront: clampSigned(channelRadius * Math.cos(angle)),
     elevation: anchor.elevation,
   });
   return {

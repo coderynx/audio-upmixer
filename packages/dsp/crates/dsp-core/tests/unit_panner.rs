@@ -2,7 +2,8 @@
 
 use upmixer_dsp_core::spatial::panner::{
     build_stem_routing, fold_route_to_stereo, has_height, object_positions, object_routes,
-    placement_route, placement_route_with_controls, project, PannerLayout, StemPlacement,
+    panner_to_adm, placement_route, placement_route_with_controls, project, PannerLayout,
+    StemPlacement,
 };
 
 const FULL: [&str; 12] = [
@@ -211,9 +212,10 @@ fn canonical_object_positions_preserve_identity_and_depth() {
         ..point(0.0, 0.0)
     };
     let [left, right] = object_positions(&placement);
-    assert!((left[0] + std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
-    assert!((right[0] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
-    assert!((left[1] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+    assert!((left[0] + 1.0).abs() < 1e-12);
+    assert!((right[0] - 1.0).abs() < 1e-12);
+    assert!((left[1] - 1.0).abs() < 1e-12);
+    assert_eq!(panner_to_adm([0.5, -0.25, 0.75]), [-0.5, -0.25, 0.75]);
 
     let [crossed_left, crossed_right] = object_positions(&StemPlacement {
         width_deg: -90.0,

@@ -20,10 +20,10 @@ describe("object panner geometry", () => {
     const placement = { ...PLACEMENT, left_right: 0, back_front: 1, width_deg: 90 };
 
     const channels = objectChannelCoordinates(placement);
-    expect(channels.left.leftRight).toBeCloseTo(-Math.SQRT1_2, 9);
-    expect(channels.right.leftRight).toBeCloseTo(Math.SQRT1_2, 9);
-    expect(channels.left.backFront).toBeCloseTo(Math.SQRT1_2, 9);
-    expect(channels.right.backFront).toBeCloseTo(Math.SQRT1_2, 9);
+    expect(channels.left.leftRight).toBeCloseTo(-1, 9);
+    expect(channels.right.leftRight).toBeCloseTo(1, 9);
+    expect(channels.left.backFront).toBeCloseTo(1, 9);
+    expect(channels.right.backFront).toBeCloseTo(1, 9);
   });
 
   it("keeps both channel identities at one coordinate when spread is zero", () => {
@@ -49,11 +49,47 @@ describe("object panner geometry", () => {
     });
   });
 
+  it("moves both rendered channels only vertically for elevation and never for size", () => {
+    const base: StemPlacement = { ...PLACEMENT, left_right: 0.25, back_front: 0.75, width_deg: 60 };
+    const sizedPlacement = { ...base, object_size: 1 };
+    const flat = objectChannelCoordinates(base);
+    const elevated = objectChannelCoordinates({ ...base, elevation_deg: 30 });
+    const sized = objectChannelCoordinates(sizedPlacement);
+
+    expect(elevated.left.leftRight).toBe(flat.left.leftRight);
+    expect(elevated.left.backFront).toBe(flat.left.backFront);
+    expect(elevated.right.leftRight).toBe(flat.right.leftRight);
+    expect(elevated.right.backFront).toBe(flat.right.backFront);
+    expect(elevated.left.elevation).toBeCloseTo(0.5, 12);
+    expect(elevated.right.elevation).toBeCloseTo(0.5, 12);
+    expect(sized).toEqual(flat);
+  });
+
   it("keeps channel labels attached after signed spread crosses", () => {
-    const channels = objectChannelCoordinates({ ...PLACEMENT, left_right: 0, back_front: 1, width_deg: -90 });
+    const placement = { ...PLACEMENT, left_right: 0, back_front: 1, width_deg: -90 };
+    const channels = objectChannelCoordinates(placement);
 
     expect(channels.left.leftRight).toBeGreaterThan(0);
     expect(channels.right.leftRight).toBeLessThan(0);
+    expect(objectChannelCoordinates(JSON.parse(JSON.stringify(placement)))).toEqual(channels);
+  });
+
+  it("keeps anchor and channel positions continuous across signed wrap", () => {
+    const seam = Math.cos(89.5 * Math.PI / 180);
+    const before = { ...PLACEMENT, left_right: 0, back_front: seam, width_deg: 179 };
+    const after = { ...PLACEMENT, left_right: 0, back_front: -seam, width_deg: -179 };
+    const beforeChannels = objectChannelCoordinates(before);
+    const afterChannels = objectChannelCoordinates(after);
+
+    expect(Math.abs(before.back_front - after.back_front)).toBeLessThan(0.02);
+    expect(Math.hypot(
+      beforeChannels.left.leftRight - afterChannels.left.leftRight,
+      beforeChannels.left.backFront - afterChannels.left.backFront,
+    )).toBeLessThan(0.02);
+    expect(Math.hypot(
+      beforeChannels.right.leftRight - afterChannels.right.leftRight,
+      beforeChannels.right.backFront - afterChannels.right.backFront,
+    )).toBeLessThan(0.02);
   });
 });
 
@@ -148,31 +184,169 @@ describe("ObjectPannerWindow", () => {
       getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, x: 0, y: 0, toJSON: () => ({}) }),
     });
     const left = screen.getByRole("button", { name: "Left channel position" });
-    fireEvent.pointerDown(left, { pointerId: 2, button: 0, clientX: 14.64, clientY: 14.64 });
+    fireEvent.pointerDown(left, { pointerId: 2, button: 0, clientX: 0, clientY: 0 });
     expect(onPlacement).not.toHaveBeenCalled();
 
-    fireEvent.pointerMove(panner, { pointerId: 2, clientX: 14.64, clientY: 85.36 });
-    fireEvent.pointerMove(panner, { pointerId: 2, clientX: 85.36, clientY: 85.36 });
+    fireEvent.pointerMove(panner, { pointerId: 2, clientX: 0, clientY: 100 });
+    fireEvent.pointerMove(panner, { pointerId: 2, clientX: 100, clientY: 100 });
 
     const crossed = onPlacement.mock.calls.at(-1)?.[0] as StemPlacement;
     expect(crossed.back_front).toBeLessThan(0);
     expect(crossed.width_deg).toBeCloseTo(90, 1);
-    expect(screen.getByRole("button", { name: "Left channel position" })).toHaveStyle({ left: "85.35533905932738%" });
-    expect(screen.getByRole("button", { name: "Right channel position" })).toHaveStyle({ left: "14.644660940672626%" });
+    const leftPosition = Number.parseFloat(screen.getByRole("button", { name: "Left channel position" }).style.left);
+    const rightPosition = Number.parseFloat(screen.getByRole("button", { name: "Right channel position" }).style.left);
+    expect(leftPosition).toBeGreaterThan(rightPosition);
     fireEvent.pointerUp(panner, { pointerId: 2 });
   });
 
-  it("adjusts a focused channel without moving the anchor as an object keypress", async () => {
+  it("returns the Right channel to its identity after a complete orbit", async () => {
     const user = userEvent.setup();
     const onPlacement = vi.fn();
     render(<ObjectPannerWindow stemName="Vocals" placement={{ ...PLACEMENT, left_right: 0, back_front: 1, width_deg: 90 }} maxElevationDeg={35} onPlacement={onPlacement} />);
     await user.click(screen.getByRole("button", { name: "Object panner" }));
 
-    fireEvent.keyDown(screen.getByRole("button", { name: "Left channel position" }), { key: "ArrowLeft" });
+    const panner = screen.getByRole("group", { name: "Left/right and back/front" });
+    let captured = false;
+    Object.assign(panner, {
+      setPointerCapture: () => { captured = true; },
+      hasPointerCapture: () => captured,
+      releasePointerCapture: () => { captured = false; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, x: 0, y: 0, toJSON: () => ({}) }),
+    });
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Right channel position" }), { pointerId: 3, button: 0, clientX: 100, clientY: 0 });
+    for (const [clientX, clientY] of [[100, 100], [0, 100], [0, 0], [100, 0]]) {
+      fireEvent.pointerMove(panner, { pointerId: 3, clientX, clientY });
+    }
+    fireEvent.pointerUp(panner, { pointerId: 3 });
+
+    const final = onPlacement.mock.calls.at(-1)?.[0] as StemPlacement;
+    expect(final.left_right).toBeCloseTo(0, 12);
+    expect(final.back_front).toBeCloseTo(1, 12);
+    expect(final.width_deg).toBe(90);
+    expect(screen.getByRole("button", { name: "Left channel position" })).toHaveTextContent("L");
+    expect(screen.getByRole("button", { name: "Right channel position" })).toHaveTextContent("R");
+  });
+
+  it("moves the anchor laterally for an asymmetric channel drag", async () => {
+    const user = userEvent.setup();
+    const onPlacement = vi.fn();
+    render(<ObjectPannerWindow stemName="Vocals" placement={{ ...PLACEMENT, left_right: 0, back_front: 1, width_deg: 90 }} maxElevationDeg={35} onPlacement={onPlacement} />);
+    await user.click(screen.getByRole("button", { name: "Object panner" }));
+
+    const panner = screen.getByRole("group", { name: "Left/right and back/front" });
+    let captured = false;
+    Object.assign(panner, {
+      setPointerCapture: () => { captured = true; },
+      hasPointerCapture: () => captured,
+      releasePointerCapture: () => { captured = false; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, x: 0, y: 0, toJSON: () => ({}) }),
+    });
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Left channel position" }), { pointerId: 4, button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(panner, { pointerId: 4, clientX: 0, clientY: 25 });
 
     const next = onPlacement.mock.calls.at(-1)?.[0] as StemPlacement;
-    expect(next.width_deg).toBeGreaterThan(90);
+    expect(next.left_right).not.toBeCloseTo(0, 6);
+    expect(next.back_front).not.toBeCloseTo(1, 6);
+    const leftPosition = screen.getByRole("button", { name: "Left channel position" });
+    expect(Number.parseFloat(leftPosition.style.left)).toBeCloseTo(0, 9);
+    expect(Number.parseFloat(leftPosition.style.top)).toBeCloseTo(25, 9);
+    expect(screen.getByRole("button", { name: "Right channel position" }).style.top).not.toBe("0%");
+  });
+
+  it.each([180, -180])("starts a %s degree handle drag without teleporting", async (width_deg) => {
+    const user = userEvent.setup();
+    const onPlacement = vi.fn();
+    render(<ObjectPannerWindow stemName="Vocals" placement={{ ...PLACEMENT, left_right: 0, back_front: 1, width_deg }} maxElevationDeg={35} onPlacement={onPlacement} />);
+    await user.click(screen.getByRole("button", { name: "Object panner" }));
+
+    const panner = screen.getByRole("group", { name: "Left/right and back/front" });
+    let captured = false;
+    Object.assign(panner, {
+      setPointerCapture: () => { captured = true; },
+      hasPointerCapture: () => captured,
+      releasePointerCapture: () => { captured = false; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, x: 0, y: 0, toJSON: () => ({}) }),
+    });
+    const clientX = width_deg > 0 ? 0 : 100;
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Left channel position" }), { pointerId: 5, button: 0, clientX, clientY: 50 });
+    fireEvent.pointerMove(panner, { pointerId: 5, clientX, clientY: 51 });
+
+    const next = onPlacement.mock.calls.at(-1)?.[0] as StemPlacement;
+    expect(next.back_front).toBeGreaterThan(0.9);
+    expect(Math.abs(next.left_right ?? 0)).toBeLessThan(0.1);
+    const left = screen.getByRole("button", { name: "Left channel position" });
+    expect(Number.parseFloat(left.style.left)).toBeCloseTo(clientX, 0);
+    expect(Number.parseFloat(left.style.top)).toBeCloseTo(51, 0);
+  });
+
+  it.each([180, -180])("keeps a continued orbit from %s degrees within persisted bounds", async (width_deg) => {
+    const user = userEvent.setup();
+    const onPlacement = vi.fn();
+    render(<ObjectPannerWindow stemName="Vocals" placement={{ ...PLACEMENT, left_right: 0, back_front: 1, width_deg }} maxElevationDeg={35} onPlacement={onPlacement} />);
+    await user.click(screen.getByRole("button", { name: "Object panner" }));
+
+    const panner = screen.getByRole("group", { name: "Left/right and back/front" });
+    let captured = false;
+    Object.assign(panner, {
+      setPointerCapture: () => { captured = true; },
+      hasPointerCapture: () => captured,
+      releasePointerCapture: () => { captured = false; },
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, x: 0, y: 0, toJSON: () => ({}) }),
+    });
+    const clientX = width_deg > 0 ? 0 : 100;
+    const orbit = width_deg > 0
+      ? [[0, 100], [100, 100], [100, 0], [0, 0], [0, 50]]
+      : [[100, 100], [0, 100], [0, 0], [100, 0], [100, 50]];
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Left channel position" }), { pointerId: 6, button: 0, clientX, clientY: 50 });
+    for (const [x, y] of orbit) fireEvent.pointerMove(panner, { pointerId: 6, clientX: x, clientY: y });
+    fireEvent.pointerUp(panner, { pointerId: 6 });
+
+    expect(onPlacement.mock.calls.every(([next]) => Math.abs(next.width_deg) <= 360)).toBe(true);
+    expect(screen.getByRole("button", { name: "Left channel position" })).toHaveTextContent("L");
+    expect(screen.getByRole("button", { name: "Right channel position" })).toHaveTextContent("R");
+  });
+
+  it("keeps the anchor continuous when an exact-seam drag becomes normalized", async () => {
+    const user = userEvent.setup();
+    const onPlacement = vi.fn();
+    render(<ObjectPannerWindow stemName="Vocals" placement={{ ...PLACEMENT, left_right: 0, back_front: 1, width_deg: 180 }} maxElevationDeg={35} onPlacement={onPlacement} />);
+    await user.click(screen.getByRole("button", { name: "Object panner" }));
+
+    const panner = screen.getByRole("group", { name: "Left/right and back/front" });
+    Object.assign(panner, {
+      setPointerCapture: () => {},
+      hasPointerCapture: () => true,
+      releasePointerCapture: () => {},
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100, x: 0, y: 0, toJSON: () => ({}) }),
+    });
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Left channel position" }), { pointerId: 7, button: 0, clientX: 0, clientY: 50 });
+    const point = (degrees: number) => ({
+      clientX: 50 + 50 * Math.sin(degrees * Math.PI / 180),
+      clientY: 50 - 50 * Math.cos(degrees * Math.PI / 180),
+    });
+    fireEvent.pointerMove(panner, { pointerId: 7, ...point(-179) });
+    const before = onPlacement.mock.calls.at(-1)?.[0] as StemPlacement;
+    fireEvent.pointerMove(panner, { pointerId: 7, ...point(-181) });
+    const after = onPlacement.mock.calls.at(-1)?.[0] as StemPlacement;
+
+    expect(Math.hypot(
+      (after.left_right ?? 0) - (before.left_right ?? 0),
+      (after.back_front ?? 0) - (before.back_front ?? 0),
+    )).toBeLessThan(0.05);
+  });
+
+  it("adjusts a focused channel as a linked object gesture", async () => {
+    const user = userEvent.setup();
+    const onPlacement = vi.fn();
+    render(<ObjectPannerWindow stemName="Vocals" placement={{ ...PLACEMENT, left_right: 0, back_front: 1, width_deg: 90 }} maxElevationDeg={35} onPlacement={onPlacement} />);
+    await user.click(screen.getByRole("button", { name: "Object panner" }));
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Left channel position" }), { key: "ArrowDown" });
+
+    const next = onPlacement.mock.calls.at(-1)?.[0] as StemPlacement;
+    expect(next.width_deg).not.toBe(90);
     expect(next.left_right).toBeCloseTo(0, 9);
+    expect(next.back_front).not.toBe(1);
     expect(screen.getByText(/\+\d+\u00b0/)).toBeInTheDocument();
   });
 
@@ -322,18 +496,18 @@ describe("ObjectPannerWindow", () => {
   it("places the L and R markers at the ends of the stereo image width", () => {
     const channels = objectChannelPositions({ ...PLACEMENT, width_deg: 60 });
 
-    expect(channels.left.lateral).toBeCloseTo(0.25, 9);
-    expect(channels.right.lateral).toBeCloseTo(0.75, 9);
+    expect(channels.left.lateral).toBeCloseTo(0.2113248654, 9);
+    expect(channels.right.lateral).toBeCloseTo(0.7886751346, 9);
     expect(channels.left.depth).toBeCloseTo(channels.right.depth, 9);
   });
 
-  it("keeps the L and R markers at a freely placed centre's radius", () => {
+  it("expands channel radius with spread around a freely placed centre", () => {
     const channels = objectChannelPositions(
       { ...PLACEMENT, width_deg: 60 },
       { lateral: 0.5, depth: 0.4 },
     );
 
-    expect(Math.hypot(channels.left.lateral - 0.5, channels.left.depth - 0.5)).toBeCloseTo(0.1, 9);
-    expect(Math.hypot(channels.right.lateral - 0.5, channels.right.depth - 0.5)).toBeCloseTo(0.1, 9);
+    expect(Math.hypot(channels.left.lateral - 0.5, channels.left.depth - 0.5)).toBeCloseTo(0.1154700538, 9);
+    expect(Math.hypot(channels.right.lateral - 0.5, channels.right.depth - 0.5)).toBeCloseTo(0.1154700538, 9);
   });
 });

@@ -7,7 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::spatial::panner::{direction, object_positions, PannerLayout, StemPlacement};
+use crate::spatial::panner::{
+    direction, object_positions, panner_to_adm, PannerLayout, StemPlacement,
+};
 
 pub const FEATURE_VERSION: u32 = 1;
 pub const FEATURE_WINDOW_US: i64 = 10_000;
@@ -853,6 +855,7 @@ fn validate_placement(placement: &StemPlacement) -> Result<(), String> {
         || !(-90.0..=90.0).contains(&placement.elevation_deg)
         || !placement.width_deg.is_finite()
         || placement.width_deg.abs() > 360.0
+        || placement.left_right.is_some() != placement.back_front.is_some()
         || placement
             .left_right
             .is_some_and(|value| !value.is_finite() || !(-1.0..=1.0).contains(&value))
@@ -1541,7 +1544,7 @@ fn target(
         gains[lfe] = 0.0;
     }
     if !linked {
-        return (positions[0], gains, None, None);
+        return (panner_to_adm(positions[0]), gains, None, None);
     }
     let mut right = if moved {
         object_route_at(layout, stem, positions[1], route_cache)
@@ -1551,7 +1554,12 @@ fn target(
     if let Some(lfe) = channels.iter().position(|name| *name == "LFE") {
         right[lfe] = 0.0;
     }
-    (positions[0], gains, Some(positions[1]), Some(right))
+    (
+        panner_to_adm(positions[0]),
+        gains,
+        Some(panner_to_adm(positions[1])),
+        Some(right),
+    )
 }
 
 fn object_route_at(
@@ -1588,7 +1596,7 @@ fn same_event_target(left: &MovementEvent, right: &MovementEvent) -> bool {
 
 fn placement_position(azimuth_deg: f64, elevation_deg: f64) -> [f64; 3] {
     let [x, y, z] = direction(azimuth_deg, elevation_deg);
-    [x, -z, y]
+    [-x, -z, y]
 }
 
 fn retain_bed_main_norm(gains: &mut [f64], home: &[f64], channels: &[&str]) {
@@ -1845,7 +1853,8 @@ mod tests {
         let mut cache = ObjectRouteCache::new();
         let stem = &request.stems[0];
         for azimuth in [60.0, -60.0, 60.0] {
-            let position = placement_position(azimuth, 0.0);
+            let [x, y, z] = direction(azimuth, 0.0);
+            let position = [x, -z, y];
             let cached = object_route_at(&layout, stem, position, &mut cache);
             let direct =
                 layout.cartesian_object_route(position, stem.placement.object_size, false, &[]);

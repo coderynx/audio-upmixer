@@ -3,7 +3,7 @@ use upmixer_dsp_core::movement::{
     compile_movement, MovementCompileRequest, MovementPlacementUpdate, MovementSchedule,
     PreparedMovement,
 };
-use upmixer_dsp_core::spatial::panner::PannerLayout;
+use upmixer_dsp_core::spatial::panner::{panner_to_adm, PannerLayout};
 
 fn stem(key: &str, energies: Vec<f64>, role: &str) -> Value {
     json!({
@@ -94,6 +94,12 @@ fn live_placement_updates_match_full_compilation_and_reject_invalid_batches() {
             invalid.placement.elevation_deg = f64::NAN;
             assert!(prepared
                 .update_placements(request.revision, vec![invalid])
+                .is_err());
+            assert_eq!(prepared.schedule, before);
+            let mut partial = update();
+            partial.placement.left_right = Some(0.25);
+            assert!(prepared
+                .update_placements(request.revision, vec![partial])
                 .is_err());
             assert_eq!(prepared.schedule, before);
             assert_eq!(
@@ -291,7 +297,7 @@ fn linked_object_metadata_endpoints_reproduce_shared_gains_and_transition() {
                 event.right_gains.as_ref().unwrap(),
             ),
         ] {
-            let rendered = layout.cartesian_object_route(position, 0.0, false, &[]);
+            let rendered = layout.cartesian_object_route(panner_to_adm(position), 0.0, false, &[]);
             assert!(rendered
                 .iter()
                 .zip(gains)

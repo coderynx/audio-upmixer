@@ -157,27 +157,33 @@ pub fn panner_coordinates(placement: &StemPlacement) -> [f64; 3] {
     ]
 }
 
-/// Convert canonical panner axes to renderer Cartesian: right, front, up.
+/// Convert canonical panner axes to ADM Object Cartesian: left, front, up.
 pub fn panner_to_adm(position: [f64; 3]) -> [f64; 3] {
-    position
+    [-position[0], position[1], position[2]]
 }
 
 /// Persistent Left and Right positions. Signed spread never swaps identities.
 pub fn object_positions(placement: &StemPlacement) -> [[f64; 3]; 2] {
     let anchor = panner_coordinates(placement);
     if placement.width_deg == 0.0 || (anchor[0] == 0.0 && anchor[1] == 0.0) {
-        let position = panner_to_adm(anchor);
-        return [position, position];
+        return [anchor, anchor];
     }
     let radius = anchor[0].hypot(anchor[1]);
     let direction = anchor[0].atan2(anchor[1]);
     let half_spread = (placement.width_deg * 0.5).to_radians();
+    let cosine = half_spread.cos().abs();
+    // Match the UI's stereo-midpoint geometry across the signed spread seam.
+    let channel_radius = if cosine < 1e-6 {
+        radius.max(1.0)
+    } else {
+        (radius / cosine).min(std::f64::consts::SQRT_2)
+    };
     let endpoint = |angle: f64| {
-        panner_to_adm([
-            (radius * angle.sin()).clamp(-1.0, 1.0),
-            (radius * angle.cos()).clamp(-1.0, 1.0),
+        [
+            (channel_radius * angle.sin()).clamp(-1.0, 1.0),
+            (channel_radius * angle.cos()).clamp(-1.0, 1.0),
             anchor[2],
-        ])
+        ]
     };
     [
         endpoint(direction - half_spread),
@@ -641,9 +647,8 @@ impl PannerLayout {
         self.cartesian_object_route([x, -z, y], object_size, channel_lock, zone_exclusion)
     }
 
-    /// Route an ADM object from its serialized allocentric Cartesian position.
-    /// This is the canonical object path used by movement schedules and ADM
-    /// rendering; callers do not lose radius by converting through angles.
+    /// Route a canonical right/front/up position without converting through
+    /// angles. ADM boundaries flip X once with `panner_to_adm`.
     pub fn cartesian_object_route(
         &self,
         position: [f64; 3],

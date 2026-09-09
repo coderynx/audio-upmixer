@@ -470,7 +470,7 @@ def test_authored_object_event_render_uses_cartesian_targets():
     audio = np.ones(48_000, dtype=np.float64)
     fmt = FORMAT_MAP["5.1"]
     position = upmixer_dsp.direction(35.0, 20.0)
-    cartesian = (position[0], -position[2], position[1])
+    cartesian = (-position[0], -position[2], position[1])
     obj = AdmObject(
         "Guitar",
         audio,
@@ -676,7 +676,7 @@ def test_object_channels_keep_identity_behind_listener():
     left, right = programme.objects
     assert left.name.endswith("Left")
     assert right.name.endswith("Right")
-    assert right.position[0] < 0 < left.position[0]
+    assert left.position[0] < 0 < right.position[0]
     assert left.position[1] < 0 and right.position[1] < 0
 
 

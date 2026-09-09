@@ -67,6 +67,15 @@ def test_object_size_widens_a_point_without_moving_it() -> None:
     assert wide["FL"] == pytest.approx(wide["FR"])
 
 
+def test_object_route_rejects_a_partial_canonical_anchor() -> None:
+    speakers = [label.value for label in FORMAT_MAP["7.1.4"].channels]
+
+    with pytest.raises(ValueError, match="left_right and back_front"):
+        upmixer_dsp.object_routes(
+            0.0, 0.0, 0.0, 0.0, speakers, left_right=0.25
+        )
+
+
 @pytest.mark.parametrize("layout", [layout for layout in _LAYOUTS if layout != "stereo"])
 def test_azimuth_sweep_has_no_gain_jumps(layout: str) -> None:
     """A dragged placement crossfades between speakers; it never switches."""

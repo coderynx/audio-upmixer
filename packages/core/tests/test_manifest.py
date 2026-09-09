@@ -22,6 +22,19 @@ from upmixer.manifest import (
 from manifest_helpers import _minimal, _write_json, _write_yaml
 
 
+@pytest.mark.parametrize("placement", [
+    {"width_deg": 361},
+    {"width_deg": -361},
+    {"left_right": 0.25},
+    {"back_front": -0.25},
+])
+def test_object_panner_coordinates_are_validated_as_one_bounded_state(placement):
+    data = _minimal()
+    data["assets"][0]["mixing"] = {"stem_placement": {"Vocals": placement}}
+    with pytest.raises(ManifestError):
+        validate_manifest(data)
+
+
 class TestLoadManifestJson:
     def test_loads_dict(self, tmp_path):
         data = _minimal()

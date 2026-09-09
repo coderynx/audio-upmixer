@@ -317,7 +317,7 @@ pub unsafe extern "C" fn dsp_adm_cartesian_object_route(
         return -1;
     }
     let route = panner::PannerLayout::new(&names).cartesian_object_route(
-        [x, y, z],
+        panner::panner_to_adm([x, y, z]),
         object_size,
         channel_lock,
         &[],
