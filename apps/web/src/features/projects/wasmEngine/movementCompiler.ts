@@ -21,6 +21,8 @@ export type MovementPlacement = {
   elevation_deg: number;
   width_deg: number;
   object_size: number;
+  left_right?: number;
+  back_front?: number;
   lfe: number;
   diversity: number;
   center_level_db: number;

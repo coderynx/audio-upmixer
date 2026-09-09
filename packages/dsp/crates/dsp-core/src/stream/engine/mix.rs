@@ -1,5 +1,5 @@
 use crate::movement::MovementStemSchedule;
-use crate::spatial::panner::{PannerLayout, StemPlacement};
+use crate::spatial::panner::{object_positions, PannerLayout, StemPlacement};
 use crate::stream::params::{EngineParams, ObjectMode, SendShape, SpeakerParams, StemParams};
 use crate::stream::routing::{ambient_expanded_slot, shape_index, StemRouteState, AMBIENT_TEXTURE};
 
@@ -336,34 +336,44 @@ fn direct_object_routes(
         placement.object_size,
         0.0,
     );
+    let point = StemPlacement {
+        left_right: placement.left_right,
+        back_front: placement.back_front,
+        ..point
+    };
+    let zones = placement
+        .zone_exclusion
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     let routes: Vec<(usize, Vec<f64>)> = match mode {
-        ObjectMode::LinkedStereo => layout
-            .object_routes_with_metadata(
-                &point,
-                placement.channel_lock,
-                &placement
-                    .zone_exclusion
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>(),
-            )
+        ObjectMode::LinkedStereo => object_positions(&point)
             .into_iter()
+            .map(|position| {
+                layout.cartesian_object_route(
+                    position,
+                    placement.object_size,
+                    placement.channel_lock,
+                    &zones,
+                )
+            })
             .enumerate()
             .collect(),
-        ObjectMode::Mono => vec![(
-            2,
-            layout.exact_object_route_with_metadata(
-                placement.azimuth_deg,
-                placement.elevation_deg,
-                placement.object_size,
-                placement.channel_lock,
-                &placement
-                    .zone_exclusion
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>(),
-            ),
-        )],
+        ObjectMode::Mono => {
+            let position = object_positions(&StemPlacement {
+                width_deg: 0.0,
+                ..point
+            })[0];
+            vec![(
+                2,
+                layout.cartesian_object_route(
+                    position,
+                    placement.object_size,
+                    placement.channel_lock,
+                    &zones,
+                ),
+            )]
+        }
     };
     Some((
         placement.gain.max(0.0),

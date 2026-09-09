@@ -37,6 +37,24 @@ describe("wasm panner", () => {
     expect(forward.SR ?? 0).toBe(0);
   });
 
+  it("routes canonical stereo positions without losing channel identity", () => {
+    const instance = panner();
+    const [left, right] = instance.objectRoutes({
+      azimuth_deg: 0, elevation_deg: 0, width_deg: 90, object_size: 0,
+      left_right: 0, back_front: 1,
+    }, FULL);
+
+    expect(left.FL).toBeGreaterThan(left.FR);
+    expect(right.FR).toBeGreaterThan(right.FL);
+
+    const [backLeft, backRight] = instance.objectRoutes({
+      azimuth_deg: 180, elevation_deg: 0, width_deg: -90, object_size: 0,
+      left_right: 0, back_front: -1,
+    }, FULL);
+    expect(backLeft.BL).toBeGreaterThan(backLeft.FL);
+    expect(backRight.BR).toBeGreaterThan(backRight.FR);
+  });
+
   it("pans at constant power", () => {
     const instance = panner();
     for (const azimuth of [0, 45, 90, 135, 180, -90]) {

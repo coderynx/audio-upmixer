@@ -654,6 +654,32 @@ def test_object_bed_routes_linked_feeds_to_placement_endpoints():
     assert np.max(np.abs(rendered["FL"] - rendered["FR"])) > 1e-5
 
 
+def test_object_channels_keep_identity_behind_listener():
+    audio = np.column_stack([_audio()[:, 0], -_audio()[:, 0]])
+    config = UpmixConfig(
+        output_format="7.1.4",
+        output_type="adm-bwf",
+        stem_placement={"Vocals": {
+            "azimuth_deg": 180,
+            "elevation_deg": 0,
+            "width_deg": 90,
+            "object_size": 0,
+            "left_right": 0,
+            "back_front": -1,
+        }},
+    )
+
+    programme = StemRouter(config, FORMAT_MAP["7.1.4"], 48_000).route(
+        {"Vocals": audio}, len(audio),
+    )
+
+    left, right = programme.objects
+    assert left.name.endswith("Left")
+    assert right.name.endswith("Right")
+    assert right.position[0] < 0 < left.position[0]
+    assert left.position[1] < 0 and right.position[1] < 0
+
+
 def test_correlated_object_feeds_keep_the_stem_energy():
     audio = _noise()
     config = UpmixConfig(

@@ -58,6 +58,8 @@ class StemPlacement:
     lfe: float = 0.0
     diversity: float = 0.0
     center_level_db: float = 0.0
+    left_right: float | None = None
+    back_front: float | None = None
 
 
 @dataclass(frozen=True)

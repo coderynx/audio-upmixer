@@ -167,6 +167,8 @@ def test_stem_placement_survives_the_settings_round_trip(tmp_path, monkeypatch):
         "elevation_deg": 12.0,
         "width_deg": 128.0,
         "object_size": 0.5,
+        "left_right": 0.25,
+        "back_front": -0.75,
         "diversity": 0.25,
         "center_level_db": -3.0,
     }
@@ -186,7 +188,7 @@ def test_stem_placement_survives_the_settings_round_trip(tmp_path, monkeypatch):
         project = created.json()
         assert project["manifest"]["mixing"]["stem_placement"]["Guitar"] == placement
 
-        moved = {**placement, "azimuth_deg": 90.0}
+        moved = {**placement, "azimuth_deg": 90.0, "width_deg": -90.0}
         manifest = project["manifest"]
         manifest["mixing"]["stem_placement"] = {"Guitar": moved}
         saved = client.put(f"/api/v1/projects/{project['id']}/settings", json={
@@ -216,7 +218,7 @@ def test_a_malformed_stem_placement_is_rejected(tmp_path, monkeypatch):
                 "engine": {"mode": "stem", "stems": ["Vocals"]},
                 "mixing": {
                     "channel_layout": "7.1.4",
-                    "stem_placement": {"Vocals": {"width_deg": -1.0}},
+                    "stem_placement": {"Vocals": {"left_right": 1.1}},
                 },
             },
         })

@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::spatial::panner::{direction, PannerLayout, StemPlacement};
+use crate::spatial::panner::{direction, object_positions, PannerLayout, StemPlacement};
 
 pub const FEATURE_VERSION: u32 = 1;
 pub const FEATURE_WINDOW_US: i64 = 10_000;
@@ -16,7 +16,7 @@ pub const INTERPOLATION_US: i64 = 5_208;
 
 const DB_FLOOR: f64 = -240.0;
 
-type ObjectRouteCache = std::collections::HashMap<(u64, u64), Vec<f64>>;
+type ObjectRouteCache = std::collections::HashMap<[u64; 3], Vec<f64>>;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CanonicalFeatures {
@@ -852,7 +852,13 @@ fn validate_placement(placement: &StemPlacement) -> Result<(), String> {
         || !placement.elevation_deg.is_finite()
         || !(-90.0..=90.0).contains(&placement.elevation_deg)
         || !placement.width_deg.is_finite()
-        || !(0.0..=360.0).contains(&placement.width_deg)
+        || placement.width_deg.abs() > 360.0
+        || placement
+            .left_right
+            .is_some_and(|value| !value.is_finite() || !(-1.0..=1.0).contains(&value))
+        || placement
+            .back_front
+            .is_some_and(|value| !value.is_finite() || !(-1.0..=1.0).contains(&value))
         || !placement.object_size.is_finite()
         || !(0.0..=1.0).contains(&placement.object_size)
         || !placement.lfe.is_finite()
@@ -1141,27 +1147,16 @@ fn compile_stem(
     tuning: &MovementTuning,
 ) -> Result<MovementStemSchedule, String> {
     let mut route_cache = ObjectRouteCache::new();
+    let home_positions = object_positions(&stem.placement);
     let home = if stem.object_mode.is_some() {
-        object_route_at(
-            layout,
-            stem,
-            object_endpoint_azimuth(stem, true),
-            stem.placement.elevation_deg,
-            &mut route_cache,
-        )
+        object_route_at(layout, stem, home_positions[0], &mut route_cache)
     } else if stem.home_gains.is_empty() {
         layout.placement_route(&stem.placement)
     } else {
         stem.home_gains.clone()
     };
     let home_right = if stem.object_mode.is_some() {
-        object_route_at(
-            layout,
-            stem,
-            object_endpoint_azimuth(stem, false),
-            stem.placement.elevation_deg,
-            &mut route_cache,
-        )
+        object_route_at(layout, stem, home_positions[1], &mut route_cache)
     } else if stem.home_right_gains.is_empty() {
         Vec::new()
     } else {
@@ -1320,6 +1315,14 @@ fn compile_stem(
             placement.elevation_deg *= 1.0 - amount;
             target_placement.azimuth_deg = 0.0;
             target_placement.elevation_deg = 0.0;
+            if let (Some(left_right), Some(back_front)) =
+                (stem.placement.left_right, stem.placement.back_front)
+            {
+                placement.left_right = Some(left_right * (1.0 - amount));
+                placement.back_front = Some(back_front + (1.0 - back_front) * amount);
+                target_placement.left_right = Some(0.0);
+                target_placement.back_front = Some(1.0);
+            }
             movement_fraction = amount;
             moved = amount > 1e-12;
         } else if motion_window && !matches!(stem.settings.role, MovementRole::Featured) {
@@ -1350,10 +1353,11 @@ fn compile_stem(
                 };
                 if hit_strength > 0.0 && is_percussion(&stem.stem_name, &stem.stem_key) {
                     let amount = (stem.settings.depth * hit_strength).clamp(0.0, 1.0);
-                    placement.azimuth_deg +=
-                        side as f64 * excursion_deg(&stem.stem_name, &stem.stem_key) * amount;
-                    target_placement.azimuth_deg +=
-                        side as f64 * excursion_deg(&stem.stem_name, &stem.stem_key);
+                    let excursion = side as f64 * excursion_deg(&stem.stem_name, &stem.stem_key);
+                    placement.azimuth_deg += excursion * amount;
+                    target_placement.azimuth_deg += excursion;
+                    rotate_panner_anchor(&mut placement, excursion * amount);
+                    rotate_panner_anchor(&mut target_placement, excursion);
                     movement_fraction = amount;
                     moved = true;
                 }
@@ -1474,6 +1478,16 @@ fn move_toward(current: f64, target: f64, amount: f64) -> f64 {
     }
 }
 
+fn rotate_panner_anchor(placement: &mut StemPlacement, azimuth_delta_deg: f64) {
+    let (Some(left_right), Some(back_front)) = (placement.left_right, placement.back_front) else {
+        return;
+    };
+    let radius = left_right.hypot(back_front);
+    let angle = left_right.atan2(back_front) - azimuth_delta_deg.to_radians();
+    placement.left_right = Some(radius * angle.sin());
+    placement.back_front = Some(radius * angle.cos());
+}
+
 fn target(
     layout: &PannerLayout,
     stem: &MovementStemInput,
@@ -1514,21 +1528,12 @@ fn target(
     }
 
     let linked = matches!(stem.object_mode, Some(MovementObjectMode::LinkedStereo));
-    let half_width = if linked {
-        placement.width_deg * 0.5
-    } else {
-        0.0
-    };
-    let left_azimuth = placement.azimuth_deg + half_width;
-    let right_azimuth = placement.azimuth_deg - half_width;
+    let positions = object_positions(&StemPlacement {
+        width_deg: if linked { placement.width_deg } else { 0.0 },
+        ..placement
+    });
     let mut gains = if moved {
-        object_route_at(
-            layout,
-            stem,
-            left_azimuth,
-            placement.elevation_deg,
-            route_cache,
-        )
+        object_route_at(layout, stem, positions[0], route_cache)
     } else {
         home.to_vec()
     };
@@ -1536,58 +1541,32 @@ fn target(
         gains[lfe] = 0.0;
     }
     if !linked {
-        return (
-            placement_position(left_azimuth, placement.elevation_deg),
-            gains,
-            None,
-            None,
-        );
+        return (positions[0], gains, None, None);
     }
     let mut right = if moved {
-        object_route_at(
-            layout,
-            stem,
-            right_azimuth,
-            placement.elevation_deg,
-            route_cache,
-        )
+        object_route_at(layout, stem, positions[1], route_cache)
     } else {
         home_right.to_vec()
     };
     if let Some(lfe) = channels.iter().position(|name| *name == "LFE") {
         right[lfe] = 0.0;
     }
-    (
-        placement_position(left_azimuth, placement.elevation_deg),
-        gains,
-        Some(placement_position(right_azimuth, placement.elevation_deg)),
-        Some(right),
-    )
-}
-
-fn object_endpoint_azimuth(stem: &MovementStemInput, left: bool) -> f64 {
-    let half_width = if matches!(stem.object_mode, Some(MovementObjectMode::LinkedStereo)) {
-        stem.placement.width_deg * 0.5
-    } else {
-        0.0
-    };
-    stem.placement.azimuth_deg + if left { half_width } else { -half_width }
+    (positions[0], gains, Some(positions[1]), Some(right))
 }
 
 fn object_route_at(
     layout: &PannerLayout,
     stem: &MovementStemInput,
-    azimuth: f64,
-    elevation: f64,
+    position: [f64; 3],
     cache: &mut ObjectRouteCache,
 ) -> Vec<f64> {
     // Layout and object metadata are fixed for this stem compilation. Reuse
     // exact endpoints across repeated hits without rounding movement positions.
     cache
-        .entry((azimuth.to_bits(), elevation.to_bits()))
+        .entry(position.map(f64::to_bits))
         .or_insert_with(|| {
             layout.cartesian_object_route(
-                placement_position(azimuth, elevation),
+                position,
                 stem.placement.object_size,
                 stem.channel_lock,
                 &stem
@@ -1866,13 +1845,10 @@ mod tests {
         let mut cache = ObjectRouteCache::new();
         let stem = &request.stems[0];
         for azimuth in [60.0, -60.0, 60.0] {
-            let cached = object_route_at(&layout, stem, azimuth, 0.0, &mut cache);
-            let direct = layout.cartesian_object_route(
-                placement_position(azimuth, 0.0),
-                stem.placement.object_size,
-                false,
-                &[],
-            );
+            let position = placement_position(azimuth, 0.0);
+            let cached = object_route_at(&layout, stem, position, &mut cache);
+            let direct =
+                layout.cartesian_object_route(position, stem.placement.object_size, false, &[]);
             assert_eq!(cached, direct);
         }
         assert_eq!(cache.len(), 2);

@@ -31,7 +31,7 @@ export type MixPreview = {
   stem_ambient_height_cutoff_hz?: Record<string, number>;
   stem_ambient_height_crossover_hz?: Record<string, number>;
   stem_object_mode?: Record<string, "linked-stereo" | "mono">;
-  stem_placement?: Record<string, { azimuth_deg: number; elevation_deg: number; width_deg: number; object_size: number; diversity?: number; center_level_db?: number }>;
+  stem_placement?: Record<string, { azimuth_deg: number; elevation_deg: number; width_deg: number; object_size: number; left_right?: number; back_front?: number; diversity?: number; center_level_db?: number }>;
   stem_object_metadata?: Record<string, { gain?: number; importance?: number; channel_lock?: boolean; zone_exclusion?: string[] }>;
   spatial_downmix_lock?: boolean;
   stem_enabled?: Record<string, boolean>;

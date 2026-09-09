@@ -370,6 +370,8 @@ class StemRouter:
             lfe=float(routing.get("LFE", default.lfe if default else 0.0)),
             diversity=float(raw.get("diversity", default.diversity if default else 0.0)),
             center_level_db=float(raw.get("center_level_db", default.center_level_db if default else 0.0)),
+            left_right=float(raw["left_right"]) if "left_right" in raw else None,
+            back_front=float(raw["back_front"]) if "back_front" in raw else None,
         )
 
     def _movement_gain_db(self, stem_key: str, object_mode: str | None) -> float:
@@ -564,6 +566,8 @@ class StemRouter:
             float(raw.get("object_size", default.object_size if default else 0.0)),
             diversity=float(raw.get("diversity", 0.0)),
             center_level_db=float(raw.get("center_level_db", 0.0)),
+            left_right=float(raw["left_right"]) if "left_right" in raw else None,
+            back_front=float(raw["back_front"]) if "back_front" in raw else None,
         )
         return placement
 
@@ -581,12 +585,14 @@ class StemRouter:
             mono, _ = upmixer_dsp.adm_object_routes(
                 placement.azimuth_deg, placement.elevation_deg, 0.0,
                 placement.object_size, metadata[2], list(metadata[3]), labels,
+                placement.left_right, placement.back_front,
             )
             return [{label: gain for label, gain in zip(labels, mono) if gain > 0.0}]
         labels = [label.value for label in self._fmt.channels if label != ChannelLabel.LFE]
         left, right = upmixer_dsp.adm_object_routes(
             placement.azimuth_deg, placement.elevation_deg, placement.width_deg,
             placement.object_size, metadata[2], list(metadata[3]), labels,
+            placement.left_right, placement.back_front,
         )
         return [
             {label: gain for label, gain in zip(labels, left) if gain > 0.0},
@@ -642,32 +648,35 @@ class StemRouter:
                 ))
             return tuple(values)
 
-        def position(azimuth_deg: float) -> tuple[float, float, float]:
-            x, y, z = upmixer_dsp.direction(azimuth_deg, placement.elevation_deg)
-            return (x, -z, y)
+        positions = upmixer_dsp.object_positions(
+            placement.azimuth_deg, placement.elevation_deg, placement.width_deg,
+            placement.left_right, placement.back_front,
+        )
 
         if mode == "mono":
             return [
                 AdmObject(
                     stem_key, gain * (left + right) * 0.5,
-                    position(placement.azimuth_deg), placement.object_size,
+                    upmixer_dsp.object_positions(
+                        placement.azimuth_deg, placement.elevation_deg, 0.0,
+                        placement.left_right, placement.back_front,
+                    )[0], placement.object_size,
                     gain=metadata[0], importance=metadata[1],
                     channel_lock=metadata[2], zone_exclusion=metadata[3],
                     events=events(0),
                 )
             ]
-        half_width = placement.width_deg * 0.5
         return [
             AdmObject(
                 f"{stem_key} Left", gain * left,
-                position(placement.azimuth_deg + half_width), placement.object_size,
+                positions[0], placement.object_size,
                 gain=metadata[0], importance=metadata[1],
                 channel_lock=metadata[2], zone_exclusion=metadata[3],
                 events=events(0),
             ),
             AdmObject(
                 f"{stem_key} Right", gain * right,
-                position(placement.azimuth_deg - half_width), placement.object_size,
+                positions[1], placement.object_size,
                 gain=metadata[0], importance=metadata[1],
                 channel_lock=metadata[2], zone_exclusion=metadata[3],
                 events=events(1),

@@ -1,4 +1,66 @@
 export type Vec3 = { x: number; y: number; z: number };
+export type PannerCoordinates = { leftRight: number; backFront: number; elevation: number };
+type PannerPlacement = {
+  azimuth_deg: number;
+  elevation_deg: number;
+  width_deg: number;
+  left_right?: number;
+  back_front?: number;
+};
+
+function clampSigned(value: number) {
+  return Math.min(1, Math.max(-1, value));
+}
+
+export function pannerCoordinatesFromPlacement(placement: PannerPlacement): PannerCoordinates {
+  const azimuth = placement.azimuth_deg * Math.PI / 180;
+  return {
+    leftRight: placement.left_right ?? -Math.sin(azimuth),
+    backFront: placement.back_front ?? Math.cos(azimuth),
+    elevation: Math.sin(placement.elevation_deg * Math.PI / 180),
+  };
+}
+
+export function placementFromPannerCoordinates<T extends PannerPlacement>(
+  placement: T,
+  coordinates: PannerCoordinates,
+): T {
+  const left_right = clampSigned(coordinates.leftRight);
+  const back_front = clampSigned(coordinates.backFront);
+  return {
+    ...placement,
+    azimuth_deg: left_right === 0 && back_front === 0
+      ? placement.azimuth_deg
+      : Math.atan2(-left_right, back_front) * 180 / Math.PI,
+    elevation_deg: Math.asin(clampSigned(coordinates.elevation)) * 180 / Math.PI,
+    left_right,
+    back_front,
+  };
+}
+
+/** Canonical panner coordinates mapped to scene axes: right, up, back. */
+export function pannerToScenePosition(coordinates: PannerCoordinates): Vec3 {
+  return { x: coordinates.leftRight, y: coordinates.elevation, z: -coordinates.backFront };
+}
+
+export function objectChannelCoordinates(placement: PannerPlacement) {
+  const anchor = pannerCoordinatesFromPlacement(placement);
+  if (placement.width_deg === 0 || (anchor.leftRight === 0 && anchor.backFront === 0)) {
+    return { left: { ...anchor }, right: { ...anchor } };
+  }
+  const radius = Math.hypot(anchor.leftRight, anchor.backFront);
+  const direction = Math.atan2(anchor.leftRight, anchor.backFront);
+  const halfSpread = placement.width_deg * Math.PI / 360;
+  const channel = (angle: number): PannerCoordinates => ({
+    leftRight: clampSigned(radius * Math.sin(angle)),
+    backFront: clampSigned(radius * Math.cos(angle)),
+    elevation: anchor.elevation,
+  });
+  return {
+    left: channel(direction - halfSpread),
+    right: channel(direction + halfSpread),
+  };
+}
 
 // Unit-sphere anchor points per channel, listener at the origin facing -Z.
 // x = left(-)/right(+), y = floor(0)/height(+), z = front(-)/back(+). Shared

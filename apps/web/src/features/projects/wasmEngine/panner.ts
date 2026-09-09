@@ -7,6 +7,9 @@ export type StemPlacement = {
   elevation_deg: number;
   width_deg: number;
   object_size: number;
+  /** Canonical listener-relative object anchor. Positive is right/front. */
+  left_right?: number;
+  back_front?: number;
   diversity?: number;
   center_level_db?: number;
 };
@@ -58,6 +61,10 @@ type PannerExports = {
   ): number;
   dsp_object_routes(
     azimuth: number, elevation: number, width: number, spread: number,
+    channels: number, nChannels: number, left: number, right: number,
+  ): number;
+  dsp_object_routes_cartesian(
+    leftRight: number, backFront: number, elevation: number, width: number, spread: number,
     channels: number, nChannels: number, left: number, right: number,
   ): number;
   dsp_project_placement(
@@ -207,10 +214,15 @@ export class Panner {
   objectRoutes(placement: StemPlacement, channels: string[]): [Record<string, number>, Record<string, number>] {
     const [left, right] = this.withBuffers(channels, channels.length * 2, (channelPtr, outPtr) => {
       const rightPtr = outPtr + channels.length * 8;
-      const status = this.exports.dsp_object_routes(
-        placement.azimuth_deg, placement.elevation_deg, placement.width_deg,
-        placement.object_size, channelPtr, channels.length, outPtr, rightPtr,
-      );
+      const status = placement.left_right !== undefined && placement.back_front !== undefined
+        ? this.exports.dsp_object_routes_cartesian(
+          placement.left_right, placement.back_front, placement.elevation_deg,
+          placement.width_deg, placement.object_size, channelPtr, channels.length, outPtr, rightPtr,
+        )
+        : this.exports.dsp_object_routes(
+          placement.azimuth_deg, placement.elevation_deg, placement.width_deg,
+          placement.object_size, channelPtr, channels.length, outPtr, rightPtr,
+        );
       if (status !== 0) throw new Error("object_routes rejected the channel set");
       return [this.read(outPtr, channels.length), this.read(rightPtr, channels.length)];
     });
@@ -238,7 +250,13 @@ export class Panner {
       return this.read(outPtr, 5);
     });
     const [azimuth_deg, elevation_deg, width_deg, object_size] = fields;
-    return { azimuth_deg, elevation_deg, width_deg, object_size };
+    return {
+      ...placement,
+      azimuth_deg,
+      elevation_deg,
+      width_deg,
+      object_size,
+    };
   }
 }
 

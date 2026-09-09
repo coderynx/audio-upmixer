@@ -5,15 +5,31 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { getStemColor, getStemIcon } from "@/lib/stems";
 import type { StemMovementSettings } from "@/lib/manifest";
+import {
+  objectChannelCoordinates,
+  pannerCoordinatesFromPlacement,
+  placementFromPannerCoordinates,
+  type PannerCoordinates,
+} from "@/lib/spatial";
 import type { StemPlacement } from "./wasmEngine/panner";
 import { StemMovementControls, type StemMovementDefaults } from "./StemMovementControls";
 
 export type PannerPosition = { lateral: number; depth: number };
+export {
+  objectChannelCoordinates,
+  pannerCoordinatesFromPlacement,
+  pannerToScenePosition,
+  placementFromPannerCoordinates,
+} from "@/lib/spatial";
 
 const KEY_STEP = 0.02;
 
 function clamp(value: number) {
   return Math.min(1, Math.max(0, value));
+}
+
+function clampSigned(value: number) {
+  return Math.min(1, Math.max(-1, value));
 }
 
 /** `azimuth = atan2(-x, -z)`: front is 0°, left is positive. */
@@ -33,27 +49,28 @@ export function positionFromAzimuth(azimuthDeg: number): PannerPosition {
 }
 
 export function pannerPositionFromPlacement(placement: StemPlacement): PannerPosition {
-  return positionFromAzimuth(placement.azimuth_deg);
+  const { leftRight, backFront } = pannerCoordinatesFromPlacement(placement);
+  return { lateral: (leftRight + 1) / 2, depth: (1 - backFront) / 2 };
 }
 
 export function placementFromPannerPosition(placement: StemPlacement, position: PannerPosition): StemPlacement {
-  return { ...placement, azimuth_deg: azimuthFromPosition(position) };
+  return placementFromPannerCoordinates(placement, {
+    leftRight: position.lateral * 2 - 1,
+    backFront: 1 - position.depth * 2,
+    elevation: pannerCoordinatesFromPlacement(placement).elevation,
+  });
 }
 
 /** Linked-stereo feeds keep their angular width at the centre handle's radius. */
 export function objectChannelPositions(placement: StemPlacement, center = pannerPositionFromPlacement(placement)) {
-  const halfWidth = placement.width_deg / 2;
-  const radius = Math.hypot(center.lateral - 0.5, center.depth - 0.5);
-  const position = (azimuthDeg: number) => {
-    const azimuth = (azimuthDeg * Math.PI) / 180;
-    return {
-      lateral: clamp(0.5 - radius * Math.sin(azimuth)),
-      depth: clamp(0.5 - radius * Math.cos(azimuth)),
-    };
-  };
+  const channels = objectChannelCoordinates(placementFromPannerPosition(placement, center));
+  const position = ({ leftRight, backFront }: PannerCoordinates) => ({
+    lateral: (leftRight + 1) / 2,
+    depth: (1 - backFront) / 2,
+  });
   return {
-    left: position(placement.azimuth_deg + halfWidth),
-    right: position(placement.azimuth_deg - halfWidth),
+    left: position(channels.left),
+    right: position(channels.right),
   };
 }
 
@@ -77,6 +94,26 @@ function positionFromEvent(event: React.PointerEvent<HTMLDivElement>): PannerPos
   };
 }
 
+function normalizeSpread(value: number) {
+  const wrapped = ((value + 180) % 360 + 360) % 360 - 180;
+  return wrapped === -180 && value > 0 ? 180 : wrapped;
+}
+
+function signedDegrees(value: number) {
+  const rounded = Math.round(normalizeSpread(value));
+  return `${rounded > 0 ? "+" : ""}${rounded}\u00b0`;
+}
+
+type PannerDrag = {
+  pointerId: number;
+  target: "anchor" | "left" | "right";
+  offset: PannerCoordinates;
+  anchorDirection: number;
+  spread: number;
+  lastAngle: number;
+  lastPlacement: StemPlacement;
+};
+
 export function ObjectPannerWindow({
   stemName,
   placement,
@@ -88,7 +125,6 @@ export function ObjectPannerWindow({
   ambientTrimDb = 0,
   heightTexture = 0,
   ambientHeightCutoffHz = 2000,
-  ambientHeightCrossoverHz = 2000,
   ariaLabel = "Object panner",
   onPlacement,
   onObjectMode = () => {},
@@ -120,12 +156,12 @@ export function ObjectPannerWindow({
   const [windowPosition, setWindowPosition] = React.useState<{ left: number; top: number } | null>(null);
   const windowRef = React.useRef<HTMLDivElement>(null);
   const dragRef = React.useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
+  const pannerDragRef = React.useRef<PannerDrag | null>(null);
+  const lastChannelRef = React.useRef<"left" | "right">("right");
   const pannerDraggingRef = React.useRef(false);
-  const lastLocalPlacementRef = React.useRef<{ azimuth: number; elevation: number } | null>(null);
-  const [position, setCartesianPosition] = React.useState(() => pannerPositionFromPlacement(placement));
-  const placementAzimuth = placement.azimuth_deg;
-  const placementElevation = placement.elevation_deg;
-  const [elevation, setElevation] = React.useState(() => maxElevationDeg ? clamp(placementElevation / maxElevationDeg) : 0);
+  const [localPlacement, setLocalPlacement] = React.useState(placement);
+  const position = pannerPositionFromPlacement(localPlacement);
+  const elevation = maxElevationDeg ? clamp(localPlacement.elevation_deg / maxElevationDeg) : 0;
   const stereo = objectMode === "linked-stereo";
   const hasSurround = channels.includes("SL") || channels.includes("SR") || channels.includes("BL") || channels.includes("BR");
   const hasHeight = channels.includes("TFL") || channels.includes("TFR") || channels.includes("TBL") || channels.includes("TBR");
@@ -134,32 +170,61 @@ export function ObjectPannerWindow({
   const heightToneLabel = "Height cutoff";
   const StemIcon = getStemIcon(stemName);
   const stemColor = getStemColor(stemName);
-  const channelPositions = objectChannelPositions({ ...placement, azimuth_deg: azimuthFromPosition(position) }, position);
-  const setPosition = (next: PannerPosition) => {
-    const nextPlacement = placementFromPannerPosition(placement, next);
-    setCartesianPosition(next);
-    lastLocalPlacementRef.current = { azimuth: nextPlacement.azimuth_deg, elevation: nextPlacement.elevation_deg };
-    onPlacement(nextPlacement);
+  const channelPositions = objectChannelPositions(localPlacement);
+  const commitPlacement = (next: StemPlacement) => {
+    setLocalPlacement(next);
+    onPlacement(next);
   };
-  const movePosition = (event: React.PointerEvent<HTMLDivElement>) => setPosition(positionFromEvent(event));
+  const setPosition = (next: PannerPosition) => {
+    commitPlacement(placementFromPannerPosition(localPlacement, next));
+  };
   const setElevationPosition = (lateral: number, nextElevation: number) => {
     const nextPosition = { lateral, depth: position.depth };
     const nextPlacement = {
-      ...placement,
-      azimuth_deg: azimuthFromPosition(nextPosition),
+      ...placementFromPannerPosition(localPlacement, nextPosition),
       elevation_deg: clamp(nextElevation) * maxElevationDeg,
     };
-    setCartesianPosition(nextPosition);
-    setElevation(clamp(nextElevation));
-    lastLocalPlacementRef.current = { azimuth: nextPlacement.azimuth_deg, elevation: nextPlacement.elevation_deg };
-    onPlacement(nextPlacement);
+    commitPlacement(nextPlacement);
   };
   const moveElevationPosition = (event: React.PointerEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     setElevationPosition(
-      clamp((event.clientX - rect.left) / rect.width),
+      position.lateral,
       clamp(1 - (event.clientY - rect.top) / rect.height),
     );
+  };
+  const moveChannelByKey = (channel: "left" | "right", event: React.KeyboardEvent<HTMLButtonElement>) => {
+    const delta = event.shiftKey ? 0.1 : KEY_STEP;
+    const target = { ...channelPositions[channel] };
+    if (event.key === "ArrowLeft") target.lateral -= delta;
+    else if (event.key === "ArrowRight") target.lateral += delta;
+    else if (event.key === "ArrowUp") target.depth -= delta;
+    else if (event.key === "ArrowDown") target.depth += delta;
+    else return;
+    event.preventDefault();
+    event.stopPropagation();
+    const canonical = {
+      leftRight: clampSigned(target.lateral * 2 - 1),
+      backFront: clampSigned(1 - target.depth * 2),
+    };
+    const current = objectChannelCoordinates(localPlacement)[channel];
+    let angleDelta = Math.atan2(canonical.leftRight, canonical.backFront)
+      - Math.atan2(current.leftRight, current.backFront);
+    if (angleDelta > Math.PI) angleDelta -= 2 * Math.PI;
+    if (angleDelta < -Math.PI) angleDelta += 2 * Math.PI;
+    const width_deg = normalizeSpread(localPlacement.width_deg
+      + (channel === "left" ? -2 : 2) * angleDelta * 180 / Math.PI);
+    const anchor = pannerCoordinatesFromPlacement(localPlacement);
+    const radius = Math.hypot(canonical.leftRight, canonical.backFront);
+    const direction = Math.atan2(anchor.leftRight, anchor.backFront);
+    commitPlacement({
+      ...placementFromPannerCoordinates(localPlacement, {
+        ...anchor,
+        leftRight: radius * Math.sin(direction),
+        backFront: radius * Math.cos(direction),
+      }),
+      width_deg,
+    });
   };
 
   React.useEffect(() => {
@@ -167,14 +232,9 @@ export function ObjectPannerWindow({
   }, [open]);
 
   React.useEffect(() => {
-    if (pannerDraggingRef.current || Math.abs((lastLocalPlacementRef.current?.azimuth ?? Infinity) - placementAzimuth) < 1e-6) return;
-    setCartesianPosition(positionFromAzimuth(placementAzimuth));
-  }, [placementAzimuth]);
-
-  React.useEffect(() => {
-    if (pannerDraggingRef.current || Math.abs((lastLocalPlacementRef.current?.elevation ?? Infinity) - placementElevation) < 1e-6) return;
-    setElevation(maxElevationDeg ? clamp(placementElevation / maxElevationDeg) : 0);
-  }, [placementElevation, maxElevationDeg]);
+    if (pannerDraggingRef.current) return;
+    setLocalPlacement(placement);
+  }, [placement]);
 
   const placeWindow = (left: number, top: number) => {
     const rect = windowRef.current?.getBoundingClientRect();
@@ -259,14 +319,93 @@ export function ObjectPannerWindow({
                 aria-description="Drag the centre puck or use arrow keys to pan left, right, front, and back. Option-click resets to centre front."
                 className="relative aspect-square touch-none bg-muted/50 outline-none ring-1 ring-border focus-visible:ring-2 focus-visible:ring-ring/60"
                 onPointerDown={(event) => {
-                  if (event.altKey) { setPosition(positionFromAzimuth(0)); return; }
+                  const element = (event.target as HTMLElement).closest<HTMLElement>("[data-panner-target]");
+                  if (!element || event.button !== 0) return;
+                  if (event.altKey) { setPosition({ lateral: 0.5, depth: 0 }); return; }
+                  let target = element.dataset.pannerTarget as PannerDrag["target"];
+                  const overlap = Math.hypot(
+                    channelPositions.left.lateral - channelPositions.right.lateral,
+                    channelPositions.left.depth - channelPositions.right.depth,
+                  ) < 1e-6;
+                  if (target !== "anchor" && overlap) target = lastChannelRef.current === "left" ? "right" : "left";
+                  if (target !== "anchor") lastChannelRef.current = target;
+                  const pointer = positionFromEvent(event);
+                  const pointerCoordinates = {
+                    leftRight: pointer.lateral * 2 - 1,
+                    backFront: 1 - pointer.depth * 2,
+                    elevation: pannerCoordinatesFromPlacement(localPlacement).elevation,
+                  };
+                  const targetPosition = target === "anchor"
+                    ? pannerCoordinatesFromPlacement(localPlacement)
+                    : objectChannelCoordinates(localPlacement)[target];
                   pannerDraggingRef.current = true;
                   event.currentTarget.setPointerCapture(event.pointerId);
-                  movePosition(event);
+                  event.preventDefault();
+                  pannerDragRef.current = {
+                    pointerId: event.pointerId,
+                    target,
+                    offset: {
+                      leftRight: pointerCoordinates.leftRight - targetPosition.leftRight,
+                      backFront: pointerCoordinates.backFront - targetPosition.backFront,
+                      elevation: 0,
+                    },
+                    anchorDirection: Math.atan2(
+                      pannerCoordinatesFromPlacement(localPlacement).leftRight,
+                      pannerCoordinatesFromPlacement(localPlacement).backFront,
+                    ),
+                    spread: localPlacement.width_deg,
+                    lastAngle: Math.atan2(targetPosition.leftRight, targetPosition.backFront) * 180 / Math.PI,
+                    lastPlacement: localPlacement,
+                  };
                 }}
-                onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) movePosition(event); }}
-                onPointerUp={(event) => { pannerDraggingRef.current = false; event.currentTarget.releasePointerCapture(event.pointerId); }}
-                onPointerCancel={() => { pannerDraggingRef.current = false; }}
+                onPointerMove={(event) => {
+                  const drag = pannerDragRef.current;
+                  if (!drag || drag.pointerId !== event.pointerId || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
+                  event.preventDefault();
+                  const pointer = positionFromEvent(event);
+                  const target = {
+                    leftRight: clampSigned(pointer.lateral * 2 - 1 - drag.offset.leftRight),
+                    backFront: clampSigned(1 - pointer.depth * 2 - drag.offset.backFront),
+                    elevation: pannerCoordinatesFromPlacement(drag.lastPlacement).elevation,
+                  };
+                  if (drag.target === "anchor") {
+                    const next = placementFromPannerCoordinates(drag.lastPlacement, target);
+                    drag.lastPlacement = next;
+                    commitPlacement(next);
+                    return;
+                  }
+                  let angle = Math.atan2(target.leftRight, target.backFront) * 180 / Math.PI;
+                  while (angle - drag.lastAngle > 180) angle -= 360;
+                  while (angle - drag.lastAngle < -180) angle += 360;
+                  drag.spread += (drag.target === "left" ? -2 : 2) * (angle - drag.lastAngle);
+                  drag.lastAngle = angle;
+                  const radius = Math.hypot(target.leftRight, target.backFront);
+                  const width_deg = normalizeSpread(drag.spread);
+                  const turns = Math.round((drag.spread - width_deg) / 360);
+                  const anchorDirection = drag.anchorDirection + turns * Math.PI;
+                  const anchor = {
+                    leftRight: radius * Math.sin(anchorDirection),
+                    backFront: radius * Math.cos(anchorDirection),
+                    elevation: target.elevation,
+                  };
+                  const next = { ...placementFromPannerCoordinates(drag.lastPlacement, anchor), width_deg };
+                  drag.lastPlacement = next;
+                  commitPlacement(next);
+                }}
+                onPointerUp={(event) => {
+                  const drag = pannerDragRef.current;
+                  if (!drag || drag.pointerId !== event.pointerId) return;
+                  if (drag.target !== "anchor") commitPlacement({ ...drag.lastPlacement, width_deg: normalizeSpread(drag.spread) });
+                  pannerDragRef.current = null;
+                  pannerDraggingRef.current = false;
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+                }}
+                onPointerCancel={(event) => {
+                  if (pannerDragRef.current?.pointerId !== event.pointerId) return;
+                  pannerDragRef.current = null;
+                  pannerDraggingRef.current = false;
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+                }}
                 onKeyDown={(event) => {
                   const next = { ...position };
                   if (event.key === "ArrowLeft") next.lateral -= KEY_STEP;
@@ -279,12 +418,15 @@ export function ObjectPannerWindow({
                 }}
               >
                 <div aria-hidden="true" className="absolute inset-0 grid grid-cols-4 grid-rows-4">{horizontalGrid()}</div>
-                {stereo && <><span data-channel="left" className="pointer-events-none absolute z-10 flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border bg-secondary text-[11px] font-semibold text-foreground" style={{ left: `${channelPositions.left.lateral * 100}%`, top: `${channelPositions.left.depth * 100}%` }}>L</span>
-                <span data-channel="right" className="pointer-events-none absolute z-10 flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border bg-secondary text-[11px] font-semibold text-foreground" style={{ left: `${channelPositions.right.lateral * 100}%`, top: `${channelPositions.right.depth * 100}%` }}>R</span></>}
+                {stereo && <><button type="button" aria-label="Left channel position" data-channel="left" data-panner-target="left" className="absolute z-10 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border bg-secondary text-[11px] font-semibold text-foreground outline-none hover:border-primary active:bg-accent focus-visible:ring-2 focus-visible:ring-ring" style={{ left: `${channelPositions.left.lateral * 100}%`, top: `${channelPositions.left.depth * 100}%` }} onKeyDown={(event) => moveChannelByKey("left", event)}>L</button>
+                <button type="button" aria-label="Right channel position" data-channel="right" data-panner-target="right" className="absolute z-10 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border bg-secondary text-[11px] font-semibold text-foreground outline-none hover:border-primary active:bg-accent focus-visible:ring-2 focus-visible:ring-ring" style={{ left: `${channelPositions.right.lateral * 100}%`, top: `${channelPositions.right.depth * 100}%` }} onKeyDown={(event) => moveChannelByKey("right", event)}>R</button></>}
                 <UserRound aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1/2 h-9 w-9 -translate-x-1/2 -translate-y-1/2 text-muted-foreground/60" />
-                <span
+                <button
+                  type="button"
+                  aria-label="Object position"
+                  data-panner-target="anchor"
                   data-drag-handle="horizontal"
-                  className="pointer-events-none absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary bg-card shadow-sm ring-4 ring-primary/20"
+                  className="absolute z-20 h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-primary bg-card shadow-sm outline-none ring-4 ring-primary/20 hover:bg-accent active:scale-95 focus-visible:ring-4 focus-visible:ring-ring"
                   style={{ left: `${position.lateral * 100}%`, top: `${position.depth * 100}%` }}
                 />
               </div>
@@ -298,7 +440,7 @@ export function ObjectPannerWindow({
                 role="group"
                 tabIndex={0}
                 aria-label="Elevation"
-                aria-description="Drag the centre puck or use arrow keys to set elevation. Option-click resets to ear level."
+                aria-description="Drag vertically or use up and down arrow keys to set elevation. Option-click resets to ear level."
                 className="relative col-start-2 h-40 touch-none bg-muted/50 outline-none ring-1 ring-border focus-visible:ring-2 focus-visible:ring-ring/60"
                 onPointerDown={(event) => {
                   if (event.altKey) { setElevationPosition(position.lateral, 0); return; }
@@ -310,18 +452,21 @@ export function ObjectPannerWindow({
                   if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
                   moveElevationPosition(event);
                 }}
-                onPointerUp={(event) => { pannerDraggingRef.current = false; event.currentTarget.releasePointerCapture(event.pointerId); }}
-                onPointerCancel={() => { pannerDraggingRef.current = false; }}
+                onPointerUp={(event) => {
+                  pannerDraggingRef.current = false;
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+                }}
+                onPointerCancel={(event) => {
+                  pannerDraggingRef.current = false;
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+                }}
                 onKeyDown={(event) => {
-                  let lateral = position.lateral;
                   let nextElevation = elevation;
-                  if (event.key === "ArrowLeft") lateral -= KEY_STEP;
-                  else if (event.key === "ArrowRight") lateral += KEY_STEP;
-                  else if (event.key === "ArrowUp") nextElevation += 1 / maxElevationDeg;
+                  if (event.key === "ArrowUp") nextElevation += 1 / maxElevationDeg;
                   else if (event.key === "ArrowDown") nextElevation -= 1 / maxElevationDeg;
                   else return;
                   event.preventDefault();
-                  setElevationPosition(clamp(lateral), clamp(nextElevation));
+                  setElevationPosition(position.lateral, clamp(nextElevation));
                 }}
               >
                 <div aria-hidden="true" className="absolute inset-0 grid grid-cols-4 grid-rows-2">{verticalGrid()}</div>
@@ -337,6 +482,23 @@ export function ObjectPannerWindow({
               <div className="col-start-3 flex flex-col justify-between py-0.5 pl-3"><span>Elevation</span><span>Ear level</span></div>
             </div>
           </section>}
+          <div className="grid w-full gap-3 border-t pt-4 sm:grid-cols-3">
+            <label className="block text-[11px] text-muted-foreground">
+              <span className="flex"><span>Left / Right</span><span className="ml-auto tabular-nums">{Math.round((position.lateral * 2 - 1) * 100)}%</span></span>
+              <Slider aria-label="Left to right" className="mt-1.5" min={0} max={1} step={0.01}
+                value={[position.lateral]} onValueChange={([lateral]) => setPosition({ ...position, lateral })} />
+            </label>
+            <label className="block text-[11px] text-muted-foreground">
+              <span className="flex"><span>Back / Front</span><span className="ml-auto tabular-nums">{Math.round((1 - position.depth * 2) * 100)}%</span></span>
+              <Slider aria-label="Back to front" className="mt-1.5" min={0} max={1} step={0.01}
+                value={[1 - position.depth]} onValueChange={([front]) => setPosition({ ...position, depth: 1 - front })} />
+            </label>
+            {maxElevationDeg > 0 && <label className="block text-[11px] text-muted-foreground">
+              <span className="flex"><span>Elevation</span><span className="ml-auto tabular-nums">{Math.round(elevation * maxElevationDeg)}°</span></span>
+              <Slider aria-label="Ear level to elevation" className="mt-1.5" min={0} max={1} step={0.01}
+                value={[elevation]} onValueChange={([nextElevation]) => setElevationPosition(position.lateral, nextElevation)} />
+            </label>}
+          </div>
           <div className="w-full space-y-3 border-t pt-4">
             <label className="block text-[11px] text-muted-foreground">
               <span>Direct image</span>
@@ -347,14 +509,14 @@ export function ObjectPannerWindow({
             </label>
             <div className={`grid gap-3${stereo ? " sm:grid-cols-2" : ""}`}>
               {stereo && <label className="block text-[11px] text-muted-foreground">
-                <span className="flex items-center"><span>Spread</span><span className="ml-auto tabular-nums">{Math.round(placement.width_deg)}°</span></span>
-                <Slider aria-label="Stereo spread" className="mt-1.5" min={0} max={360} step={1}
-                  value={[placement.width_deg]} onValueChange={([width_deg]) => onPlacement({ ...placement, width_deg })} />
+                <span className="flex items-center"><span>Spread</span><span className="ml-auto tabular-nums">{signedDegrees(localPlacement.width_deg)}</span></span>
+                <Slider aria-label="Stereo spread" className="mt-1.5" min={-180} max={180} step={1}
+                  value={[normalizeSpread(localPlacement.width_deg)]} onValueChange={([width_deg]) => commitPlacement({ ...localPlacement, width_deg })} />
               </label>}
               <label className="block text-[11px] text-muted-foreground">
-                <span className="flex items-center"><span>Size</span><span className="ml-auto tabular-nums">{Math.round(placement.object_size * 100)}%</span></span>
+                <span className="flex items-center"><span>Size</span><span className="ml-auto tabular-nums">{Math.round(localPlacement.object_size * 100)}%</span></span>
                 <Slider aria-label="Object size" className="mt-1.5" min={0} max={1} step={0.01}
-                  value={[placement.object_size]} onValueChange={([object_size]) => onPlacement({ ...placement, object_size })} />
+                  value={[localPlacement.object_size]} onValueChange={([object_size]) => commitPlacement({ ...localPlacement, object_size })} />
               </label>
             </div>
             {(hasSurround || hasHeight) && <div className="grid gap-3 sm:grid-cols-2">

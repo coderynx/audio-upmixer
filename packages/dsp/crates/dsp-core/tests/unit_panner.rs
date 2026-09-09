@@ -1,8 +1,8 @@
 //! MDAP panner invariants: hull behaviour, symmetry, and constant power.
 
 use upmixer_dsp_core::spatial::panner::{
-    build_stem_routing, fold_route_to_stereo, has_height, object_routes, placement_route,
-    placement_route_with_controls, project, PannerLayout, StemPlacement,
+    build_stem_routing, fold_route_to_stereo, has_height, object_positions, object_routes,
+    placement_route, placement_route_with_controls, project, PannerLayout, StemPlacement,
 };
 
 const FULL: [&str; 12] = [
@@ -200,6 +200,27 @@ fn linked_object_endpoints_follow_width_and_co_locate_at_zero() {
     );
     assert_ne!(left, right);
     assert!(gain(&left, &FULL, "FL") > gain(&right, &FULL, "FL"));
+}
+
+#[test]
+fn canonical_object_positions_preserve_identity_and_depth() {
+    let placement = StemPlacement {
+        width_deg: 90.0,
+        left_right: Some(0.0),
+        back_front: Some(1.0),
+        ..point(0.0, 0.0)
+    };
+    let [left, right] = object_positions(&placement);
+    assert!((left[0] + std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+    assert!((right[0] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+    assert!((left[1] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+
+    let [crossed_left, crossed_right] = object_positions(&StemPlacement {
+        width_deg: -90.0,
+        ..placement
+    });
+    assert!(crossed_left[0] > 0.0);
+    assert!(crossed_right[0] < 0.0);
 }
 
 #[test]

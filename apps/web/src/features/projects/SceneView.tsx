@@ -11,6 +11,9 @@ import { isBedStem } from "@/lib/stems";
 import {
   speakerCoordinates,
   speakerDisplayLabel,
+  objectChannelCoordinates,
+  pannerCoordinatesFromPlacement,
+  pannerToScenePosition,
   stemPosition,
   stemPositionStereo,
   type Vec3,
@@ -22,6 +25,7 @@ import { movementAt, scenePositionFromMovement } from "./wasmEngine/movementSche
 import { IntensitySlider } from "./IntensitySlider";
 import { drawSpeakerPoint } from "./speakerMarker";
 import { startSpatialCanvas } from "./spatialCanvas";
+import type { StemPlacement } from "./wasmEngine/panner";
 
 const DEFAULT_CAMERA = {
   yaw: (35 * Math.PI) / 180,
@@ -45,6 +49,7 @@ type Voice = {
   base: string;
   kind: "object" | "bed";
   position: Vec3;
+  size?: number;
   lobes?: { channel: string; position: Vec3; weight: number }[];
   linked?: { other: Vec3; center: Vec3; primary: boolean };
 };
@@ -176,6 +181,8 @@ export function sceneSpeakerPosition(channel: string): Vec3 | undefined {
 export type SceneViewProps = {
   channels: string[];
   routing: StemRouting;
+  placements?: Record<string, StemPlacement>;
+  objectModes?: Record<string, "linked-stereo" | "mono">;
   objectStems: ReadonlySet<string>;
   selectedStem: string | null;
   colors: Record<string, string>;
@@ -198,6 +205,8 @@ export type SceneViewProps = {
 function SceneViewImpl({
   channels,
   routing,
+  placements = {},
+  objectModes = {},
   objectStems,
   selectedStem,
   colors,
@@ -230,6 +239,8 @@ function SceneViewImpl({
   const propsRef = React.useRef({
     channels,
     routing,
+    placements,
+    objectModes,
     objectStems,
     selectedStem,
     colors,
@@ -244,6 +255,8 @@ function SceneViewImpl({
   propsRef.current = {
     channels,
     routing,
+    placements,
+    objectModes,
     objectStems,
     selectedStem,
     colors,
@@ -291,6 +304,8 @@ function SceneViewImpl({
       const {
         channels: currentChannels,
         routing: currentRouting,
+        placements: currentPlacements,
+        objectModes: currentObjectModes,
         objectStems: currentObjectStems,
         selectedStem: currentSelected,
         colors: currentColors,
@@ -387,18 +402,21 @@ function SceneViewImpl({
         );
         if (
           isObjectStem(stem, currentObjectStems) &&
-          (currentCounts?.[stem] ?? 2) >= 2
+          (currentCounts?.[stem] ?? 2) >= 2 &&
+          (currentObjectModes[stem] ?? currentObjectModes[base] ?? "linked-stereo") === "linked-stereo"
         ) {
           const { left, right } = stemPositionStereo(route);
+          const placement = currentPlacements[stem] ?? currentPlacements[base];
+          const authored = placement && objectChannelCoordinates(placement);
           const leftPosition = scenePosition(
             movement
               ? scenePositionFromMovement(movement.position)
-              : left,
+              : authored ? pannerToScenePosition(authored.left) : left,
           );
           const rightPosition = scenePosition(
             movementRight
               ? scenePositionFromMovement(movementRight.position)
-              : right,
+              : authored ? pannerToScenePosition(authored.right) : right,
           );
           const centerPosition = midpoint(leftPosition, rightPosition);
           voices.push({
@@ -407,6 +425,7 @@ function SceneViewImpl({
             base,
             kind: "object",
             position: leftPosition,
+            size: placement?.object_size,
             linked: { other: rightPosition, center: centerPosition, primary: true },
           });
           voices.push({
@@ -415,9 +434,11 @@ function SceneViewImpl({
             base,
             kind: "object",
             position: rightPosition,
+            size: placement?.object_size,
             linked: { other: leftPosition, center: centerPosition, primary: false },
           });
         } else if (isObjectStem(stem, currentObjectStems)) {
+          const placement = currentPlacements[stem] ?? currentPlacements[base];
           voices.push({
             key: stem,
             stem,
@@ -426,8 +447,11 @@ function SceneViewImpl({
             position: scenePosition(
               movement
                 ? scenePositionFromMovement(movement.position)
-                : stemPosition(route),
+                : placement
+                  ? pannerToScenePosition(pannerCoordinatesFromPlacement(placement))
+                  : stemPosition(route),
             ),
+            size: placement?.object_size,
           });
         } else {
           const scheduledRoute = movement
@@ -629,7 +653,7 @@ function SceneViewImpl({
         const emphasis =
           currentSelected && currentSelected !== voice.stem ? 0.35 : 1;
         const radius = Math.max(4, Math.min(11, point.scale * 0.08));
-        const glowRadius = radius * (2 + activity * 2);
+        const glowRadius = radius * (2 + activity * 2 + (voice.size ?? 0) * 4);
         const [r, g, b] = hexToRgb(
           currentColors[voice.stem] || canvasTheme.stemFallback,
         );
@@ -711,6 +735,8 @@ function SceneViewImpl({
     active,
     channels,
     routing,
+    placements,
+    objectModes,
     objectStems,
     selectedStem,
     colors,

@@ -243,6 +243,44 @@ pub unsafe extern "C" fn dsp_object_routes(
     0
 }
 
+/// Pan a linked stereo object from its canonical right/front anchor.
+/// Existing angle-only callers keep using `dsp_object_routes`.
+///
+/// # Safety
+/// `channels` and outputs follow `dsp_object_routes`.
+#[no_mangle]
+pub unsafe extern "C" fn dsp_object_routes_cartesian(
+    left_right: f64,
+    back_front: f64,
+    elevation_deg: f64,
+    width_deg: f64,
+    object_size: f64,
+    channels: *const u32,
+    n_channels: usize,
+    left_out: *mut f64,
+    right_out: *mut f64,
+) -> i32 {
+    let Some(names) = channel_names(channels, n_channels) else {
+        return -1;
+    };
+    if left_out.is_null()
+        || right_out.is_null()
+        || !left_right.is_finite()
+        || !back_front.is_finite()
+        || !(-1.0..=1.0).contains(&left_right)
+        || !(-1.0..=1.0).contains(&back_front)
+    {
+        return -1;
+    }
+    let mut placement = StemPlacement::new(0.0, elevation_deg, width_deg, object_size, 0.0);
+    placement.left_right = Some(left_right);
+    placement.back_front = Some(back_front);
+    let [left, right] = panner::object_routes(&placement, &names);
+    std::slice::from_raw_parts_mut(left_out, n_channels).copy_from_slice(&left);
+    std::slice::from_raw_parts_mut(right_out, n_channels).copy_from_slice(&right);
+    0
+}
+
 /// Pan one already-serialized ADM Cartesian object endpoint. This is the
 /// shared route used by movement preview; keeping the position Cartesian
 /// preserves radius and height instead of round-tripping through azimuth and

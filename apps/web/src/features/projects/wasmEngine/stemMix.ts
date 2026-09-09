@@ -29,7 +29,7 @@ export type MixPreviewShape = {
   spatial_downmix_lock?: boolean;
   stem_object_mode?: Record<string, "linked-stereo" | "mono">;
   stem_object_metadata?: Record<string, { gain?: number; importance?: number; channel_lock?: boolean; zone_exclusion?: string[] }>;
-  stem_placement?: Record<string, { azimuth_deg: number; elevation_deg: number; width_deg: number; object_size: number; diversity?: number; center_level_db?: number }>;
+  stem_placement?: Record<string, { azimuth_deg: number; elevation_deg: number; width_deg: number; object_size: number; left_right?: number; back_front?: number; diversity?: number; center_level_db?: number }>;
   stem_source_anchor_strength?: number;
 };
 

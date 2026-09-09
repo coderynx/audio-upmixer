@@ -16,6 +16,16 @@ fn placement(values: PlacementTuple) -> StemPlacement {
     StemPlacement::new(values.0, values.1, values.2, values.3, values.4)
 }
 
+fn with_anchor(
+    mut placement: StemPlacement,
+    left_right: Option<f64>,
+    back_front: Option<f64>,
+) -> StemPlacement {
+    placement.left_right = left_right;
+    placement.back_front = back_front;
+    placement
+}
+
 fn unpack(value: &StemPlacement) -> PlacementTuple {
     (
         value.azimuth_deg,
@@ -98,20 +108,32 @@ fn placement_route(
     panner::placement_route(&value, &as_refs(&channels))
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    azimuth_deg, elevation_deg, width_deg, object_size, channels,
+    left_right = None, back_front = None
+))]
 fn object_routes(
     azimuth_deg: f64,
     elevation_deg: f64,
     width_deg: f64,
     object_size: f64,
     channels: Vec<String>,
+    left_right: Option<f64>,
+    back_front: Option<f64>,
 ) -> (Vec<f64>, Vec<f64>) {
-    let value = placement((azimuth_deg, elevation_deg, width_deg, object_size, 0.0));
+    let value = with_anchor(
+        placement((azimuth_deg, elevation_deg, width_deg, object_size, 0.0)),
+        left_right,
+        back_front,
+    );
     let [left, right] = panner::object_routes(&value, &as_refs(&channels));
     (left, right)
 }
 
-#[pyfunction]
+#[pyfunction(signature = (
+    azimuth_deg, elevation_deg, width_deg, object_size, channel_lock,
+    zone_exclusion, channels, left_right = None, back_front = None
+))]
 fn adm_object_routes(
     azimuth_deg: f64,
     elevation_deg: f64,
@@ -120,12 +142,37 @@ fn adm_object_routes(
     channel_lock: bool,
     zone_exclusion: Vec<String>,
     channels: Vec<String>,
+    left_right: Option<f64>,
+    back_front: Option<f64>,
 ) -> (Vec<f64>, Vec<f64>) {
-    let value = placement((azimuth_deg, elevation_deg, width_deg, object_size, 0.0));
+    let value = with_anchor(
+        placement((azimuth_deg, elevation_deg, width_deg, object_size, 0.0)),
+        left_right,
+        back_front,
+    );
     let zones = as_refs(&zone_exclusion);
     let [left, right] =
         panner::object_routes_with_metadata(&value, &as_refs(&channels), channel_lock, &zones);
     (left, right)
+}
+
+#[pyfunction(signature = (
+    azimuth_deg, elevation_deg, width_deg, left_right = None, back_front = None
+))]
+fn object_positions(
+    azimuth_deg: f64,
+    elevation_deg: f64,
+    width_deg: f64,
+    left_right: Option<f64>,
+    back_front: Option<f64>,
+) -> ((f64, f64, f64), (f64, f64, f64)) {
+    let value = with_anchor(
+        StemPlacement::new(azimuth_deg, elevation_deg, width_deg, 0.0, 0.0),
+        left_right,
+        back_front,
+    );
+    let [left, right] = panner::object_positions(&value);
+    ((left[0], left[1], left[2]), (right[0], right[1], right[2]))
 }
 
 /// Route one already-serialized ADM Cartesian endpoint through the shared
@@ -224,6 +271,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(placement_route, m)?)?;
     m.add_function(wrap_pyfunction!(object_routes, m)?)?;
     m.add_function(wrap_pyfunction!(adm_object_routes, m)?)?;
+    m.add_function(wrap_pyfunction!(object_positions, m)?)?;
     m.add_function(wrap_pyfunction!(adm_cartesian_object_route, m)?)?;
     m.add_function(wrap_pyfunction!(project_placement, m)?)?;
     m.add_function(wrap_pyfunction!(build_stem_routing, m)?)?;

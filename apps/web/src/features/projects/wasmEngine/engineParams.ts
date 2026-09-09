@@ -99,6 +99,8 @@ export type StemMix = {
     elevation_deg: number;
     width_deg: number;
     object_size: number;
+    left_right?: number;
+    back_front?: number;
     gain?: number;
     channel_lock?: boolean;
     zone_exclusion?: string[];

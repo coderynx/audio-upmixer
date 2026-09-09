@@ -33,6 +33,10 @@ pub struct ObjectPlacement {
     pub elevation_deg: f64,
     pub width_deg: f64,
     pub object_size: f64,
+    #[serde(default)]
+    pub left_right: Option<f64>,
+    #[serde(default)]
+    pub back_front: Option<f64>,
     #[serde(default = "unit_scale")]
     pub gain: f64,
     #[serde(default)]

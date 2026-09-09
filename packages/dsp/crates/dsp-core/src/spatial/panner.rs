@@ -93,6 +93,10 @@ pub struct StemPlacement {
     pub elevation_deg: f64,
     pub width_deg: f64,
     pub object_size: f64,
+    #[serde(default)]
+    pub left_right: Option<f64>,
+    #[serde(default)]
+    pub back_front: Option<f64>,
     pub lfe: f64,
     pub diversity: f64,
     pub center_level_db: f64,
@@ -111,6 +115,8 @@ impl StemPlacement {
             elevation_deg,
             width_deg,
             object_size,
+            left_right: None,
+            back_front: None,
             lfe,
             diversity: 0.0,
             center_level_db: 0.0,
@@ -141,6 +147,44 @@ fn allocentric_position(name: &str, has_rear: bool, has_top_rear: bool) -> Optio
     }
 }
 
+/// Canonical panner anchor: right, front, up.
+pub fn panner_coordinates(placement: &StemPlacement) -> [f64; 3] {
+    let [x, elevation, z] = direction(placement.azimuth_deg, placement.elevation_deg);
+    [
+        placement.left_right.unwrap_or(x).clamp(-1.0, 1.0),
+        placement.back_front.unwrap_or(-z).clamp(-1.0, 1.0),
+        elevation.clamp(-1.0, 1.0),
+    ]
+}
+
+/// Convert canonical panner axes to renderer Cartesian: right, front, up.
+pub fn panner_to_adm(position: [f64; 3]) -> [f64; 3] {
+    position
+}
+
+/// Persistent Left and Right positions. Signed spread never swaps identities.
+pub fn object_positions(placement: &StemPlacement) -> [[f64; 3]; 2] {
+    let anchor = panner_coordinates(placement);
+    if placement.width_deg == 0.0 || (anchor[0] == 0.0 && anchor[1] == 0.0) {
+        let position = panner_to_adm(anchor);
+        return [position, position];
+    }
+    let radius = anchor[0].hypot(anchor[1]);
+    let direction = anchor[0].atan2(anchor[1]);
+    let half_spread = (placement.width_deg * 0.5).to_radians();
+    let endpoint = |angle: f64| {
+        panner_to_adm([
+            (radius * angle.sin()).clamp(-1.0, 1.0),
+            (radius * angle.cos()).clamp(-1.0, 1.0),
+            anchor[2],
+        ])
+    };
+    [
+        endpoint(direction - half_spread),
+        endpoint(direction + half_spread),
+    ]
+}
+
 /// MDAP routes for a linked stereo object's left and right feeds.
 ///
 /// The feeds are independent mono objects at the two ends of the placement's
@@ -157,72 +201,7 @@ pub fn object_routes_with_metadata(
     channel_lock: bool,
     zone_exclusion: &[&str],
 ) -> [Vec<f64>; 2] {
-    let half_width = placement.width_deg * 0.5;
-    [
-        object_route(
-            placement.azimuth_deg + half_width,
-            placement.elevation_deg,
-            placement.object_size,
-            speakers,
-            channel_lock,
-            zone_exclusion,
-        ),
-        object_route(
-            placement.azimuth_deg - half_width,
-            placement.elevation_deg,
-            placement.object_size,
-            speakers,
-            channel_lock,
-            zone_exclusion,
-        ),
-    ]
-}
-
-fn object_route(
-    azimuth_deg: f64,
-    elevation_deg: f64,
-    object_size: f64,
-    speakers: &[&str],
-    channel_lock: bool,
-    zone_exclusion: &[&str],
-) -> Vec<f64> {
-    let has_rear = speakers.iter().any(|name| matches!(*name, "BL" | "BR"));
-    let has_top_rear = speakers.iter().any(|name| matches!(*name, "TBL" | "TBR"));
-    let positions: Vec<[f64; 3]> = speakers
-        .iter()
-        .filter_map(|name| allocentric_position(name, has_rear, has_top_rear))
-        .collect();
-    let [x, y, z] = direction(azimuth_deg, elevation_deg);
-    let names: Vec<&str> = speakers
-        .iter()
-        .filter(|name| is_positional(name))
-        .copied()
-        .collect();
-    let priorities: Vec<[i64; 4]> = names
-        .iter()
-        .map(|name| channel_lock_priority(name, has_rear, has_top_rear))
-        .collect();
-    let gains = adm_extent::gains_with_metadata(
-        &positions,
-        &priorities,
-        [x, -z, y],
-        object_size,
-        channel_lock,
-        zone_exclusion,
-    );
-    let mut next = 0;
-    speakers
-        .iter()
-        .map(|name| {
-            if is_positional(name) {
-                let value = gains.get(next).copied().unwrap_or(0.0);
-                next += 1;
-                value
-            } else {
-                0.0
-            }
-        })
-        .collect()
+    PannerLayout::new(speakers).object_routes_with_metadata(placement, channel_lock, zone_exclusion)
 }
 
 fn channel_lock_priority(name: &str, has_rear: bool, has_top_rear: bool) -> [i64; 4] {
@@ -513,7 +492,7 @@ impl Layout {
     /// The virtual sources spanning a placement's width.
     fn virtual_sources(&self, placement: &StemPlacement) -> Vec<[f64; 3]> {
         let elevation = placement.elevation_deg.max(0.0).min(self.max_elevation_deg);
-        let width = placement.width_deg.max(0.0);
+        let width = placement.width_deg.abs();
         let count = if width <= 0.0 {
             1
         } else {
@@ -624,18 +603,16 @@ impl PannerLayout {
         channel_lock: bool,
         zone_exclusion: &[&str],
     ) -> [Vec<f64>; 2] {
-        let half_width = placement.width_deg * 0.5;
+        let positions = object_positions(placement);
         [
-            self.exact_object_route_with_metadata(
-                placement.azimuth_deg + half_width,
-                placement.elevation_deg,
+            self.cartesian_object_route(
+                positions[0],
                 placement.object_size,
                 channel_lock,
                 zone_exclusion,
             ),
-            self.exact_object_route_with_metadata(
-                placement.azimuth_deg - half_width,
-                placement.elevation_deg,
+            self.cartesian_object_route(
+                positions[1],
                 placement.object_size,
                 channel_lock,
                 zone_exclusion,

@@ -89,7 +89,7 @@ export function movementAt(
   };
 }
 
-/** ADM uses [x, -z, y], while the scene uses x/y/z with front at -z. */
+/** Renderer coordinates are right/front/up; scene uses right/up/back. */
 export function scenePositionFromMovement(
   position: [number, number, number],
 ): { x: number; y: number; z: number } {

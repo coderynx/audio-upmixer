@@ -155,6 +155,25 @@ fn object_gain_scales_the_rendered_speakers() {
 }
 
 #[test]
+fn realtime_object_render_uses_the_canonical_anchor() {
+    let mut engine = engine_at(true, "native", false, 0.0, 1.0);
+    let mut params = engine.params().clone();
+    let placement = params.stems[0].object_placement.as_mut().unwrap();
+    placement.left_right = Some(1.0);
+    placement.back_front = Some(1.0);
+    engine.update_params(params);
+
+    let mut out = vec![0.0; 4 * N];
+    engine.render(&mut out, N);
+    let peak = |channel: usize| {
+        out[channel * N..(channel + 1) * N]
+            .iter()
+            .fold(0.0_f64, |max, sample| max.max(sample.abs()))
+    };
+    assert!(peak(1) > peak(0));
+}
+
+#[test]
 fn object_meters_follow_delivered_speakers() {
     let mut engine = engine(false, "native", false);
     let mut out = vec![0.0; 4 * N];

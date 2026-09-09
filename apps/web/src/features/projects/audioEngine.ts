@@ -486,6 +486,8 @@ export class PreviewHost {
       elevation_deg: placement?.elevation_deg ?? 0,
       width_deg: placement?.width_deg ?? 0,
       object_size: placement?.object_size ?? 0,
+      left_right: placement?.left_right,
+      back_front: placement?.back_front,
       lfe: resolved.routing.LFE ?? 0,
       diversity: placement?.diversity ?? 0,
       center_level_db: placement?.center_level_db ?? 0,
